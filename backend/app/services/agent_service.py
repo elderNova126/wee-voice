@@ -177,6 +177,7 @@ Use a friendly and professional tone. Be concise but informative."""
         # This prevents error 1011 from calling receive() before session is ready
         await asyncio.sleep(0.5)
         
+        
         try:
             while True:
                 try:
