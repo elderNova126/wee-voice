@@ -1,165 +1,289 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { PhoneIcon, ClockIcon, CurrencyDollarIcon } from '@heroicons/react/24/outline'
+import DashboardLayout from '@/layouts/DashboardLayout'
 import { callsAPI } from '@/lib/api'
-import { format } from 'date-fns'
-import { fr } from 'date-fns/locale'
-import {
-  PhoneIcon,
-  ClockIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  ArrowRightIcon,
-} from '@heroicons/react/24/outline'
+import toast from 'react-hot-toast'
 
 interface Call {
   id: number
+  agent_id: number
   session_id: string
   status: string
   duration_minutes: number
   cost: number
   started_at: string
-  summary: string | null
-  sentiment: string | null
-}
-
-const statusConfig: Record<string, { label: string; color: string; icon: any }> = {
-  completed: {
-    label: 'Terminé',
-    color: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-    icon: CheckCircleIcon,
-  },
-  in_progress: {
-    label: 'En cours',
-    color: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-    icon: PhoneIcon,
-  },
-  failed: {
-    label: 'Échoué',
-    color: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-    icon: XCircleIcon,
-  },
-  interrupted: {
-    label: 'Interrompu',
-    color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-    icon: ClockIcon,
-  },
+  ended_at: string
+  summary: string
+  sentiment: string
 }
 
 export default function CallsPage() {
-  const [statusFilter, setStatusFilter] = useState<string>('all')
-  
-  const { data: calls, isLoading } = useQuery({
-    queryKey: ['calls', statusFilter],
-    queryFn: async () => {
-      const params = statusFilter !== 'all' ? { status: statusFilter } : {}
-      const response = await callsAPI.list(params)
-      return response.data
-    },
-  })
-  
+  const [calls, setCalls] = useState<Call[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedCall, setSelectedCall] = useState<Call | null>(null)
+
+  useEffect(() => {
+    loadCalls()
+  }, [])
+
+  const loadCalls = async () => {
+    try {
+      const response = await callsAPI.list()
+      setCalls(response.data)
+    } catch (error) {
+      console.error('Failed to load calls:', error)
+      toast.error('Failed to load calls')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleString()
+  }
+
+  const getSentimentColor = (sentiment: string) => {
+    switch (sentiment?.toLowerCase()) {
+      case 'positive':
+        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+      case 'negative':
+        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+      default:
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'completed':
+        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+      case 'failed':
+        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+      case 'in_progress':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+      default:
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+    }
+  }
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-            Historique des Appels
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            Consultez et analysez vos conversations
-          </p>
-        </div>
+    <DashboardLayout>
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Call History</h1>
+        <p className="mt-2 text-gray-600 dark:text-gray-400">
+          View and analyze all voice agent calls
+        </p>
       </div>
-      
-      {/* Filters */}
-      <div className="mb-6 flex items-center space-x-4">
-        <select
-          className="input"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-        >
-          <option value="all">Tous les appels</option>
-          <option value="completed">Terminés</option>
-          <option value="in_progress">En cours</option>
-          <option value="failed">Échoués</option>
-          <option value="interrupted">Interrompus</option>
-        </select>
-      </div>
-      
-      {/* Calls List */}
-      {isLoading ? (
-        <div className="text-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
-        </div>
-      ) : calls && calls.length > 0 ? (
+
+      {loading ? (
         <div className="space-y-4">
-          {calls.map((call: Call) => {
-            const status = statusConfig[call.status] || statusConfig.completed
-            const StatusIcon = status.icon
-            
-            return (
-              <Link
-                key={call.id}
-                to={`/dashboard/calls/${call.id}`}
-                className="card hover:shadow-lg transition-shadow block"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4 flex-1">
-                    <div className={`p-3 rounded-lg ${status.color.split(' ')[0]}`}>
-                      <StatusIcon className={`w-6 h-6 ${status.color.split(' ')[1]}`} />
-                    </div>
-                    
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-3 mb-2">
-                        <h3 className="font-semibold text-gray-900 dark:text-white">
-                          Appel #{call.id}
-                        </h3>
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${status.color}`}>
-                          {status.label}
-                        </span>
-                        {call.sentiment && (
-                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
-                            {call.sentiment}
-                          </span>
-                        )}
-                      </div>
-                      
-                      <div className="flex items-center space-x-6 text-sm text-gray-600 dark:text-gray-400">
-                        <div className="flex items-center">
-                          <ClockIcon className="w-4 h-4 mr-1" />
-                          {call.duration_minutes.toFixed(1)} min
-                        </div>
-                        <div>
-                          {format(new Date(call.started_at), 'PPpp', { locale: fr })}
-                        </div>
-                        <div>
-                          ${call.cost.toFixed(3)}
-                        </div>
-                      </div>
-                      
-                      {call.summary && (
-                        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
-                          {call.summary}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <ArrowRightIcon className="w-5 h-5 text-gray-400" />
-                </div>
-              </Link>
-            )
-          })}
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="card animate-pulse">
+              <div className="h-20 bg-gray-200 dark:bg-gray-700 rounded"></div>
+            </div>
+          ))}
+        </div>
+      ) : calls.length === 0 ? (
+        <div className="card text-center py-12">
+          <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
+          <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-white">No calls yet</h3>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Start testing your agents to see call history here.
+          </p>
         </div>
       ) : (
-        <div className="card text-center py-12">
-          <PhoneIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600 dark:text-gray-400 mb-4">
-            Aucun appel trouvé
-          </p>
+        <div className="space-y-4">
+          {calls.map((call) => (
+            <div
+              key={call.id}
+              className="card hover:shadow-lg transition-shadow cursor-pointer"
+              onClick={() => setSelectedCall(call)}
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex items-start space-x-4 flex-1">
+                  <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
+                    <PhoneIcon className="h-6 w-6 text-blue-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                        Call #{call.id}
+                      </h3>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(call.status)}`}>
+                        {call.status}
+                      </span>
+                      {call.sentiment && (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getSentimentColor(call.sentiment)}`}>
+                          {call.sentiment}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                      {formatDate(call.started_at)}
+                    </p>
+                    {call.summary && (
+                      <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
+                        {call.summary}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-6 ml-4">
+                  <div className="text-right">
+                    <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
+                      <ClockIcon className="h-4 w-4 mr-1" />
+                      {call.duration_minutes?.toFixed(1) || '0.0'} min
+                    </div>
+                    <div className="flex items-center text-sm text-gray-500 dark:text-gray-400 mt-1">
+                      <CurrencyDollarIcon className="h-4 w-4 mr-1" />
+                      ${call.cost?.toFixed(2) || '0.00'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
-    </div>
+
+      {/* Call Details Modal */}
+      {selectedCall && (
+        <CallDetailsModal
+          call={selectedCall}
+          onClose={() => setSelectedCall(null)}
+        />
+      )}
+    </DashboardLayout>
   )
 }
 
+// Call Details Modal
+interface CallDetailsModalProps {
+  call: Call
+  onClose: () => void
+}
+
+function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
+  const [transcript, setTranscript] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    loadTranscript()
+  }, [call.id])
+
+  const loadTranscript = async () => {
+    try {
+      const response = await callsAPI.getTranscript(call.id)
+      setTranscript(response.data)
+    } catch (error) {
+      console.error('Failed to load transcript:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={onClose} />
+
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+          <div className="mb-6">
+            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
+              Call Details
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400 mt-1">
+              Session ID: {call.session_id}
+            </p>
+          </div>
+
+          <div className="space-y-6">
+            {/* Metadata */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Status</p>
+                <p className="text-lg font-medium text-gray-900 dark:text-white capitalize">
+                  {call.status}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Duration</p>
+                <p className="text-lg font-medium text-gray-900 dark:text-white">
+                  {call.duration_minutes?.toFixed(1) || '0.0'} minutes
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Cost</p>
+                <p className="text-lg font-medium text-gray-900 dark:text-white">
+                  ${call.cost?.toFixed(2) || '0.00'}
+                </p>
+              </div>
+              {call.sentiment && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Sentiment</p>
+                  <p className="text-lg font-medium text-gray-900 dark:text-white capitalize">
+                    {call.sentiment}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Summary */}
+            {call.summary && (
+              <div>
+                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                  Summary
+                </h4>
+                <p className="text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                  {call.summary}
+                </p>
+              </div>
+            )}
+
+            {/* Transcript */}
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                Transcript
+              </h4>
+              {loading ? (
+                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg animate-pulse">
+                  <div className="h-20 bg-gray-200 dark:bg-gray-700 rounded"></div>
+                </div>
+              ) : transcript ? (
+                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3 max-h-96 overflow-y-auto">
+                  {Array.isArray(transcript) ? (
+                    transcript.map((message: any, index: number) => (
+                      <div key={index} className="text-sm">
+                        <span className={`font-medium ${
+                          message.role === 'user' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'
+                        }`}>
+                          {message.role === 'user' ? 'User' : 'Agent'}:
+                        </span>
+                        <span className="ml-2 text-gray-700 dark:text-gray-300">
+                          {message.content}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-gray-700 dark:text-gray-300">{transcript}</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-gray-500 dark:text-gray-400 text-sm">No transcript available</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-end">
+            <button
+              onClick={onClose}
+              className="btn-secondary"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

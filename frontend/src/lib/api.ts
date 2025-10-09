@@ -81,15 +81,26 @@ export const callsAPI = {
   delete: (id: number) => api.delete(`/calls/${id}`),
 }
 
+// API Keys API
+export const apiKeysAPI = {
+  list: () => api.get('/auth/api-keys'),
+  
+  create: (data: { name: string }) => api.post('/auth/api-keys', data),
+  
+  delete: (id: number) => api.delete(`/auth/api-keys/${id}`),
+}
+
 // WebSocket API
 export class VoiceWebSocket {
   private ws: WebSocket | null = null
   private agentId: number
   private apiKey: string | null
+  private token: string | null
   
-  constructor(agentId: number, apiKey: string | null = null) {
+  constructor(agentId: number, apiKey: string | null = null, token: string | null = null) {
     this.agentId = agentId
     this.apiKey = apiKey
+    this.token = token
   }
   
   connect(
@@ -98,9 +109,14 @@ export class VoiceWebSocket {
     onClose: (event: CloseEvent) => void
   ) {
     const wsUrl = API_URL.replace('http', 'ws')
-    const url = this.apiKey
-      ? `${wsUrl}/api/v1/ws/voice/${this.agentId}?api_key=${this.apiKey}`
-      : `${wsUrl}/api/v1/ws/voice/${this.agentId}`
+    let url = `${wsUrl}/api/v1/ws/voice/${this.agentId}`
+    
+    // Add authentication
+    if (this.apiKey) {
+      url += `?api_key=${this.apiKey}`
+    } else if (this.token) {
+      url += `?token=${this.token}`
+    }
     
     console.log('🔌 Attempting WebSocket connection...')
     console.log('   API_URL:', API_URL)

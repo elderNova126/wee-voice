@@ -9,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.models import get_db, User, VoiceAgent, Call, CallStatus
-from app.core.security import verify_api_key
+from app.core.security import verify_api_key, decode_token
 from app.services.agent_service import FrenchVoiceAgentService
 from app.services.crm_service import CRMIntegrationService
 
@@ -55,6 +55,7 @@ async def voice_websocket(
     websocket: WebSocket,
     agent_id: int,
     api_key: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """WebSocket endpoint for real-time voice conversations"""
@@ -71,7 +72,7 @@ async def voice_websocket(
     logger.info(f"🔌 New WebSocket connection request for agent_id={agent_id}, session_id={session_id}")
     
     try:
-        # Verify API key
+        # Verify authentication (API key or JWT token)
         if api_key:
             logger.info(f"API key provided: {api_key[:20]}...")
             user = await verify_api_key(api_key, db)
@@ -79,10 +80,28 @@ async def voice_websocket(
                 logger.warning(f"Invalid API key: {api_key[:20]}...")
                 await websocket.close(code=4001, reason="Invalid API key")
                 return
-            logger.info(f"User authenticated: {user.email}")
+            logger.info(f"User authenticated via API key: {user.email}")
+        elif token:
+            logger.info(f"JWT token provided: {token[:20]}...")
+            payload = decode_token(token)
+            if not payload:
+                logger.warning("Invalid JWT token")
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+            user_id = payload.get("sub")
+            if not user_id:
+                logger.warning("No user ID in token")
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+            user = db.query(User).filter(User.id == int(user_id)).first()
+            if not user:
+                logger.warning(f"User not found: {user_id}")
+                await websocket.close(code=4001, reason="User not found")
+                return
+            logger.info(f"User authenticated via JWT: {user.email}")
         else:
             # For demo purposes, allow public agents without auth
-            logger.info("No API key provided - accessing public agent")
+            logger.info("No authentication provided - accessing public agent")
         
         # Get agent
         agent = db.query(VoiceAgent).filter(VoiceAgent.id == agent_id).first()
