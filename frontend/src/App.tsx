@@ -9,7 +9,7 @@ import DashboardPage from './pages/DashboardPage'
 import AgentsPage from './pages/AgentsPage'
 import AgentFormPage from './pages/AgentFormPage'
 import CallsPage from './pages/CallsPage'
-import APIKeysPage from './pages/APIKeysPage'
+import APIKeysPage from './pages/ApiKeysPage'
 import DemoPage from './pages/DemoPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
