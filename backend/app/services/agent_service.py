@@ -144,13 +144,7 @@ Use a friendly and professional tone. Be concise but informative."""
     async def start_session(self):
         """Start a new voice session"""
         try:
-            logger.info(f"Connecting to Gemini model: {settings.GEMINI_MODEL}")
-            logger.info(f"Agent language: {self.agent.language}")
-            logger.info(f"Tools enabled: {self.agent.tools_enabled}")
-            logger.info(f"Config keys: {list(self.config.keys())}")
-            logger.info(f"Response modalities: {self.config.get('response_modalities')}")
-            if 'tools' in self.config:
-                logger.info(f"Tools in config: {len(self.config['tools'])} tools")
+            logger.info(f"Connecting to Gemini model: {settings.GEMINI_MODEL} for call {self.call.session_id}")
             
             # Store the context manager to properly close it later
             self.session_context = self.client.aio.live.connect(
@@ -159,12 +153,11 @@ Use a friendly and professional tone. Be concise but informative."""
             )
             self.session = await self.session_context.__aenter__()
             
-            logger.info(f"✅ Successfully started voice session for call {self.call.session_id}")
+            logger.info(f"Successfully started voice session for call {self.call.session_id}")
             self.call.status = CallStatus.IN_PROGRESS
             return True
         except Exception as e:
-            logger.error(f"❌ Failed to start session: {e}", exc_info=True)
-            logger.error(f"Full config that failed: {self.config}")
+            logger.error(f"Failed to start session: {e}", exc_info=True)
             self.call.status = CallStatus.FAILED
             return False
     
@@ -177,8 +170,7 @@ Use a friendly and professional tone. Be concise but informative."""
     
     async def receive_audio(self) -> AsyncGenerator[bytes, None]:
         """Receive audio responses from the agent"""
-        print(f"🎧 Starting to receive audio from Gemini for call {self.call.session_id}")
-        logger.info(f"Starting to receive audio for call {self.call.session_id}")
+        logger.info(f"Starting audio reception for call {self.call.session_id}")
         response_count = 0
         
         # Give the session a moment to fully initialize
@@ -191,19 +183,14 @@ Use a friendly and professional tone. Be concise but informative."""
                     turn = self.session.receive()
                     async for response in turn:
                         response_count += 1
-                        if response_count % 10 == 0:
-                            logger.debug(f"Received {response_count} responses from Gemini")
                         
                         # Handle audio data (inline_data)
                         if data := response.data:
-                            print(f"🔊 Received audio data from Gemini: {len(data)} bytes")
-                            logger.debug(f"Received audio data: {len(data)} bytes")
                             yield data
                         
                         # Handle text (for transcript)
                         if text := response.text:
-                            print(f"\n💬 GEMINI TEXT RESPONSE: {text}\n")
-                            logger.info(f"Gemini text response: {text}")
+                            logger.info(f"Gemini response: {text}")
                             await self._save_message("agent", text)
                         
                         # Handle tool calls
@@ -213,7 +200,6 @@ Use a friendly and professional tone. Be concise but informative."""
                 
                 except StopAsyncIteration:
                     # Turn completed, ready for next turn
-                    logger.debug("Turn completed")
                     continue
                 except asyncio.CancelledError:
                     logger.info("Audio reception cancelled")
@@ -222,7 +208,7 @@ Use a friendly and professional tone. Be concise but informative."""
                     error_msg = str(turn_error)
                     # Check if it's a connection closure
                     if "1011" in error_msg or "websocket" in error_msg.lower() or "ConnectionClosed" in error_msg:
-                        logger.warning(f"Gemini connection closed: {turn_error}")
+                        logger.info(f"Gemini connection closed: {turn_error}")
                         break
                     else:
                         logger.error(f"Error in turn: {turn_error}", exc_info=True)
@@ -230,22 +216,23 @@ Use a friendly and professional tone. Be concise but informative."""
                         await asyncio.sleep(0.1)
         
         except asyncio.CancelledError:
-            logger.info(f"Audio reception task cancelled for call {self.call.session_id}")
+            logger.info(f"Audio reception cancelled for call {self.call.session_id}")
             raise
         except Exception as e:
-            logger.error(f"Fatal error receiving audio: {e}", exc_info=True)
+            logger.error(f"Error receiving audio: {e}", exc_info=True)
             raise
         finally:
-            logger.info(f"Audio reception ended for call {self.call.session_id}, received {response_count} responses")
+            logger.info(f"Audio reception ended for call {self.call.session_id} ({response_count} responses)")
     
     async def _save_message(self, role: str, content: str):
         """Save message to database"""
-        message = CallMessage(
-            call_id=self.call.id,
-            role=role,
-            content=content,
-            timestamp=datetime.utcnow()
-        )
+        # TODO: Implement database persistence for messages
+        # message = CallMessage(
+        #     call_id=self.call.id,
+        #     role=role,
+        #     content=content,
+        #     timestamp=datetime.utcnow()
+        # )
         # This should be saved through the database session
         logger.info(f"Message [{role}]: {content}")
     
@@ -273,7 +260,7 @@ Use a friendly and professional tone. Be concise but informative."""
     
     async def send_realtime_input(self):
         """Send queued audio to Gemini"""
-        logger.info(f"Starting realtime input loop for call {self.call.session_id}")
+        logger.info(f"Starting audio input for call {self.call.session_id}")
         audio_sent_count = 0
         
         try:
@@ -281,25 +268,22 @@ Use a friendly and professional tone. Be concise but informative."""
                 try:
                     msg = await self.audio_out_queue.get()
                     audio_sent_count += 1
-                    if audio_sent_count % 50 == 0:
-                        print(f"📤 Sent {audio_sent_count} audio chunks to Gemini")
-                        logger.info(f"Sent {audio_sent_count} audio chunks to Gemini ({len(msg.get('data', b''))} bytes)")
-                    # Send audio input to Gemini Live API (matching test.py format)
+                    # Send audio input to Gemini Live API
                     await self.session.send_realtime_input(audio=msg)
                 except asyncio.CancelledError:
-                    logger.info("Realtime input cancelled")
+                    logger.info("Audio input cancelled")
                     break
                 except Exception as e:
                     error_msg = str(e)
                     if "1011" in error_msg or "websocket" in error_msg.lower() or "ConnectionClosed" in error_msg or "closed" in error_msg.lower():
-                        logger.info(f"Session closed, stopping audio input: {e}")
+                        logger.info("Session closed, stopping audio input")
                         break
                     else:
                         logger.error(f"Error sending audio input: {e}", exc_info=True)
                         # For non-fatal errors, wait and continue
                         await asyncio.sleep(0.1)
         finally:
-            logger.info(f"Realtime input loop ended for call {self.call.session_id}, sent {audio_sent_count} chunks")
+            logger.info(f"Audio input ended for call {self.call.session_id} ({audio_sent_count} chunks sent)")
     
     async def end_session(self):
         """End the voice session"""

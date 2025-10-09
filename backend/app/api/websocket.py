@@ -64,12 +64,7 @@ async def voice_websocket(
     call: Optional[Call] = None
     agent_service: Optional[FrenchVoiceAgentService] = None
     
-    print(f"\n{'='*60}")
-    print("🔌 NEW WEBSOCKET CONNECTION")
-    print(f"   Agent ID: {agent_id}")
-    print(f"   Session ID: {session_id}")
-    print(f"{'='*60}\n")
-    logger.info(f"🔌 New WebSocket connection request for agent_id={agent_id}, session_id={session_id}")
+    logger.info(f"New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
     
     try:
         # Verify authentication (API key or JWT token)
@@ -160,23 +155,18 @@ async def voice_websocket(
         async def receive_audio_from_client():
             """Receive audio from client and send to agent"""
             try:
-                audio_chunks_received = 0
                 while True:
                     data = await websocket.receive()
                     
                     if "bytes" in data:
                         # Audio data
                         audio_data = data["bytes"]
-                        audio_chunks_received += 1
-                        if audio_chunks_received % 50 == 0:  # Log every 50 chunks
-                            print(f"📥 Received {audio_chunks_received} audio chunks from client")
-                            logger.info(f"Session {session_id}: Received {audio_chunks_received} audio chunks ({len(audio_data)} bytes)")
                         await agent_service.send_audio(audio_data)
                     
                     elif "text" in data:
                         # Control messages
                         message = json.loads(data["text"])
-                        logger.info(f"Session {session_id}: Received control message: {message.get('type')}")
+                        logger.info(f"Control message: {message.get('type')}")
                         
                         if message.get("type") == "end_session":
                             break
@@ -191,48 +181,28 @@ async def voice_websocket(
         
         async def send_audio_to_client():
             """Receive audio from agent and send to client"""
-            print(f"🎧 send_audio_to_client task started for session {session_id}")
             try:
-                audio_chunks_sent = 0
-                print("🔄 Starting to iterate over agent_service.receive_audio()...")
                 async for audio_data in agent_service.receive_audio():
-                    audio_chunks_sent += 1
-                    if audio_chunks_sent == 1:
-                        print(f"📢 FIRST AUDIO CHUNK RECEIVED IN TASK! Size: {len(audio_data)} bytes")
-                    if audio_chunks_sent % 10 == 0:  # Log every 10 chunks
-                        print(f"📢 Sent {audio_chunks_sent} audio chunks to client")
-                        logger.info(f"Session {session_id}: Sent {audio_chunks_sent} audio chunks to client")
-                    print(f"📤 Sending audio chunk {audio_chunks_sent} ({len(audio_data)} bytes) to client...")
                     await manager.send_audio(session_id, audio_data)
-                    print(f"✅ Audio chunk {audio_chunks_sent} sent successfully")
-                print("⚠️ receive_audio() iterator ended")
             except Exception as e:
-                print(f"❌ ERROR in send_audio_to_client: {e}")
                 logger.error(f"Error sending to client: {e}", exc_info=True)
         
         async def send_realtime_input():
             """Send queued audio to agent"""
             try:
-                logger.info(f"Session {session_id}: Starting realtime input sender")
                 await agent_service.send_realtime_input()
             except Exception as e:
                 logger.error(f"Error in realtime input: {e}", exc_info=True)
         
         # Run all tasks concurrently (compatible with Python 3.10+)
-        print("\n🚀 Starting 3 concurrent tasks:")
-        print("   1. receive_audio_from_client")
-        print("   2. send_audio_to_client")
-        print("   3. send_realtime_input\n")
         try:
-            results = await asyncio.gather(
+            await asyncio.gather(
                 receive_audio_from_client(),
                 send_audio_to_client(),
                 send_realtime_input(),
                 return_exceptions=True
             )
-            print(f"\n⚠️ All tasks completed. Results: {results}\n")
         except Exception as e:
-            print(f"❌ Error in concurrent tasks: {e}")
             logger.error(f"Error in concurrent tasks: {e}")
     
     except asyncio.CancelledError:
