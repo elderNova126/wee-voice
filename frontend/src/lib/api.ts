@@ -79,6 +79,10 @@ export const callsAPI = {
   getStats: (days: number = 30) => api.get('/calls/stats/overview', { params: { days } }),
   
   delete: (id: number) => api.delete(`/calls/${id}`),
+  
+  recalculate: (id: number) => api.post(`/calls/${id}/recalculate`),
+  
+  recalculateAll: () => api.post('/calls/recalculate-all'),
 }
 
 // API Keys API

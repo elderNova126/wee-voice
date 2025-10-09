@@ -72,7 +72,7 @@ A comprehensive SaaS platform for creating realistic French-speaking voice agent
 4. **Initialize database**
    ```bash
    # The database tables will be created automatically on first run
-   python -m uvicorn backend.app.main:app --reload
+   python -m uvicorn app.main:app --reload
    ```
 
 #### Frontend Setup

@@ -195,6 +195,58 @@ def get_call_stats(
     }
 
 
+@router.post("/{call_id}/recalculate")
+def recalculate_call_duration(
+    call_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Recalculate duration and cost for a call"""
+    call = db.query(Call).filter(
+        Call.id == call_id,
+        Call.user_id == current_user.id
+    ).first()
+    
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    
+    # Recalculate duration and cost
+    if call.calculate_duration_and_cost():
+        db.commit()
+        return {
+            "message": "Duration and cost recalculated successfully",
+            "duration_minutes": call.duration_minutes,
+            "cost": call.cost
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Cannot calculate duration - call not ended yet")
+
+
+@router.post("/recalculate-all")
+def recalculate_all_calls(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Recalculate duration and cost for all calls that have ended_at but 0 duration"""
+    calls = db.query(Call).filter(
+        Call.user_id == current_user.id,
+        Call.ended_at.isnot(None),
+        Call.duration_minutes == 0.0
+    ).all()
+    
+    updated_count = 0
+    for call in calls:
+        if call.calculate_duration_and_cost():
+            updated_count += 1
+    
+    db.commit()
+    
+    return {
+        "message": f"Recalculated duration and cost for {updated_count} calls",
+        "updated_count": updated_count
+    }
+
+
 @router.delete("/{call_id}")
 def delete_call(
     call_id: int,

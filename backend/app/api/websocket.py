@@ -65,7 +65,7 @@ async def voice_websocket(
     agent_service: Optional[FrenchVoiceAgentService] = None
     
     print(f"\n{'='*60}")
-    print(f"🔌 NEW WEBSOCKET CONNECTION")
+    print("🔌 NEW WEBSOCKET CONNECTION")
     print(f"   Agent ID: {agent_id}")
     print(f"   Session ID: {session_id}")
     print(f"{'='*60}\n")
@@ -119,7 +119,7 @@ async def voice_websocket(
             return
         
         # Accept connection
-        logger.info(f"Accepting WebSocket connection for session {session_id}")
+        logger.info("Accepting WebSocket connection for session %s", session_id)
         await manager.connect(session_id, websocket)
         
         # Create call record
@@ -194,7 +194,7 @@ async def voice_websocket(
             print(f"🎧 send_audio_to_client task started for session {session_id}")
             try:
                 audio_chunks_sent = 0
-                print(f"🔄 Starting to iterate over agent_service.receive_audio()...")
+                print("🔄 Starting to iterate over agent_service.receive_audio()...")
                 async for audio_data in agent_service.receive_audio():
                     audio_chunks_sent += 1
                     if audio_chunks_sent == 1:
@@ -205,7 +205,7 @@ async def voice_websocket(
                     print(f"📤 Sending audio chunk {audio_chunks_sent} ({len(audio_data)} bytes) to client...")
                     await manager.send_audio(session_id, audio_data)
                     print(f"✅ Audio chunk {audio_chunks_sent} sent successfully")
-                print(f"⚠️ receive_audio() iterator ended")
+                print("⚠️ receive_audio() iterator ended")
             except Exception as e:
                 print(f"❌ ERROR in send_audio_to_client: {e}")
                 logger.error(f"Error sending to client: {e}", exc_info=True)
@@ -219,10 +219,10 @@ async def voice_websocket(
                 logger.error(f"Error in realtime input: {e}", exc_info=True)
         
         # Run all tasks concurrently (compatible with Python 3.10+)
-        print(f"\n🚀 Starting 3 concurrent tasks:")
-        print(f"   1. receive_audio_from_client")
-        print(f"   2. send_audio_to_client")
-        print(f"   3. send_realtime_input\n")
+        print("\n🚀 Starting 3 concurrent tasks:")
+        print("   1. receive_audio_from_client")
+        print("   2. send_audio_to_client")
+        print("   3. send_realtime_input\n")
         try:
             results = await asyncio.gather(
                 receive_audio_from_client(),
@@ -245,46 +245,50 @@ async def voice_websocket(
                 "type": "error",
                 "message": str(e)
             })
-        except:
+        except Exception:
             pass
     
     finally:
         # Cleanup
-        if agent_service:
-            await agent_service.end_session()
+        try:
+            if agent_service:
+                await agent_service.end_session()
+            
+            if call:
+                # Set end time and calculate duration/cost
+                call.ended_at = datetime.utcnow()
+                call.calculate_duration_and_cost()
+                
+                # Update user usage
+                if user and call.duration_minutes > 0:
+                    user.total_minutes_used += call.duration_minutes
+                    user.monthly_minutes_used += call.duration_minutes
+                
+                # Sync to CRM if enabled
+                if agent and agent.crm_enabled and agent.crm_webhook_url:
+                    try:
+                        crm_service = CRMIntegrationService(agent)
+                        await crm_service.sync_call(call)
+                    except Exception as e:
+                        logger.error(f"CRM sync failed: {e}")
+                
+                # Commit all changes
+                db.commit()
+                logger.info(f"Call {call.id} completed: {call.duration_minutes:.2f} min, ${call.cost:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Error during call cleanup: {e}", exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
         
-        if call:
-            call.status = CallStatus.COMPLETED
-            call.ended_at = datetime.utcnow()
-            
-            # Calculate duration
-            duration = (call.ended_at - call.started_at).total_seconds()
-            call.duration_seconds = duration
-            call.duration_minutes = duration / 60.0
-            
-            # Calculate cost (example: $0.05 per minute)
-            call.cost = call.duration_minutes * 0.05
-            
-            # Update user usage
-            if user:
-                user.total_minutes_used += call.duration_minutes
-                user.monthly_minutes_used += call.duration_minutes
-            
-            # Sync to CRM if enabled
-            if agent.crm_enabled and agent.crm_webhook_url:
-                try:
-                    crm_service = CRMIntegrationService(agent)
-                    await crm_service.sync_call(call)
-                except Exception as e:
-                    logger.error(f"CRM sync failed: {e}")
-            
-            db.commit()
-        
+        # Disconnect and close
         manager.disconnect(session_id)
         
         try:
             await websocket.close()
-        except:
+        except Exception:
             pass
 
 

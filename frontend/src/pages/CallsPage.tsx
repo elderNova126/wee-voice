@@ -38,6 +38,17 @@ export default function CallsPage() {
     }
   }
 
+  const recalculateAllCalls = async () => {
+    try {
+      const response = await callsAPI.recalculateAll()
+      toast.success(`Recalculated ${response.data.updated_count} calls`)
+      loadCalls() // Reload calls to show updated values
+    } catch (error) {
+      console.error('Failed to recalculate calls:', error)
+      toast.error('Failed to recalculate calls')
+    }
+  }
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString()
   }
@@ -69,10 +80,21 @@ export default function CallsPage() {
   return (
     <DashboardLayout>
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Call History</h1>
-        <p className="mt-2 text-gray-600 dark:text-gray-400">
-          View and analyze all voice agent calls
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Call History</h1>
+            <p className="mt-2 text-gray-600 dark:text-gray-400">
+              View and analyze all voice agent calls
+            </p>
+          </div>
+          <button
+            onClick={recalculateAllCalls}
+            className="btn-secondary flex items-center"
+          >
+            <ClockIcon className="h-4 w-4 mr-2" />
+            Recalculate All
+          </button>
+        </div>
       </div>
 
       {loading ? (
