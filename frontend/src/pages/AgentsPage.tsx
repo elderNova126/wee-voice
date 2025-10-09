@@ -179,6 +179,7 @@ interface TestAgentModalProps {
 function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
   const { token } = useAuthStore()
   const [isConnected, setIsConnected] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [transcript, setTranscript] = useState<{ role: string; text: string }[]>([])
 
@@ -221,6 +222,8 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
   }
 
   const connect = async () => {
+    setIsConnecting(true)
+    
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStreamRef.current = stream
@@ -280,6 +283,7 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
               isRecordingRef.current = true
               setIsRecording(true)
               setIsConnected(true)
+              setIsConnecting(false)
               toast.success('Connected!')
             } else if (data.type === 'transcript') {
               setTranscript(prev => [...prev, { role: data.role, text: data.text }])
@@ -292,6 +296,7 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
         (error) => {
           console.error('WebSocket error:', error)
           toast.error('Connection error')
+          setIsConnecting(false)
         },
         () => {
           isRecordingRef.current = false
@@ -302,6 +307,7 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
     } catch (error) {
       console.error('Connection error:', error)
       toast.error('Microphone access denied')
+      setIsConnecting(false)
     }
   }
 
@@ -361,7 +367,7 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
           </div>
 
           <div className="mb-6">
-            {!isConnected ? (
+            {!isConnected && !isConnecting ? (
               <div className="text-center py-8">
                 <MicrophoneIcon className="h-16 w-16 text-primary-600 mx-auto mb-4" />
                 <button
@@ -371,6 +377,21 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
                   <PlayIcon className="h-5 w-5 mr-2" />
                   Start Test
                 </button>
+              </div>
+            ) : isConnecting ? (
+              <div className="text-center py-8">
+                <div className="relative inline-block mb-6">
+                  <div className="w-20 h-20 rounded-full bg-primary-600 flex items-center justify-center animate-pulse">
+                    <MicrophoneIcon className="w-10 h-10 text-white" />
+                  </div>
+                  <div className="absolute inset-0 rounded-full border-4 border-primary-600 animate-spin" style={{ borderTopColor: 'transparent' }}></div>
+                </div>
+                <p className="text-lg font-medium text-gray-900 dark:text-white">
+                  Connecting...
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
+                  Please wait while we establish the connection
+                </p>
               </div>
             ) : (
               <div className="text-center py-8">

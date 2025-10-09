@@ -13,6 +13,7 @@ interface Agent {
 
 export default function DemoPage() {
   const [isConnected, setIsConnected] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [transcript, setTranscript] = useState<{ role: string; text: string }[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
@@ -118,6 +119,8 @@ export default function DemoPage() {
       return
     }
     
+    setIsConnecting(true)
+    
     try {
       // Request microphone permission
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -190,6 +193,7 @@ export default function DemoPage() {
               isRecordingRef.current = true
               setIsRecording(true)
               setIsConnected(true)
+              setIsConnecting(false)
               toast.success('Connexion établie!')
             } else if (data.type === 'transcript') {
               setTranscript(prev => [...prev, { role: data.role, text: data.text }])
@@ -202,6 +206,7 @@ export default function DemoPage() {
         (error) => {
           console.error('WebSocket error:', error)
           toast.error('Erreur de connexion')
+          setIsConnecting(false)
         },
         () => {
           isRecordingRef.current = false
@@ -213,6 +218,7 @@ export default function DemoPage() {
     } catch (error) {
       console.error('Connection error:', error)
       toast.error('Impossible d\'accéder au microphone')
+      setIsConnecting(false)
     }
   }
   
@@ -306,7 +312,7 @@ export default function DemoPage() {
         {/* Main Card */}
         <div className="card mb-8">
           <div className="text-center">
-            {!isConnected ? (
+            {!isConnected && !isConnecting ? (
               <div>
                 <MicrophoneIcon className="w-24 h-24 text-primary-600 mx-auto mb-6" />
                 <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
@@ -325,6 +331,23 @@ export default function DemoPage() {
                   <MicrophoneIcon className="w-6 h-6 inline-block mr-2" />
                   {selectedLanguage.startsWith('fr') ? 'Démarrer la Conversation' : 'Start Conversation'}
                 </button>
+              </div>
+            ) : isConnecting ? (
+              <div>
+                <div className="relative inline-block mb-6">
+                  <div className="w-32 h-32 rounded-full bg-primary-600 flex items-center justify-center animate-pulse">
+                    <MicrophoneIcon className="w-16 h-16 text-white" />
+                  </div>
+                  <div className="absolute inset-0 rounded-full border-4 border-primary-600 animate-spin" style={{ borderTopColor: 'transparent' }}></div>
+                </div>
+                <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
+                  {selectedLanguage.startsWith('fr') ? 'Connexion en cours...' : 'Connecting...'}
+                </h2>
+                <p className="text-gray-600 dark:text-gray-400">
+                  {selectedLanguage.startsWith('fr')
+                    ? 'Veuillez patienter pendant que nous établissons la connexion'
+                    : 'Please wait while we establish the connection'}
+                </p>
               </div>
             ) : (
               <div>
