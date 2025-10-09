@@ -122,30 +122,23 @@ export class VoiceWebSocket {
       url += `?token=${this.token}`
     }
     
-    console.log('🔌 Attempting WebSocket connection...')
-    console.log('   API_URL:', API_URL)
-    console.log('   WS URL:', wsUrl)
-    console.log('   Full URL:', url)
-    console.log('   Agent ID:', this.agentId)
-    
     this.ws = new WebSocket(url)
     
     this.ws.onopen = () => {
-      console.log('✅ WebSocket connected successfully!')
+      console.log('WebSocket connected')
     }
     
     this.ws.onmessage = (event) => {
-      console.log('📨 WebSocket message received:', event.data)
       onMessage(event)
     }
     
     this.ws.onerror = (event) => {
-      console.error('❌ WebSocket error:', event)
+      console.error('WebSocket error:', event)
       onError(event)
     }
     
     this.ws.onclose = (event) => {
-      console.log('🔌 WebSocket closed:', event.code, event.reason)
+      console.log('WebSocket closed:', event.code, event.reason)
       onClose(event)
     }
   }
@@ -163,9 +156,31 @@ export class VoiceWebSocket {
   }
   
   disconnect() {
-    if (this.ws) {
-      this.sendMessage({ type: 'end_session' })
-      this.ws.close()
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      try {
+        // Send end_session message with timestamp
+        const endedAt = new Date().toISOString()
+        const message = JSON.stringify({ 
+          type: 'end_session',
+          ended_at: endedAt
+        })
+        this.ws.send(message)
+        
+        // Wait to ensure message is delivered before closing
+        setTimeout(() => {
+          if (this.ws) {
+            this.ws.close(1000, 'Client requested disconnect')
+            this.ws = null
+          }
+        }, 200)
+      } catch (error) {
+        console.error('Error sending end_session:', error)
+        if (this.ws) {
+          this.ws.close()
+          this.ws = null
+        }
+      }
+    } else if (this.ws) {
       this.ws = null
     }
   }

@@ -52,7 +52,7 @@ class Call(Base):
     crm_response = Column(JSON, nullable=True)
     
     # Timestamps
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)  # Set when session actually starts
     ended_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     

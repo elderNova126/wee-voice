@@ -114,16 +114,14 @@ async def voice_websocket(
             return
         
         # Accept connection
-        logger.info("Accepting WebSocket connection for session %s", session_id)
         await manager.connect(session_id, websocket)
         
-        # Create call record
+        # Create call record (without started_at yet)
         call = Call(
             user_id=user.id if user else agent.user_id,
             agent_id=agent_id,
             session_id=session_id,
-            status=CallStatus.INITIATED,
-            started_at=datetime.utcnow()
+            status=CallStatus.INITIATED
         )
         db.add(call)
         db.commit()
@@ -143,6 +141,12 @@ async def voice_websocket(
             await websocket.close()
             return
         
+        # Set started_at AFTER session is successfully established
+        call.started_at = datetime.utcnow()
+        call.status = CallStatus.IN_PROGRESS
+        db.commit()
+        db.refresh(call)
+        
         # Send session started message
         await websocket.send_json({
             "type": "session_started",
@@ -152,10 +156,13 @@ async def voice_websocket(
         })
         
         # Create tasks for bidirectional communication
+        # Flag to signal all tasks to stop
+        stop_flag = asyncio.Event()
+        
         async def receive_audio_from_client():
             """Receive audio from client and send to agent"""
             try:
-                while True:
+                while not stop_flag.is_set():
                     data = await websocket.receive()
                     
                     if "bytes" in data:
@@ -166,9 +173,27 @@ async def voice_websocket(
                     elif "text" in data:
                         # Control messages
                         message = json.loads(data["text"])
-                        logger.info(f"Control message: {message.get('type')}")
                         
                         if message.get("type") == "end_session":
+                            # Get ended_at from frontend if provided
+                            ended_at_str = message.get("ended_at")
+                            if ended_at_str:
+                                try:
+                                    from datetime import datetime as dt
+                                    call.ended_at = dt.fromisoformat(ended_at_str.replace('Z', '+00:00'))
+                                except Exception as e:
+                                    logger.error(f"Error parsing ended_at: {e}")
+                                    call.ended_at = datetime.utcnow()
+                            else:
+                                call.ended_at = datetime.utcnow()
+                            
+                            # Save ended_at immediately
+                            try:
+                                db.commit()
+                            except Exception as e:
+                                logger.error(f"Error saving ended_at: {e}")
+                            
+                            stop_flag.set()
                             break
                         elif message.get("type") == "interrupt":
                             # Handle interruption
@@ -176,13 +201,17 @@ async def voice_websocket(
             
             except WebSocketDisconnect:
                 logger.info(f"Client disconnected: {session_id}")
+                stop_flag.set()
             except Exception as e:
                 logger.error(f"Error receiving from client: {e}", exc_info=True)
+                stop_flag.set()
         
         async def send_audio_to_client():
             """Receive audio from agent and send to client"""
             try:
                 async for audio_data in agent_service.receive_audio():
+                    if stop_flag.is_set():
+                        break
                     await manager.send_audio(session_id, audio_data)
             except Exception as e:
                 logger.error(f"Error sending to client: {e}", exc_info=True)
@@ -190,7 +219,25 @@ async def voice_websocket(
         async def send_realtime_input():
             """Send queued audio to agent"""
             try:
-                await agent_service.send_realtime_input()
+                # This is a long-running task, so we need to monitor stop_flag
+                # The agent_service.send_realtime_input() is a blocking call
+                # We'll wrap it in a task and cancel it when stop_flag is set
+                task = asyncio.create_task(agent_service.send_realtime_input())
+                
+                # Monitor stop_flag while task runs
+                while not task.done() and not stop_flag.is_set():
+                    await asyncio.sleep(0.1)
+                
+                if stop_flag.is_set() and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                elif task.done():
+                    await task  # Re-raise any exception
+            except asyncio.CancelledError:
+                logger.info("Realtime input cancelled")
             except Exception as e:
                 logger.error(f"Error in realtime input: {e}", exc_info=True)
         
@@ -219,39 +266,62 @@ async def voice_websocket(
             pass
     
     finally:
-        # Cleanup
-        try:
-            if agent_service:
-                await agent_service.end_session()
-            
-            if call:
-                # Set end time and calculate duration/cost
-                call.ended_at = datetime.utcnow()
-                call.calculate_duration_and_cost()
-                
-                # Update user usage
-                if user and call.duration_minutes > 0:
-                    user.total_minutes_used += call.duration_minutes
-                    user.monthly_minutes_used += call.duration_minutes
-                
-                # Sync to CRM if enabled
-                if agent and agent.crm_enabled and agent.crm_webhook_url:
-                    try:
-                        crm_service = CRMIntegrationService(agent)
-                        await crm_service.sync_call(call)
-                    except Exception as e:
-                        logger.error(f"CRM sync failed: {e}")
-                
-                # Commit all changes
-                db.commit()
-                logger.info(f"Call {call.id} completed: {call.duration_minutes:.2f} min, ${call.cost:.2f}")
-            
-        except Exception as e:
-            logger.error(f"Error during call cleanup: {e}", exc_info=True)
+        # Cleanup - ensure call end is recorded even if there are errors
+        if agent_service:
             try:
-                db.rollback()
-            except Exception:
-                pass
+                await agent_service.end_session()
+            except Exception as e:
+                logger.error(f"Error ending agent session: {e}")
+        
+        # Handle call cleanup - use a fresh DB session to ensure it's valid
+        if call:
+            call_id = call.id  # Store ID before any potential detachment
+            
+            # Create a new database session for cleanup to ensure it's valid
+            from app.models.database import SessionLocal
+            cleanup_db = SessionLocal()
+            
+            try:
+                # Get a fresh call object from DB
+                fresh_call = cleanup_db.query(Call).filter(Call.id == call_id).first()
+                
+                if fresh_call:
+                    # Set end time if not already set
+                    if not fresh_call.ended_at:
+                        fresh_call.ended_at = datetime.utcnow()
+                    
+                    # Calculate duration
+                    if not fresh_call.calculate_duration_and_cost():
+                        logger.warning(f"Could not calculate duration for call {fresh_call.id}")
+                    
+                    # Update user usage
+                    if user and fresh_call.duration_minutes > 0:
+                        try:
+                            fresh_user = cleanup_db.query(User).filter(User.id == user.id).first()
+                            if fresh_user:
+                                fresh_user.total_minutes_used += fresh_call.duration_minutes
+                                fresh_user.monthly_minutes_used += fresh_call.duration_minutes
+                        except Exception as e:
+                            logger.error(f"Error updating user usage: {e}")
+                    
+                    # Sync to CRM if enabled
+                    if agent and agent.crm_enabled and agent.crm_webhook_url:
+                        try:
+                            crm_service = CRMIntegrationService(agent)
+                            await crm_service.sync_call(fresh_call)
+                        except Exception as e:
+                            logger.error(f"CRM sync failed: {e}")
+                    
+                    # Commit all changes
+                    cleanup_db.commit()
+                else:
+                    logger.error(f"Could not find call {call_id} for cleanup")
+                    
+            except Exception as e:
+                logger.error(f"Error during call cleanup: {e}", exc_info=True)
+                cleanup_db.rollback()
+            finally:
+                cleanup_db.close()
         
         # Disconnect and close
         manager.disconnect(session_id)

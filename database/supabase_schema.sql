@@ -177,7 +177,7 @@ CREATE TABLE calls (
     crm_response JSONB,
     
     -- Timestamps
-    started_at TIMESTAMP DEFAULT NOW(),
+    started_at TIMESTAMP,  -- Set when voice session actually starts (not when record is created)
     ended_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW()
 );

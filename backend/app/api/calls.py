@@ -23,7 +23,7 @@ class CallResponse(BaseModel):
     transcript: Optional[str]
     summary: Optional[str]
     sentiment: Optional[str]
-    started_at: datetime
+    started_at: Optional[datetime]  # Nullable - set when session actually starts
     ended_at: Optional[datetime]
     
     class Config:

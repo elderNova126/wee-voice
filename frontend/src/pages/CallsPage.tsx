@@ -11,8 +11,8 @@ interface Call {
   status: string
   duration_minutes: number
   cost: number
-  started_at: string
-  ended_at: string
+  started_at: string | null  // Nullable - set when session actually starts
+  ended_at: string | null
   summary: string
   sentiment: string
 }
@@ -141,7 +141,7 @@ export default function CallsPage() {
                       )}
                     </div>
                     <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                      {formatDate(call.started_at)}
+                      {call.started_at ? formatDate(call.started_at) : 'Initializing...'}
                     </p>
                     {call.summary && (
                       <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
@@ -201,11 +201,11 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
       console.error('Failed to load transcript:', error)
     } finally {
       setLoading(false)
+      }
     }
-  }
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex min-h-screen items-center justify-center p-4">
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={onClose} />
 

@@ -84,19 +84,23 @@ export default function AgentsPage() {
           ))}
         </div>
       ) : agents.length === 0 ? (
-        <div className="card text-center py-12">
-          <MicrophoneIcon className="mx-auto h-12 w-12 text-gray-400" />
-          <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-white">No agents</h3>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Get started by creating a new voice agent.
-          </p>
-          <div className="mt-6">
-            <Link to="/dashboard/agents/new" className="btn-primary">
-              <PlusIcon className="h-5 w-5 mr-2" />
-              New Agent
-            </Link>
+          <div className="flex flex-col items-center justify-center py-12 px-6 text-center border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm bg-white dark:bg-gray-800">
+            <MicrophoneIcon className="h-12 w-12 text-gray-400 mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">No Agents Found</h3>
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-w-sm">
+              You don’t have any voice agents yet. Get started by creating a new one below.
+            </p>
+            <div className="mt-6">
+              <Link
+                to="/dashboard/agents/new"
+                className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors"
+              >
+                <PlusIcon className="h-5 w-5 mr-2" />
+                New Agent
+              </Link>
+            </div>
           </div>
-        </div>
+
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {agents.map((agent) => (

@@ -154,7 +154,7 @@ Use a friendly and professional tone. Be concise but informative."""
             self.session = await self.session_context.__aenter__()
             
             logger.info(f"Successfully started voice session for call {self.call.session_id}")
-            self.call.status = CallStatus.IN_PROGRESS
+            # Note: Status and started_at are now set in websocket.py after this returns successfully
             return True
         except Exception as e:
             logger.error(f"Failed to start session: {e}", exc_info=True)
@@ -267,10 +267,14 @@ Use a friendly and professional tone. Be concise but informative."""
         try:
             while True:
                 try:
-                    msg = await self.audio_out_queue.get()
+                    # Use wait_for with timeout to allow cancellation
+                    msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=1.0)
                     audio_sent_count += 1
                     # Send audio input to Gemini Live API
                     await self.session.send_realtime_input(audio=msg)
+                except asyncio.TimeoutError:
+                    # No audio in queue, continue waiting
+                    continue
                 except asyncio.CancelledError:
                     logger.info("Audio input cancelled")
                     break
@@ -299,13 +303,9 @@ Use a friendly and professional tone. Be concise but informative."""
             self.session = None
             self.session_context = None
             
+            # Update call status
             self.call.status = CallStatus.COMPLETED
-            self.call.ended_at = datetime.utcnow()
-            
-            # Calculate duration
-            duration = (self.call.ended_at - self.call.started_at).total_seconds()
-            self.call.duration_seconds = duration
-            self.call.duration_minutes = duration / 60.0
+            # Note: ended_at and duration calculation are now handled in websocket.py
             
             logger.info(f"Ended session for call {self.call.session_id}")
         except Exception as e:
