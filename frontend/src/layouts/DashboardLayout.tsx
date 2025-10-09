@@ -18,10 +18,10 @@ interface DashboardLayoutProps {
 }
 
 const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
+  { name: 'Tableau de bord', href: '/dashboard', icon: HomeIcon },
   { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
-  { name: 'Calls', href: '/dashboard/calls', icon: PhoneIcon },
-  { name: 'API Keys', href: '/dashboard/api-keys', icon: KeyIcon },
+  { name: 'Appels', href: '/dashboard/calls', icon: PhoneIcon },
+  { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
 ]
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
@@ -42,7 +42,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="fixed inset-0 bg-gray-600 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
         <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-white dark:bg-gray-800 shadow-xl">
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-            <h1 className="text-xl font-bold text-primary-600">VoiceAgent</h1>
+            <Link to="/" className="text-xl font-bold text-primary-600">VoiceAgent</Link>
             <button onClick={() => setSidebarOpen(false)} className="text-gray-500 hover:text-gray-700">
               <XMarkIcon className="h-6 w-6" />
             </button>
@@ -74,7 +74,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
         <div className="flex flex-col flex-grow bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
           <div className="flex items-center px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-            <Link to="/dashboard" className="text-xl font-bold text-primary-600">
+            <Link to="/" className="text-xl font-bold text-primary-600">
               VoiceAgent
             </Link>
           </div>
@@ -110,7 +110,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900 rounded-lg"
             >
               <ArrowRightOnRectangleIcon className="mr-3 h-5 w-5" />
-              Logout
+              Déconnexion
             </button>
           </div>
         </div>
@@ -127,9 +127,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           >
             <Bars3Icon className="h-6 w-6" />
           </button>
-          <div className="flex-1 text-sm font-semibold leading-6 text-gray-900 dark:text-white">
+          <Link to="/" className="flex-1 text-sm font-semibold leading-6 text-gray-900 dark:text-white">
             VoiceAgent
-          </div>
+          </Link>
         </div>
 
         {/* Page content */}

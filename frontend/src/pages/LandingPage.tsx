@@ -7,6 +7,7 @@ import {
   PhoneIcon,
   CpuChipIcon,
 } from '@heroicons/react/24/outline'
+import { useAuthStore } from '../store/authStore'
 
 const features = [
   {
@@ -42,6 +43,8 @@ const features = [
 ]
 
 export default function LandingPage() {
+  const { isAuthenticated } = useAuthStore()
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
       {/* Header */}
@@ -59,16 +62,10 @@ export default function LandingPage() {
               Démo
             </Link>
             <Link
-              to="/login"
-              className="text-gray-700 dark:text-gray-300 hover:text-primary-600 transition-colors"
-            >
-              Connexion
-            </Link>
-            <Link
-              to="/register"
+              to={isAuthenticated ? "/dashboard" : "/login"}
               className="btn-primary"
             >
-              Commencer
+              {isAuthenticated ? "Tableau de bord" : "Commencer"}
             </Link>
           </div>
         </nav>
@@ -91,9 +88,6 @@ export default function LandingPage() {
           <div className="flex items-center justify-center space-x-4">
             <Link to="/demo" className="btn-primary text-lg px-8 py-3">
               Essayer la Démo
-            </Link>
-            <Link to="/register" className="btn-secondary text-lg px-8 py-3">
-              Créer un Compte
             </Link>
           </div>
         </div>
@@ -133,8 +127,8 @@ export default function LandingPage() {
           <p className="text-xl text-gray-600 dark:text-gray-300 mb-8">
             Créez votre premier agent vocal en quelques minutes.
           </p>
-          <Link to="/register" className="btn-primary text-lg px-8 py-3">
-            Commencer Gratuitement
+          <Link to={isAuthenticated ? "/dashboard" : "/login"} className="btn-primary text-lg px-8 py-3">
+            {isAuthenticated ? "Tableau de bord" : "Commencer"}
           </Link>
         </div>
       </section>
