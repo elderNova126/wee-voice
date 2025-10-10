@@ -259,7 +259,7 @@ const BillingPage = () => {
           </div>
 
           {/* Current Subscription (Optional - can be kept for legacy users) */}
-          <div className="bg-white shadow rounded-lg p-6">
+          {/* <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-xl font-semibold mb-4">Subscription Plan</h2>
             <div className="flex items-center justify-between">
               <div>
@@ -285,7 +285,7 @@ const BillingPage = () => {
                 {loading ? 'Loading...' : 'View Plans'}
               </button>
             </div>
-          </div>
+          </div> */}
 
           {/* Pricing Plans */}
           {showUpgradeModal && (

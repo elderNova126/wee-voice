@@ -432,11 +432,31 @@ POST /api/v1/billing/create-payment-intent
 
 #### Stripe Configuration
 
+**⚠️ Important:** To enable credit top-ups and billing features, you MUST configure Stripe.
+
+**Quick Setup:**
+1. Get your Stripe API key from: https://dashboard.stripe.com/test/apikeys
+2. Add to `backend/.env`:
+   ```env
+   STRIPE_API_KEY=sk_test_your_key_here
+   STRIPE_WEBHOOK_SECRET=whsec_your_secret_here
+   ```
+3. For local development, run Stripe webhook forwarding:
+   ```bash
+   stripe listen --forward-to localhost:8000/api/v1/billing/webhook
+   ```
+
+**📖 Detailed Setup Guide:** See [STRIPE_SETUP_GUIDE.md](STRIPE_SETUP_GUIDE.md) for complete instructions.
+
 Required environment variables:
 ```env
 STRIPE_API_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 ```
+
+**Test Card Numbers:**
+- Success: `4242 4242 4242 4242`
+- Declined: `4000 0000 0000 0002`
 
 ### 2. Usage Tracking & Analytics
 
