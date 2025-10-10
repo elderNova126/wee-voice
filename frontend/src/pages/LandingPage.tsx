@@ -1,4 +1,6 @@
 import { Link } from 'react-router-dom'
+import { Menu, Transition } from '@headlessui/react'
+import { Fragment } from 'react'
 import {
   MicrophoneIcon,
   ClockIcon,
@@ -7,12 +9,18 @@ import {
   PhoneIcon,
   CpuChipIcon,
   CheckIcon,
-  SparklesIcon,
   RocketLaunchIcon,
-  ShieldCheckIcon
+  ShieldCheckIcon,
+  SunIcon,
+  MoonIcon,
+  ComputerDesktopIcon,
+  ChevronDownIcon,
+  UserCircleIcon,
+  ArrowRightOnRectangleIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '../store/authStore'
-import ThemeToggle from '@/components/ThemeToggle'
+import { useThemeStore } from '../store/themeStore'
+import { useNavigate } from 'react-router-dom'
 
 const features = [
   {
@@ -61,7 +69,22 @@ const stats = [
 ]
 
 export default function LandingPage() {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, user, logout } = useAuthStore()
+  const { theme, setTheme } = useThemeStore()
+  const navigate = useNavigate()
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login')
+  }
+
+  const themeOptions = [
+    { name: 'Light', value: 'light' as const, icon: SunIcon },
+    { name: 'Dark', value: 'dark' as const, icon: MoonIcon },
+    { name: 'System', value: 'system' as const, icon: ComputerDesktopIcon },
+  ]
+
+  const ThemeIcon = themeOptions.find(opt => opt.value === theme)?.icon || SunIcon
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
@@ -76,20 +99,122 @@ export default function LandingPage() {
               VoiceAgent
             </span>
           </Link>
-          <div className="flex items-center gap-4">
-            <ThemeToggle />
+          <div className="flex items-center gap-3">
             <Link
               to="/demo"
               className="hidden sm:inline-flex text-gray-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors font-medium"
             >
               Démo
             </Link>
-            <Link
-              to={isAuthenticated ? "/dashboard" : "/login"}
-              className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-medium rounded-lg shadow-md transition-all duration-200"
-            >
-              {isAuthenticated ? "Tableau de bord" : "Commencer"}
-            </Link>
+
+            {/* Theme Dropdown */}
+            <Menu as="div" className="relative">
+              <Menu.Button className="p-2 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                <ThemeIcon className="w-5 h-5" />
+              </Menu.Button>
+              <Transition
+                as={Fragment}
+                enter="transition ease-out duration-100"
+                enterFrom="transform opacity-0 scale-95"
+                enterTo="transform opacity-100 scale-100"
+                leave="transition ease-in duration-75"
+                leaveFrom="transform opacity-100 scale-100"
+                leaveTo="transform opacity-0 scale-95"
+              >
+                <Menu.Items className="absolute right-0 mt-2 w-48 origin-top-right bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                  <div className="p-1">
+                    {themeOptions.map((option) => (
+                      <Menu.Item key={option.value}>
+                        {({ active }) => (
+                          <button
+                            onClick={() => setTheme(option.value)}
+                            className={`${
+                              active ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
+                            } ${
+                              theme === option.value ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                          >
+                            <option.icon className="mr-3 h-5 w-5" />
+                            {option.name}
+                            {theme === option.value && (
+                              <span className="ml-auto text-indigo-600 dark:text-indigo-400">✓</span>
+                            )}
+                          </button>
+                        )}
+                      </Menu.Item>
+                    ))}
+                  </div>
+                </Menu.Items>
+              </Transition>
+            </Menu>
+
+            {/* User Menu or Login Button */}
+            {isAuthenticated && user ? (
+              <Menu as="div" className="relative">
+                <Menu.Button className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
+                    {user.full_name?.charAt(0).toUpperCase()}
+                  </div>
+                  <ChevronDownIcon className="w-4 h-4 text-gray-700 dark:text-gray-300 hidden sm:block" />
+                </Menu.Button>
+                <Transition
+                  as={Fragment}
+                  enter="transition ease-out duration-100"
+                  enterFrom="transform opacity-0 scale-95"
+                  enterTo="transform opacity-100 scale-100"
+                  leave="transition ease-in duration-75"
+                  leaveFrom="transform opacity-100 scale-100"
+                  leaveTo="transform opacity-0 scale-95"
+                >
+                  <Menu.Items className="absolute right-0 mt-2 w-56 origin-top-right bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                    {/* User Info */}
+                    <div className="px-4 py-3">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{user.full_name}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user.email}</p>
+                    </div>
+                    {/* Dashboard Link */}
+                    <div className="p-1">
+                      <Menu.Item>
+                        {({ active }) => (
+                          <Link
+                            to="/dashboard"
+                            className={`${
+                              active ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                            } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                          >
+                            <UserCircleIcon className="mr-3 h-5 w-5" />
+                            Tableau de bord
+                          </Link>
+                        )}
+                      </Menu.Item>
+                    </div>
+                    {/* Logout */}
+                    <div className="p-1">
+                      <Menu.Item>
+                        {({ active }) => (
+                          <button
+                            onClick={handleLogout}
+                            className={`${
+                              active ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-400'
+                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                          >
+                            <ArrowRightOnRectangleIcon className="mr-3 h-5 w-5" />
+                            Déconnexion
+                          </button>
+                        )}
+                      </Menu.Item>
+                    </div>
+                  </Menu.Items>
+                </Transition>
+              </Menu>
+            ) : (
+              <Link
+                to="/login"
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-medium rounded-lg shadow-md transition-all duration-200"
+              >
+                Commencer
+              </Link>
+            )}
           </div>
         </nav>
       </header>

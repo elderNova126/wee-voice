@@ -117,8 +117,8 @@ const UsagePage = () => {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Usage & Analytics</h1>
-          <p className="mt-2 text-gray-600">Track your voice agent usage and spending</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Usage & Analytics</h1>
+          <p className="mt-2 text-gray-600 dark:text-gray-400">Track your voice agent usage and spending</p>
         </div>
         <button
           onClick={handleExport}
@@ -133,14 +133,14 @@ const UsagePage = () => {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600">Total Spend</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total Spend</p>
               {loading ? (
-                <div className="h-8 bg-gray-200 rounded w-24 mt-1 animate-pulse"></div>
+                <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-24 mt-1 animate-pulse"></div>
               ) : (
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
                   {formatCurrency(summary.total_cost)}
                 </p>
               )}
@@ -152,22 +152,22 @@ const UsagePage = () => {
             </div>
           </div>
           {loading ? (
-            <div className="h-4 bg-gray-200 rounded w-32 mt-2 animate-pulse"></div>
+            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 mt-2 animate-pulse"></div>
           ) : (
-            <p className="text-sm text-gray-500 mt-2">
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
               {formatCurrency(summary.current_month_cost)} this month
             </p>
           )}
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600">Total Minutes</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total Minutes</p>
               {loading ? (
-                <div className="h-8 bg-gray-200 rounded w-20 mt-1 animate-pulse"></div>
+                <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 mt-1 animate-pulse"></div>
               ) : (
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
                   {formatMinutes(summary.total_minutes)}
                 </p>
               )}
@@ -179,22 +179,22 @@ const UsagePage = () => {
             </div>
           </div>
           {loading ? (
-            <div className="h-4 bg-gray-200 rounded w-28 mt-2 animate-pulse"></div>
+            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-28 mt-2 animate-pulse"></div>
           ) : (
-            <p className="text-sm text-gray-500 mt-2">
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
               {formatMinutes(summary.current_month_minutes)} this month
             </p>
           )}
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600">Total Calls</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Total Calls</p>
               {loading ? (
-                <div className="h-8 bg-gray-200 rounded w-20 mt-1 animate-pulse"></div>
+                <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 mt-1 animate-pulse"></div>
               ) : (
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
                   {summary.total_calls.toLocaleString()}
                 </p>
               )}
@@ -207,14 +207,14 @@ const UsagePage = () => {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600">Avg Call Duration</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Avg Call Duration</p>
               {loading ? (
-                <div className="h-8 bg-gray-200 rounded w-16 mt-1 animate-pulse"></div>
+                <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-16 mt-1 animate-pulse"></div>
               ) : (
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
                   {formatMinutes(summary.average_call_duration)}
                 </p>
               )}
@@ -229,16 +229,16 @@ const UsagePage = () => {
       </div>
 
       {/* Time-based Charts */}
-      <div className="bg-white rounded-lg shadow p-6 mb-8">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-8">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold">Usage Over Time</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Usage Over Time</h2>
           <div className="flex gap-2">
             <button
               onClick={() => setActiveView('day')}
               className={`px-4 py-2 rounded-lg ${
                 activeView === 'day'
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
               Daily
@@ -248,7 +248,7 @@ const UsagePage = () => {
               className={`px-4 py-2 rounded-lg ${
                 activeView === 'month'
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
               Monthly
@@ -257,7 +257,7 @@ const UsagePage = () => {
         </div>
 
         {loading ? (
-          <div className="h-64 bg-gray-200 rounded animate-pulse"></div>
+          <div className="h-64 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
         ) : activeView === 'day' ? (
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={by_day.slice().reverse()}>
@@ -306,10 +306,10 @@ const UsagePage = () => {
       {/* Usage by Agent */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Pie Chart */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold mb-6">Usage by Agent</h2>
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">Usage by Agent</h2>
           {loading ? (
-            <div className="h-64 bg-gray-200 rounded animate-pulse"></div>
+            <div className="h-64 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
           ) : by_agent.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <PieChart>
@@ -332,27 +332,27 @@ const UsagePage = () => {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-center text-gray-500 py-12">No agent data available</p>
+            <p className="text-center text-gray-500 dark:text-gray-400 py-12">No agent data available</p>
           )}
         </div>
 
         {/* Agent Details Table */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold mb-6">Agent Breakdown</h2>
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">Agent Breakdown</h2>
           {loading ? (
             <div className="space-y-4">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="flex items-center justify-between p-4 border rounded-lg">
+                <div key={i} className="flex items-center justify-between p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
                   <div className="flex items-center gap-3 flex-1">
-                    <div className="w-4 h-4 rounded-full bg-gray-200 animate-pulse"></div>
+                    <div className="w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-700 animate-pulse"></div>
                     <div>
-                      <div className="h-5 bg-gray-200 rounded w-32 mb-2 animate-pulse"></div>
-                      <div className="h-4 bg-gray-200 rounded w-20 animate-pulse"></div>
+                      <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-32 mb-2 animate-pulse"></div>
+                      <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="h-5 bg-gray-200 rounded w-20 mb-2 animate-pulse"></div>
-                    <div className="h-4 bg-gray-200 rounded w-16 animate-pulse"></div>
+                    <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-20 mb-2 animate-pulse"></div>
+                    <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
                   </div>
                 </div>
               ))}
@@ -360,26 +360,26 @@ const UsagePage = () => {
           ) : by_agent.length > 0 ? (
             <div className="space-y-4">
               {by_agent.map((agent, index) => (
-                <div key={agent.agent_id} className="flex items-center justify-between p-4 border rounded-lg">
+                <div key={agent.agent_id} className="flex items-center justify-between p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
                   <div className="flex items-center gap-3">
                     <div 
                       className="w-4 h-4 rounded-full" 
                       style={{ backgroundColor: COLORS[index % COLORS.length] }}
                     ></div>
                     <div>
-                      <p className="font-medium text-gray-900">{agent.agent_name}</p>
-                      <p className="text-sm text-gray-500">{agent.calls} calls</p>
+                      <p className="font-medium text-gray-900 dark:text-white">{agent.agent_name}</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{agent.calls} calls</p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="font-semibold text-gray-900">{formatCurrency(agent.cost)}</p>
-                    <p className="text-sm text-gray-500">{formatMinutes(agent.minutes)}</p>
+                    <p className="font-semibold text-gray-900 dark:text-white">{formatCurrency(agent.cost)}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{formatMinutes(agent.minutes)}</p>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-center text-gray-500 py-12">No agent data available</p>
+            <p className="text-center text-gray-500 dark:text-gray-400 py-12">No agent data available</p>
           )}
         </div>
       </div>

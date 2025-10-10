@@ -204,39 +204,39 @@ const SecurityPage = () => {
     <DashboardLayout>
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Security Settings</h1>
-        <p className="mt-2 text-gray-600">Manage domain allowlist, IP restrictions, and security logs</p>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Security Settings</h1>
+        <p className="mt-2 text-gray-600 dark:text-gray-400">Manage domain allowlist, IP restrictions, and security logs</p>
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 mb-6">
+      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
         <nav className="-mb-px flex space-x-8">
           <button
             onClick={() => setActiveTab('domains')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'domains'
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             Domain Allowlist
           </button>
           <button
             onClick={() => setActiveTab('ips')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'ips'
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             IP Allowlist
           </button>
           <button
             onClick={() => setActiveTab('logs')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'logs'
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             Security Logs
@@ -247,16 +247,16 @@ const SecurityPage = () => {
       {/* Domain Allowlist Tab */}
       {activeTab === 'domains' && (
         <div className="space-y-6">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <h3 className="font-semibold text-blue-900 mb-2">About Domain Allowlist</h3>
-            <p className="text-sm text-blue-800">
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+            <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">About Domain Allowlist</h3>
+            <p className="text-sm text-blue-800 dark:text-blue-200">
               Add domains to generate public keys that can be used to access your voice agents from specific domains.
               This is useful for embedding voice agents on your website with API key restrictions.
             </p>
           </div>
 
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">Allowed Domains</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Allowed Domains</h2>
             <button
               onClick={() => setShowDomainModal(true)}
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
@@ -266,31 +266,31 @@ const SecurityPage = () => {
           </div>
 
           {/* Domain List */}
-          <div className="bg-white shadow rounded-lg overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
             {loading ? (
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-gray-200 dark:divide-gray-700">
                 {[1, 2, 3].map((i) => (
                   <div key={i} className="p-6">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
-                          <div className="h-6 bg-gray-200 rounded w-48 animate-pulse"></div>
-                          <div className="h-6 bg-gray-200 rounded w-16 animate-pulse"></div>
+                          <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-48 animate-pulse"></div>
+                          <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
                         </div>
-                        <div className="h-4 bg-gray-200 rounded w-64 mb-3 animate-pulse"></div>
+                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-64 mb-3 animate-pulse"></div>
                         <div className="bg-gray-50 rounded p-3 mb-2">
-                          <div className="h-3 bg-gray-200 rounded w-24 mb-1 animate-pulse"></div>
-                          <div className="h-3 bg-gray-200 rounded w-full animate-pulse"></div>
+                          <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-24 mb-1 animate-pulse"></div>
+                          <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-full animate-pulse"></div>
                         </div>
                         <div className="flex gap-4">
-                          <div className="h-4 bg-gray-200 rounded w-24 animate-pulse"></div>
-                          <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div>
+                          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-24 animate-pulse"></div>
+                          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
                         </div>
                       </div>
                       <div className="flex gap-2 ml-4">
-                        <div className="h-8 bg-gray-200 rounded w-20 animate-pulse"></div>
-                        <div className="h-8 bg-gray-200 rounded w-32 animate-pulse"></div>
-                        <div className="h-8 bg-gray-200 rounded w-20 animate-pulse"></div>
+                        <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
+                        <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
+                        <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
                       </div>
                     </div>
                   </div>
@@ -298,16 +298,16 @@ const SecurityPage = () => {
               </div>
             ) : domains.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-gray-500">No domains configured</p>
+                <p className="text-gray-500 dark:text-gray-400">No domains configured</p>
               </div>
             ) : (
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-gray-200 dark:divide-gray-700">
                 {domains.map((domain) => (
-                  <div key={domain.id} className="p-6 hover:bg-gray-50">
+                  <div key={domain.id} className="p-6 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
-                          <h3 className="text-lg font-semibold text-gray-900">{domain.domain}</h3>
+                          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{domain.domain}</h3>
                           <span className={`px-2 py-1 text-xs rounded ${domain.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                             {domain.is_active ? 'Active' : 'Inactive'}
                           </span>
@@ -317,11 +317,11 @@ const SecurityPage = () => {
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-gray-600 mb-3">{domain.description || 'No description'}</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{domain.description || 'No description'}</p>
                         
-                        <div className="bg-gray-50 rounded p-3 mb-2">
+                        <div className="bg-gray-50 dark:bg-gray-900 rounded p-3 mb-2">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-semibold text-gray-700">Public Key:</span>
+                            <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Public Key:</span>
                             <button
                               onClick={() => copyToClipboard(domain.public_key)}
                               className="text-xs text-indigo-600 hover:text-indigo-700"
@@ -329,7 +329,7 @@ const SecurityPage = () => {
                               Copy
                             </button>
                           </div>
-                          <code className="text-xs text-gray-600 break-all">{domain.public_key}</code>
+                          <code className="text-xs text-gray-600 dark:text-gray-300 break-all">{domain.public_key}</code>
                         </div>
                         
                         <div className="flex gap-4 text-sm text-gray-500">
@@ -342,19 +342,19 @@ const SecurityPage = () => {
                       <div className="flex gap-2 ml-4">
                         <button
                           onClick={() => handleToggleDomain(domain.id, domain.is_active)}
-                          className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50"
+                          className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
                         >
                           {domain.is_active ? 'Disable' : 'Enable'}
                         </button>
                         <button
                           onClick={() => handleRegenerateKey(domain.id)}
-                          className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50"
+                          className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
                         >
                           Regenerate Key
                         </button>
                         <button
                           onClick={() => handleDeleteDomain(domain.id)}
-                          className="px-3 py-1 text-sm text-red-600 border border-red-300 rounded hover:bg-red-50"
+                          className="px-3 py-1 text-sm text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
                         >
                           Delete
                         </button>
@@ -371,16 +371,16 @@ const SecurityPage = () => {
       {/* IP Allowlist Tab */}
       {activeTab === 'ips' && (
         <div className="space-y-6">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <h3 className="font-semibold text-blue-900 mb-2">About IP Allowlist</h3>
-            <p className="text-sm text-blue-800">
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+            <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">About IP Allowlist</h3>
+            <p className="text-sm text-blue-800 dark:text-blue-200">
               Configure IP addresses or ranges (CIDR notation) that are allowed to access your API.
               If no IPs are configured, all IPs are allowed. Once you add an IP, only listed IPs will have access.
             </p>
           </div>
 
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">Allowed IP Addresses</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Allowed IP Addresses</h2>
             <button
               onClick={() => setShowIPModal(true)}
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
@@ -390,26 +390,26 @@ const SecurityPage = () => {
           </div>
 
           {/* IP List */}
-          <div className="bg-white shadow rounded-lg overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
             {loading ? (
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-gray-200 dark:divide-gray-700">
                 {[1, 2, 3].map((i) => (
                   <div key={i} className="p-6">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
-                          <div className="h-6 bg-gray-200 rounded w-40 animate-pulse"></div>
-                          <div className="h-6 bg-gray-200 rounded w-16 animate-pulse"></div>
+                          <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-40 animate-pulse"></div>
+                          <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
                         </div>
-                        <div className="h-4 bg-gray-200 rounded w-56 mb-3 animate-pulse"></div>
+                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-56 mb-3 animate-pulse"></div>
                         <div className="flex gap-4">
-                          <div className="h-4 bg-gray-200 rounded w-24 animate-pulse"></div>
-                          <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div>
+                          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-24 animate-pulse"></div>
+                          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
                         </div>
                       </div>
                       <div className="flex gap-2 ml-4">
-                        <div className="h-8 bg-gray-200 rounded w-20 animate-pulse"></div>
-                        <div className="h-8 bg-gray-200 rounded w-20 animate-pulse"></div>
+                        <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
+                        <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
                       </div>
                     </div>
                   </div>
@@ -417,26 +417,26 @@ const SecurityPage = () => {
               </div>
             ) : ips.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-gray-500">No IP restrictions configured (all IPs allowed)</p>
+                <p className="text-gray-500 dark:text-gray-400">No IP restrictions configured (all IPs allowed)</p>
               </div>
             ) : (
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-gray-200 dark:divide-gray-700">
                 {ips.map((ip) => (
-                  <div key={ip.id} className="p-6 hover:bg-gray-50">
+                  <div key={ip.id} className="p-6 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
-                          <h3 className="text-lg font-semibold text-gray-900 font-mono">{ip.ip_address}</h3>
+                          <h3 className="text-lg font-semibold text-gray-900 dark:text-white font-mono">{ip.ip_address}</h3>
                           <span className={`px-2 py-1 text-xs rounded ${ip.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                             {ip.is_active ? 'Active' : 'Inactive'}
                           </span>
                         </div>
                         {ip.ip_range && (
-                          <p className="text-sm text-gray-600 mb-2">
-                            Range: <code className="bg-gray-100 px-2 py-1 rounded">{ip.ip_range}</code>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                            Range: <code className="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-gray-900 dark:text-white">{ip.ip_range}</code>
                           </p>
                         )}
-                        <p className="text-sm text-gray-600 mb-3">{ip.description || 'No description'}</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{ip.description || 'No description'}</p>
                         
                         <div className="flex gap-4 text-sm text-gray-500">
                           <span>Requests: {ip.total_requests}</span>
@@ -448,13 +448,13 @@ const SecurityPage = () => {
                       <div className="flex gap-2 ml-4">
                         <button
                           onClick={() => handleToggleIP(ip.id, ip.is_active)}
-                          className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50"
+                          className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
                         >
                           {ip.is_active ? 'Disable' : 'Enable'}
                         </button>
                         <button
                           onClick={() => handleDeleteIP(ip.id)}
-                          className="px-3 py-1 text-sm text-red-600 border border-red-300 rounded hover:bg-red-50"
+                          className="px-3 py-1 text-sm text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
                         >
                           Delete
                         </button>
@@ -473,21 +473,21 @@ const SecurityPage = () => {
         <div className="space-y-6">
           <h2 className="text-xl font-semibold">Security Events</h2>
           
-          <div className="bg-white shadow rounded-lg overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
             {loading ? (
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-gray-200 dark:divide-gray-700">
                 {[1, 2, 3, 4, 5].map((i) => (
                   <div key={i} className="p-4">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-2">
-                          <div className="h-5 bg-gray-200 rounded w-20 animate-pulse"></div>
-                          <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div>
+                          <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div>
+                          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
                         </div>
-                        <div className="h-4 bg-gray-200 rounded w-full mb-2 animate-pulse"></div>
+                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-full mb-2 animate-pulse"></div>
                         <div className="flex gap-4">
-                          <div className="h-3 bg-gray-200 rounded w-32 animate-pulse"></div>
-                          <div className="h-3 bg-gray-200 rounded w-24 animate-pulse"></div>
+                          <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
+                          <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-24 animate-pulse"></div>
                         </div>
                       </div>
                     </div>
@@ -496,22 +496,22 @@ const SecurityPage = () => {
               </div>
             ) : logs.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-gray-500">No security logs</p>
+                <p className="text-gray-500 dark:text-gray-400">No security logs</p>
               </div>
             ) : (
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-gray-200 dark:divide-gray-700">
                 {logs.map((log) => (
-                  <div key={log.id} className="p-4 hover:bg-gray-50">
+                  <div key={log.id} className="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-2">
                           <span className={`px-2 py-1 text-xs rounded font-semibold ${getSeverityColor(log.severity)}`}>
                             {log.severity.toUpperCase()}
                           </span>
-                          <span className="text-sm text-gray-600">{log.event_type}</span>
+                          <span className="text-sm text-gray-600 dark:text-gray-400">{log.event_type}</span>
                         </div>
-                        <p className="text-sm text-gray-900 mb-2">{log.message}</p>
-                        <div className="flex gap-4 text-xs text-gray-500">
+                        <p className="text-sm text-gray-900 dark:text-white mb-2">{log.message}</p>
+                        <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
                           <span>{formatDate(log.created_at)}</span>
                           {log.ip_address && <span>IP: {log.ip_address}</span>}
                           {log.endpoint && <span>Endpoint: {log.endpoint}</span>}
@@ -529,11 +529,11 @@ const SecurityPage = () => {
       {/* Add Domain Modal */}
       {showDomainModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold mb-4">Add Domain to Allowlist</h3>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Add Domain to Allowlist</h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Domain <span className="text-red-500">*</span>
                 </label>
                 <input
@@ -541,25 +541,25 @@ const SecurityPage = () => {
                   value={domainForm.domain}
                   onChange={(e) => setDomainForm({ ...domainForm, domain: e.target.value })}
                   placeholder="example.com"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
-                <p className="text-xs text-gray-500 mt-1">Enter without http:// or https://</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enter without http:// or https://</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
                 <textarea
                   value={domainForm.description}
                   onChange={(e) => setDomainForm({ ...domainForm, description: e.target.value })}
                   placeholder="Optional description"
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>
             </div>
             <div className="flex gap-3 mt-6">
               <button
                 onClick={() => setShowDomainModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
               >
                 Cancel
               </button>
@@ -577,11 +577,11 @@ const SecurityPage = () => {
       {/* Add IP Modal */}
       {showIPModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold mb-4">Add IP to Allowlist</h3>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Add IP to Allowlist</h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   IP Address <span className="text-red-500">*</span>
                 </label>
                 <input
@@ -589,35 +589,35 @@ const SecurityPage = () => {
                   value={ipForm.ip_address}
                   onChange={(e) => setIPForm({ ...ipForm, ip_address: e.target.value })}
                   placeholder="192.168.1.1"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">IP Range (CIDR)</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Range (CIDR)</label>
                 <input
                   type="text"
                   value={ipForm.ip_range}
                   onChange={(e) => setIPForm({ ...ipForm, ip_range: e.target.value })}
                   placeholder="192.168.1.0/24"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
-                <p className="text-xs text-gray-500 mt-1">Optional: Allow entire IP range using CIDR notation</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Optional: Allow entire IP range using CIDR notation</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
                 <textarea
                   value={ipForm.description}
                   onChange={(e) => setIPForm({ ...ipForm, description: e.target.value })}
                   placeholder="Optional description"
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>
             </div>
             <div className="flex gap-3 mt-6">
               <button
                 onClick={() => setShowIPModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
               >
                 Cancel
               </button>

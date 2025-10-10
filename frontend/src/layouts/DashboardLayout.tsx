@@ -73,7 +73,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       <div className={`fixed inset-0 z-50 lg:hidden ${sidebarOpen ? '' : 'hidden'}`}>
         <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm transition-opacity" onClick={() => setSidebarOpen(false)} />
         <div className="fixed inset-y-0 left-0 flex w-72 flex-col bg-white dark:bg-gray-800 shadow-2xl">
-          <div className="flex items-center justify-between px-6 py-5 bg-gradient-to-r from-indigo-600 to-purple-600">
+          <div className="flex items-center justify-between px-6 py-5 ">
             <Link to="/" className="flex items-center gap-2">
               <MicrophoneIcon className="h-8 w-8 text-white" />
               <span className="text-xl font-bold text-white">VoiceAgent</span>
@@ -91,14 +91,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   to={item.href}
                   onClick={() => setSidebarOpen(false)}
                   className={`
-                    flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200
+                    group flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
                     ${isActive
-                      ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
+                      ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
                     }
                   `}
                 >
-                  <item.icon className="mr-3 h-5 w-5 flex-shrink-0" />
+                  {isActive && (
+                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
+                  )}
+                  <item.icon className={`mr-3 h-5 w-5 flex-shrink-0 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
                   <span className="truncate">{item.name}</span>
                 </Link>
               )
@@ -109,14 +112,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <button
                 onClick={() => setSettingsOpen(!settingsOpen)}
                 className={`
-                  flex items-center w-full px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200
+                  group flex items-center w-full px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
                   ${isSettingsActive
-                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
                     : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
                   }
                 `}
               >
-                <Cog6ToothIcon className="mr-3 h-5 w-5 flex-shrink-0" />
+                {isSettingsActive && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
+                )}
+                <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
                 <span className="truncate flex-1 text-left">Paramètres</span>
                 {settingsOpen ? (
                   <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
@@ -134,14 +140,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                         to={item.href}
                         onClick={() => setSidebarOpen(false)}
                         className={`
-                          flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
+                          group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 relative
                           ${isActive
-                            ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400'
+                            ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400'
                             : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/50'
                           }
                         `}
                       >
-                        <item.icon className="mr-3 h-4 w-4 flex-shrink-0" />
+                        {isActive && (
+                          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
+                        )}
+                        <item.icon className={`mr-3 h-4 w-4 flex-shrink-0 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
                         <span className="truncate">{item.name}</span>
                       </Link>
                     )
@@ -243,7 +252,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Desktop sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-72 lg:flex-col">
         <div className="flex flex-col flex-grow bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-sm">
-          <div className="flex items-center px-6 py-5 bg-gradient-to-r from-indigo-600 to-purple-600">
+          <div className="flex items-center px-6 py-5 bg-gradient-to-r from-indigo-600 to-purple-400">
             <Link to="/" className="flex items-center gap-2">
               <MicrophoneIcon className="h-8 w-8 text-white" />
               <span className="text-xl font-bold text-white">VoiceAgent</span>
@@ -257,14 +266,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   key={item.name}
                   to={item.href}
                   className={`
-                    flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200
+                    group flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
                     ${isActive
-                      ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
+                      ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
                     }
                   `}
                 >
-                  <item.icon className="mr-3 h-5 w-5 flex-shrink-0" />
+                  {isActive && (
+                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
+                  )}
+                  <item.icon className={`mr-3 h-5 w-5 flex-shrink-0 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
                   <span className="truncate">{item.name}</span>
                 </Link>
               )
@@ -275,14 +287,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <button
                 onClick={() => setSettingsOpen(!settingsOpen)}
                 className={`
-                  flex items-center w-full px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200
+                  group flex items-center w-full px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
                   ${isSettingsActive
-                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
                     : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
                   }
                 `}
               >
-                <Cog6ToothIcon className="mr-3 h-5 w-5 flex-shrink-0" />
+                {isSettingsActive && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
+                )}
+                <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
                 <span className="truncate flex-1 text-left">Paramètres</span>
                 {settingsOpen ? (
                   <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
@@ -299,14 +314,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                         key={item.name}
                         to={item.href}
                         className={`
-                          flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
+                          group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 relative
                           ${isActive
-                            ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400'
+                            ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400'
                             : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/50'
                           }
                         `}
                       >
-                        <item.icon className="mr-3 h-4 w-4 flex-shrink-0" />
+                        {isActive && (
+                          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
+                        )}
+                        <item.icon className={`mr-3 h-4 w-4 flex-shrink-0 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
                         <span className="truncate">{item.name}</span>
                       </Link>
                     )

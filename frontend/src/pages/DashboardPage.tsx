@@ -171,36 +171,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Getting Started Section */}
-      <div className="mt-8 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl shadow-lg p-8 text-white">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-2xl font-bold mb-2">Commencer avec VoiceAgent</h3>
-            <p className="text-indigo-100 mb-4 max-w-2xl">
-              Créez votre premier agent vocal en quelques minutes. Notre plateforme facilite la création d'agents intelligents avec une latence ultra-faible.
-            </p>
-            <div className="flex gap-4">
-              <Link
-                to="/dashboard/agents/new"
-                className="px-6 py-2.5 bg-white text-indigo-600 rounded-lg font-medium hover:bg-indigo-50 transition-colors"
-              >
-                Créer un Agent
-              </Link>
-              <a
-                href="https://docs.voiceagent.ai"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium border-2 border-white/20 transition-colors"
-              >
-                Documentation
-              </a>
-            </div>
-          </div>
-          <div className="hidden lg:block">
-            <MicrophoneIcon className="w-32 h-32 text-white/20" />
-          </div>
-        </div>
-      </div>
     </DashboardLayout>
   )
 }

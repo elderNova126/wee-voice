@@ -192,39 +192,39 @@ const BillingPage = () => {
     <DashboardLayout>
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Billing & Subscription</h1>
-        <p className="mt-2 text-gray-600">Manage your subscription and view billing history</p>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Billing & Subscription</h1>
+        <p className="mt-2 text-gray-600 dark:text-gray-400">Manage your subscription and view billing history</p>
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 mb-6">
+      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
         <nav className="-mb-px flex space-x-8">
           <button
             onClick={() => setActiveTab('overview')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'overview'
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             Overview
           </button>
           <button
             onClick={() => setActiveTab('transactions')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'transactions'
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             Transactions
           </button>
           <button
             onClick={() => setActiveTab('invoices')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'invoices'
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             Invoices
@@ -236,7 +236,7 @@ const BillingPage = () => {
       {activeTab === 'overview' && (
         <div className="space-y-6">
           {/* Credit Balance */}
-          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 shadow-lg rounded-lg p-6 text-white">
+          <div className="bg-gradient-to-r from-orange-400 to-pink-500 dark:from-orange-600 dark:to-pink-700 shadow-lg rounded-lg p-6 text-white">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm opacity-90 mb-2">Available Credits</p>
@@ -251,7 +251,7 @@ const BillingPage = () => {
               </div>
               <button
                 onClick={() => setShowTopUpModal(true)}
-                className="px-8 py-3 bg-white text-indigo-600 rounded-lg hover:bg-gray-100 font-semibold shadow-md transition-all hover:scale-105"
+                className="px-8 py-3 bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 font-semibold shadow-md transition-all hover:scale-105"
               >
                 + Top Up Credits
               </button>
@@ -346,35 +346,35 @@ const BillingPage = () => {
           )}
 
           {/* Recent Transactions */}
-          <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-xl font-semibold mb-4">Recent Transactions</h2>
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
+            <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Recent Transactions</h2>
             {loading ? (
               <div className="space-y-3">
                 {[1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className="flex items-center justify-between py-3 border-b">
+                  <div key={i} className="flex items-center justify-between py-3 border-b border-gray-200 dark:border-gray-700">
                     <div className="flex-1">
-                      <div className="h-5 bg-gray-200 rounded w-48 mb-2 animate-pulse"></div>
-                      <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div>
+                      <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-48 mb-2 animate-pulse"></div>
+                      <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
                     </div>
                     <div className="text-right">
-                      <div className="h-5 bg-gray-200 rounded w-20 mb-2 animate-pulse"></div>
-                      <div className="h-4 bg-gray-200 rounded w-16 animate-pulse"></div>
+                      <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-20 mb-2 animate-pulse"></div>
+                      <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
                     </div>
                   </div>
                 ))}
               </div>
             ) : transactions.length === 0 ? (
-              <p className="text-gray-500">No transactions yet</p>
+              <p className="text-gray-500 dark:text-gray-400">No transactions yet</p>
             ) : (
               <div className="space-y-3">
                 {transactions.slice(0, 5).map((transaction) => (
-                  <div key={transaction.id} className="flex items-center justify-between py-3 border-b">
+                  <div key={transaction.id} className="flex items-center justify-between py-3 border-b border-gray-200 dark:border-gray-700">
                     <div>
-                      <p className="font-medium">{transaction.description || 'Payment'}</p>
-                      <p className="text-sm text-gray-500">{formatDate(transaction.created_at)}</p>
+                      <p className="font-medium text-gray-900 dark:text-white">{transaction.description || 'Payment'}</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{formatDate(transaction.created_at)}</p>
                     </div>
                     <div className="text-right">
-                      <p className="font-semibold">{formatCurrency(transaction.amount, transaction.currency)}</p>
+                      <p className="font-semibold text-gray-900 dark:text-white">{formatCurrency(transaction.amount, transaction.currency)}</p>
                       <span className={`text-xs px-2 py-1 rounded ${getStatusColor(transaction.status)}`}>
                         {transaction.status}
                       </span>
@@ -389,38 +389,38 @@ const BillingPage = () => {
 
       {/* Transactions Tab */}
       {activeTab === 'transactions' && (
-        <div className="bg-white shadow rounded-lg overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead className="bg-gray-50 dark:bg-gray-900">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Date</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Description</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Amount</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Method</th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-24 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-20 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-6 bg-gray-200 rounded w-20 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-16 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-24 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div></td>
                   </tr>
                 ))
               ) : (
                 transactions.map((transaction) => (
                   <tr key={transaction.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                       {formatDate(transaction.created_at)}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
+                    <td className="px-6 py-4 text-sm text-gray-900 dark:text-white">
                       {transaction.description || 'Payment'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
                       {formatCurrency(transaction.amount, transaction.currency)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
@@ -428,7 +428,7 @@ const BillingPage = () => {
                         {transaction.status}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                       {transaction.payment_method || '-'}
                     </td>
                   </tr>
@@ -438,7 +438,7 @@ const BillingPage = () => {
           </table>
           {!loading && transactions.length === 0 && (
             <div className="text-center py-12">
-              <p className="text-gray-500">No transactions found</p>
+              <p className="text-gray-500 dark:text-gray-400">No transactions found</p>
             </div>
           )}
         </div>
@@ -446,38 +446,38 @@ const BillingPage = () => {
 
       {/* Invoices Tab */}
       {activeTab === 'invoices' && (
-        <div className="bg-white shadow rounded-lg overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead className="bg-gray-50 dark:bg-gray-900">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Invoice #</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Period</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Invoice #</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Period</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Amount</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-28 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-40 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-20 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-6 bg-gray-200 rounded w-20 animate-pulse"></div></td>
-                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-28 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-40 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-20 animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div></td>
                   </tr>
                 ))
               ) : (
                 invoices.map((invoice) => (
                   <tr key={invoice.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
                       {invoice.invoice_number}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                       {formatDate(invoice.period_start)} - {formatDate(invoice.period_end)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
                       {formatCurrency(invoice.amount, invoice.currency)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
@@ -485,7 +485,7 @@ const BillingPage = () => {
                         {invoice.status}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-indigo-600">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-indigo-600 dark:text-indigo-400">
                       {invoice.stripe_pdf_url && (
                         <a
                           href={invoice.stripe_pdf_url}
@@ -514,7 +514,7 @@ const BillingPage = () => {
           </table>
           {!loading && invoices.length === 0 && (
             <div className="text-center py-12">
-              <p className="text-gray-500">No invoices found</p>
+              <p className="text-gray-500 dark:text-gray-400">No invoices found</p>
             </div>
           )}
         </div>
@@ -523,25 +523,25 @@ const BillingPage = () => {
       {/* Top Up Credits Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-8 max-w-md w-full mx-4">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-bold">Top Up Credits</h2>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Top Up Credits</h2>
               <button
                 onClick={() => setShowTopUpModal(false)}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
+                className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 text-2xl"
               >
                 ✕
               </button>
             </div>
             
             <div className="mb-6">
-              <p className="text-sm text-gray-600 mb-4">
-                Current Balance: <span className="font-semibold text-lg text-indigo-600">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Current Balance: <span className="font-semibold text-lg text-indigo-600 dark:text-indigo-400">
                   ${creditBalance?.balance?.toFixed(2) || '0.00'}
                 </span>
               </p>
               
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Quick Amounts
               </label>
               <div className="grid grid-cols-5 gap-2 mb-4">
@@ -555,7 +555,7 @@ const BillingPage = () => {
                     className={`py-3 rounded-lg font-semibold transition-all ${
                       topUpAmount === amount.toString()
                         ? 'bg-indigo-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                     }`}
                   >
                     ${amount}
@@ -563,11 +563,11 @@ const BillingPage = () => {
                 ))}
               </div>
               
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Custom Amount (Min: $5.00)
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400">$</span>
                 <input
                   type="number"
                   min="5"
@@ -578,13 +578,13 @@ const BillingPage = () => {
                     setTopUpAmount('')
                   }}
                   placeholder="Enter amount"
-                  className="w-full pl-8 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full pl-8 pr-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>
               
               {(topUpAmount || customAmount) && (
-                <p className="mt-3 text-sm text-gray-600">
-                  You will be charged: <span className="font-semibold text-lg text-green-600">
+                <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">
+                  You will be charged: <span className="font-semibold text-lg text-green-600 dark:text-green-400">
                     ${(parseFloat(topUpAmount || customAmount) || 0).toFixed(2)}
                   </span>
                 </p>
@@ -594,7 +594,7 @@ const BillingPage = () => {
             <div className="flex gap-3">
               <button
                 onClick={() => setShowTopUpModal(false)}
-                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg hover:bg-gray-50"
+                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
                 disabled={processingPayment}
               >
                 Cancel
@@ -602,13 +602,13 @@ const BillingPage = () => {
               <button
                 onClick={handleTopUp}
                 disabled={processingPayment || (!topUpAmount && !customAmount)}
-                className="flex-1 px-4 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-semibold"
+                className="flex-1 px-4 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed font-semibold"
               >
                 {processingPayment ? 'Processing...' : 'Continue to Payment'}
               </button>
             </div>
             
-            <p className="text-xs text-gray-500 mt-4 text-center">
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-4 text-center">
               Secure payment powered by Stripe
             </p>
           </div>
