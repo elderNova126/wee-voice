@@ -184,7 +184,7 @@ Use a friendly and professional tone. Be concise but informative."""
                     turn = self.session.receive()
                     async for response in turn:
                         response_count += 1
-                        
+                        print("------------", response)
                         # Handle audio data (inline_data)
                         if data := response.data:
                             yield data
@@ -226,16 +226,39 @@ Use a friendly and professional tone. Be concise but informative."""
             logger.info(f"Audio reception ended for call {self.call.session_id} ({response_count} responses)")
     
     async def _save_message(self, role: str, content: str):
-        """Save message to database"""
-        # TODO: Implement database persistence for messages
-        # message = CallMessage(
-        #     call_id=self.call.id,
-        #     role=role,
-        #     content=content,
-        #     timestamp=datetime.utcnow()
-        # )
-        # This should be saved through the database session
+        """Save message to database and build transcript"""
+        from app.models.database import SessionLocal
+        
         logger.info(f"Message [{role}]: {content}")
+        
+        # Save to call_messages table and build transcript
+        try:
+            db = SessionLocal()
+            
+            # Save message
+            from app.models.call import CallMessage
+            from datetime import datetime as dt
+            message = CallMessage(
+                call_id=self.call.id,
+                role=role,
+                content=content,
+                timestamp=dt.utcnow()
+            )
+            db.add(message)
+            
+            # Also append to call.transcript as plain text
+            from app.models.call import Call as CallModel
+            call = db.query(CallModel).filter(CallModel.id == self.call.id).first()
+            if call:
+                if call.transcript:
+                    call.transcript += f"\n\n{role.upper()}: {content}"
+                else:
+                    call.transcript = f"{role.upper()}: {content}"
+            
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.error(f"Error saving message: {e}")
     
     async def _handle_tool_calls(self, function_call):
         """Handle tool/function calls from the agent"""

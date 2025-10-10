@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile
 
 # Set up logging
 logging.basicConfig(
@@ -72,6 +72,10 @@ app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Aut
 app.include_router(agents.router, prefix=f"{settings.API_V1_STR}/agents", tags=["Agents"])
 app.include_router(calls.router, prefix=f"{settings.API_V1_STR}/calls", tags=["Calls"])
 app.include_router(websocket.router, prefix=f"{settings.API_V1_STR}/ws", tags=["WebSocket"])
+app.include_router(billing.router, prefix=f"{settings.API_V1_STR}/billing", tags=["Billing"])
+app.include_router(usage.router, prefix=f"{settings.API_V1_STR}/usage", tags=["Usage"])
+app.include_router(security.router, prefix=f"{settings.API_V1_STR}/security", tags=["Security"])
+app.include_router(profile.router, prefix=f"{settings.API_V1_STR}/profile", tags=["Profile"])
 
 
 # Global exception handler

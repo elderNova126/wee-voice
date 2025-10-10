@@ -60,6 +60,7 @@ class Call(Base):
     user = relationship("User", back_populates="calls")
     agent = relationship("VoiceAgent", back_populates="calls")
     messages = relationship("CallMessage", back_populates="call", cascade="all, delete-orphan")
+    usage_record = relationship("UsageRecord", back_populates="call", uselist=False, cascade="all, delete-orphan")
     
     def calculate_duration_and_cost(self, cost_per_minute: float = 0.05):
         """Calculate duration and cost based on started_at and ended_at timestamps"""

@@ -13,21 +13,24 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  
+  /* Toast colors for light mode */
+  --toast-bg: #fff;
+  --toast-color: #1f2937;
+}
+
+.dark {
+  /* Toast colors for dark mode */
+  --toast-bg: #374151;
+  --toast-color: #f3f4f6;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #ffffff;
-  color: #1f2937;
-}
-
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: #1f2937;
-    color: #f3f4f6;
-  }
+  @apply bg-white text-gray-900 dark:bg-gray-900 dark:text-gray-100;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 @layer components {

@@ -94,6 +94,135 @@ export const apiKeysAPI = {
   delete: (id: number) => api.delete(`/auth/api-keys/${id}`),
 }
 
+// Billing API
+export const billingAPI = {
+  getTransactions: (skip = 0, limit = 100) => 
+    api.get('/billing/transactions', { params: { skip, limit } }),
+  
+  getInvoices: (skip = 0, limit = 100) => 
+    api.get('/billing/invoices', { params: { skip, limit } }),
+  
+  createPaymentIntent: (data: { amount: number; description?: string }) =>
+    api.post('/billing/create-payment-intent', data),
+  
+  upgradeSubscription: (data: { tier: string; payment_method_id: string }) =>
+    api.post('/billing/upgrade-subscription', data),
+  
+  cancelSubscription: () =>
+    api.post('/billing/cancel-subscription'),
+  
+  getSubscription: () =>
+    api.get('/billing/subscription'),
+  
+  getCreditBalance: () =>
+    api.get('/billing/credit-balance'),
+  
+  topUpCredits: (data: { amount: number }) =>
+    api.post('/billing/top-up-credits', data),
+}
+
+// Usage API
+export const usageAPI = {
+  getRecords: (params?: { skip?: number; limit?: number; start_date?: string; end_date?: string }) =>
+    api.get('/usage/records', { params }),
+  
+  getSummary: () =>
+    api.get('/usage/summary'),
+  
+  getByMonth: (months = 12) =>
+    api.get('/usage/by-month', { params: { months } }),
+  
+  getByDay: (days = 30) =>
+    api.get('/usage/by-day', { params: { days } }),
+  
+  getByAgent: () =>
+    api.get('/usage/by-agent'),
+  
+  getAnalytics: () =>
+    api.get('/usage/analytics'),
+  
+  recordCall: (callId: number) =>
+    api.post(`/usage/record-call/${callId}`),
+  
+  exportData: (params?: { start_date?: string; end_date?: string }) =>
+    api.get('/usage/export', { 
+      params,
+      responseType: 'blob'
+    }),
+}
+
+// Security API
+export const securityAPI = {
+  // Domain allowlist
+  getDomains: (skip = 0, limit = 100) =>
+    api.get('/security/domains', { params: { skip, limit } }),
+  
+  createDomain: (data: { domain: string; description?: string }) =>
+    api.post('/security/domains', data),
+  
+  updateDomain: (id: number, data: { description?: string; is_active?: boolean }) =>
+    api.put(`/security/domains/${id}`, data),
+  
+  deleteDomain: (id: number) =>
+    api.delete(`/security/domains/${id}`),
+  
+  regenerateDomainKey: (id: number) =>
+    api.post(`/security/domains/${id}/regenerate-key`),
+  
+  // IP allowlist
+  getIPs: (skip = 0, limit = 100) =>
+    api.get('/security/ips', { params: { skip, limit } }),
+  
+  createIP: (data: { ip_address: string; ip_range?: string; description?: string }) =>
+    api.post('/security/ips', data),
+  
+  updateIP: (id: number, data: { description?: string; is_active?: boolean }) =>
+    api.put(`/security/ips/${id}`, data),
+  
+  deleteIP: (id: number) =>
+    api.delete(`/security/ips/${id}`),
+  
+  // Security logs
+  getLogs: (params?: { skip?: number; limit?: number; event_type?: string; severity?: string }) =>
+    api.get('/security/logs', { params }),
+}
+
+// Profile API
+export const profileAPI = {
+  getProfile: () =>
+    api.get('/profile/me'),
+  
+  updateProfile: (data: { full_name?: string; email?: string }) =>
+    api.put('/profile/me', data),
+  
+  changePassword: (data: { current_password: string; new_password: string; confirm_password: string }) =>
+    api.post('/profile/change-password', data),
+  
+  getStats: () =>
+    api.get('/profile/stats'),
+  
+  deleteAccount: (password: string) =>
+    api.delete('/profile/me', { params: { password } }),
+}
+
+// Support API
+export const supportAPI = {
+  createTicket: (data: { name: string; email: string; subject: string; message: string; category: string }) =>
+    api.post('/support/tickets', data),
+  
+  getTickets: () =>
+    api.get('/support/tickets'),
+  
+  getTicketByNumber: (ticketNumber: string) =>
+    api.get(`/support/tickets/${ticketNumber}`),
+  
+  addResponse: (ticketNumber: string, data: { message: string }) =>
+    api.post(`/support/tickets/${ticketNumber}/responses`, data),
+  
+  getCategories: () =>
+    api.get('/support/categories'),
+}
+
 // WebSocket API
 export class VoiceWebSocket {
   private ws: WebSocket | null = null

@@ -7,18 +7,23 @@ A comprehensive SaaS platform for creating realistic French-speaking voice agent
 - **Ultra-Low Latency**: Real-time voice conversations with <300ms latency using Gemini 2.5 Flash
 - **Native French Support**: Optimized for French language with natural pronunciation
 - **Advanced AI**: Powered by Google Gemini, LangChain, and LangGraph for intelligent conversations
-- **Backoffice Dashboard**: Comprehensive interface to review calls, transcripts, and summaries
+- **Complete Dashboard**: Modern UI with billing, usage analytics, security, and support
 - **CRM Integration**: Built-in webhooks for HubSpot, Salesforce, and custom CRM systems
-- **API-First**: RESTful API and WebSocket support for easy integration
-- **Multi-Tenant**: API key-based authentication with usage tracking and billing
-- **Real-Time Analytics**: Call statistics, sentiment analysis, and detailed transcripts
+- **Credit-Based Billing**: Pay-as-you-go with Stripe integration
+- **Security Features**: Domain/IP allowlists, security logs, and audit trails
+- **Support System**: Complete ticketing system with email notifications
+- **Real-Time Analytics**: Detailed charts, call statistics, and export capabilities
+
+## 📚 Complete Documentation
+
+**For detailed setup, configuration, API reference, and feature documentation, see:**
+### **[COMPLETE_DOCUMENTATION.md](COMPLETE_DOCUMENTATION.md)**
 
 ## 📋 Requirements
 
 - Python 3.11+
 - Node.js 20+
 - PostgreSQL 15+
-- Redis 7+
 - Google Cloud API Key (for Gemini)
 
 ## 🛠️ Installation

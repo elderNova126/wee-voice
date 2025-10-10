@@ -11,6 +11,11 @@ import AgentFormPage from './pages/AgentFormPage'
 import CallsPage from './pages/CallsPage'
 import APIKeysPage from './pages/ApiKeysPage'
 import DemoPage from './pages/DemoPage'
+import BillingPage from './pages/BillingPage'
+import UsagePage from './pages/UsagePage'
+import SecurityPage from './pages/SecurityPage'
+import ProfilePage from './pages/ProfilePage'
+import SupportPage from './pages/SupportPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -63,6 +68,32 @@ function App() {
             <APIKeysPage />
           </ProtectedRoute>
         } />
+        <Route path="/dashboard/billing" element={
+          <ProtectedRoute>
+            <BillingPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/usage" element={
+          <ProtectedRoute>
+            <UsagePage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/security" element={
+          <ProtectedRoute>
+            <SecurityPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/profile" element={
+          <ProtectedRoute>
+            <ProfilePage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/support" element={
+          <ProtectedRoute>
+            <SupportPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/support" element={<SupportPage />} />
       </Routes>
     </BrowserRouter>
   )

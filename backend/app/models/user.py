@@ -27,6 +27,9 @@ class User(Base):
     stripe_customer_id = Column(String, nullable=True)
     stripe_subscription_id = Column(String, nullable=True)
     
+    # Credit Balance
+    credit_balance = Column(Float, default=0.0)  # Available credits in USD
+    
     # Usage tracking
     total_minutes_used = Column(Float, default=0.0)
     monthly_minutes_used = Column(Float, default=0.0)
@@ -40,4 +43,10 @@ class User(Base):
     api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
     agents = relationship("VoiceAgent", back_populates="user", cascade="all, delete-orphan")
     calls = relationship("Call", back_populates="user", cascade="all, delete-orphan")
+    transactions = relationship("Transaction", back_populates="user", cascade="all, delete-orphan")
+    invoices = relationship("Invoice", back_populates="user", cascade="all, delete-orphan")
+    usage_records = relationship("UsageRecord", back_populates="user", cascade="all, delete-orphan")
+    domain_allowlists = relationship("DomainAllowlist", back_populates="user", cascade="all, delete-orphan")
+    ip_allowlists = relationship("IPAllowlist", back_populates="user", cascade="all, delete-orphan")
+    security_logs = relationship("SecurityLog", back_populates="user", cascade="all, delete-orphan")
 

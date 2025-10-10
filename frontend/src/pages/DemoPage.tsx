@@ -260,29 +260,29 @@ export default function DemoPage() {
   }
   
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800">
-      <div className="max-w-4xl mx-auto px-6 py-12">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="max-w-5xl mx-auto px-6 py-12">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-10">
           <Link
             to="/"
-            className="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-primary-600 mb-4"
+            className="inline-flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 mb-6 font-medium transition-colors"
           >
-            <ArrowLeftIcon className="w-5 h-5 mr-2" />
+            <ArrowLeftIcon className="w-5 h-5" />
             {selectedLanguage.startsWith('fr') ? 'Retour' : 'Back'}
           </Link>
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2">
+          <h1 className="text-4xl sm:text-5xl font-bold text-gray-900 dark:text-white mb-4">
             {selectedLanguage.startsWith('fr') ? 'Démo Agent Vocal' : 'Voice Agent Demo'}
           </h1>
-          <p className="text-gray-600 dark:text-gray-400 mb-4">
+          <p className="text-xl text-gray-600 dark:text-gray-400 mb-6">
             {selectedLanguage.startsWith('fr') 
-              ? 'Testez notre agent vocal intelligent' 
-              : 'Test our intelligent voice agent'}
+              ? 'Testez notre agent vocal intelligent propulsé par Gemini 2.5' 
+              : 'Test our intelligent voice agent powered by Gemini 2.5'}
           </p>
           
           {/* Language Selector */}
           {agents.length > 1 && (
-            <div className="inline-flex items-center space-x-2 bg-white dark:bg-gray-800 rounded-lg p-2 shadow">
+            <div className="inline-flex items-center gap-2 bg-white dark:bg-gray-800 rounded-xl p-1.5 shadow-sm border border-gray-200 dark:border-gray-700">
               {agents.map(agent => (
                 <button
                   key={agent.id}
@@ -296,9 +296,9 @@ export default function DemoPage() {
                     }
                   }}
                   disabled={isConnected}
-                  className={`px-4 py-2 rounded-md font-medium transition-colors ${
+                  className={`px-6 py-2.5 rounded-lg font-medium transition-all duration-200 ${
                     agent.language === selectedLanguage
-                      ? 'bg-primary-600 text-white'
+                      ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
                       : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
                   } ${isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
@@ -310,15 +310,17 @@ export default function DemoPage() {
         </div>
 
         {/* Main Card */}
-        <div className="card mb-8">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-700 p-8 sm:p-12 mb-8">
           <div className="text-center">
             {!isConnected && !isConnecting ? (
               <div>
-                <MicrophoneIcon className="w-24 h-24 text-primary-600 mx-auto mb-6" />
-                <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
+                <div className="w-32 h-32 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mx-auto mb-8 shadow-lg">
+                  <MicrophoneIcon className="w-16 h-16 text-white" />
+                </div>
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
                   {selectedLanguage.startsWith('fr') ? 'Prêt à commencer ?' : 'Ready to start?'}
                 </h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-6">
+                <p className="text-lg text-gray-600 dark:text-gray-400 mb-8 max-w-md mx-auto">
                   {selectedLanguage.startsWith('fr')
                     ? 'Cliquez sur le bouton ci-dessous pour démarrer une conversation vocale'
                     : 'Click the button below to start a voice conversation'}
@@ -326,24 +328,24 @@ export default function DemoPage() {
                 <button
                   onClick={connect}
                   disabled={!agentId}
-                  className="btn-primary text-lg px-8 py-4"
+                  className="inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 disabled:cursor-not-allowed"
                 >
-                  <MicrophoneIcon className="w-6 h-6 inline-block mr-2" />
+                  <MicrophoneIcon className="w-6 h-6" />
                   {selectedLanguage.startsWith('fr') ? 'Démarrer la Conversation' : 'Start Conversation'}
                 </button>
               </div>
             ) : isConnecting ? (
               <div>
-                <div className="relative inline-block mb-6">
-                  <div className="w-32 h-32 rounded-full bg-primary-600 flex items-center justify-center animate-pulse">
+                <div className="relative inline-block mb-8">
+                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center animate-pulse shadow-lg">
                     <MicrophoneIcon className="w-16 h-16 text-white" />
                   </div>
-                  <div className="absolute inset-0 rounded-full border-4 border-primary-600 animate-spin" style={{ borderTopColor: 'transparent' }}></div>
+                  <div className="absolute inset-0 rounded-full border-4 border-indigo-600 animate-spin" style={{ borderTopColor: 'transparent' }}></div>
                 </div>
-                <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
                   {selectedLanguage.startsWith('fr') ? 'Connexion en cours...' : 'Connecting...'}
                 </h2>
-                <p className="text-gray-600 dark:text-gray-400">
+                <p className="text-lg text-gray-600 dark:text-gray-400">
                   {selectedLanguage.startsWith('fr')
                     ? 'Veuillez patienter pendant que nous établissons la connexion'
                     : 'Please wait while we establish the connection'}
@@ -351,29 +353,31 @@ export default function DemoPage() {
               </div>
             ) : (
               <div>
-                <div className="relative inline-block mb-6">
-                  <div className={`w-32 h-32 rounded-full bg-primary-600 flex items-center justify-center ${
-                    isRecording ? 'animate-pulse' : ''
+                <div className="relative inline-block mb-8">
+                  <div className={`w-32 h-32 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 ${
+                    isRecording ? 'bg-gradient-to-br from-red-500 to-pink-600 animate-pulse scale-110' : 'bg-gradient-to-br from-indigo-500 to-purple-600'
                   }`}>
                     <MicrophoneIcon className="w-16 h-16 text-white" />
                   </div>
                   {isRecording && (
-                    <div className="absolute inset-0 rounded-full border-4 border-primary-600 animate-ping"></div>
+                    <div className="absolute inset-0">
+                      <div className="absolute inset-0 rounded-full border-4 border-red-500 animate-ping"></div>
+                    </div>
                   )}
                 </div>
-                <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
                   {selectedLanguage.startsWith('fr') ? 'En écoute...' : 'Listening...'}
                 </h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-6">
+                <p className="text-lg text-gray-600 dark:text-gray-400 mb-8">
                   {selectedLanguage.startsWith('fr')
                     ? 'Parlez naturellement en français'
                     : 'Speak naturally in English'}
                 </p>
                 <button
                   onClick={disconnect}
-                  className="bg-red-600 text-white px-8 py-4 rounded-lg hover:bg-red-700 transition-colors"
+                  className="inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                 >
-                  <StopIcon className="w-6 h-6 inline-block mr-2" />
+                  <StopIcon className="w-6 h-6" />
                   {selectedLanguage.startsWith('fr') ? 'Arrêter' : 'Stop'}
                 </button>
               </div>
@@ -383,26 +387,33 @@ export default function DemoPage() {
 
         {/* Transcript */}
         {transcript.length > 0 && (
-          <div className="card">
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-700 p-8 mb-8">
+            <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
+              <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm">
+                📝
+              </span>
               {selectedLanguage.startsWith('fr') ? 'Transcription' : 'Transcript'}
             </h3>
-            <div className="space-y-4 max-h-96 overflow-y-auto">
+            <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
               {transcript.map((item, index) => (
                 <div
                   key={index}
-                  className={`p-4 rounded-lg ${
+                  className={`p-4 rounded-xl ${
                     item.role === 'user'
-                      ? 'bg-blue-50 dark:bg-blue-900 ml-8'
-                      : 'bg-gray-50 dark:bg-gray-700 mr-8'
+                      ? 'bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/30 dark:to-purple-900/30 border border-indigo-200 dark:border-indigo-800 ml-8'
+                      : 'bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 mr-8'
                   }`}
                 >
-                  <div className="font-medium text-sm text-gray-500 dark:text-gray-400 mb-1">
+                  <div className={`text-xs font-bold uppercase tracking-wider mb-2 ${
+                    item.role === 'user'
+                      ? 'text-indigo-600 dark:text-indigo-400'
+                      : 'text-gray-500 dark:text-gray-400'
+                  }`}>
                     {item.role === 'user' 
-                      ? (selectedLanguage.startsWith('fr') ? 'Vous' : 'You')
-                      : 'Agent'}
+                      ? (selectedLanguage.startsWith('fr') ? '👤 Vous' : '👤 You')
+                      : '🤖 Agent'}
                   </div>
-                  <div className="text-gray-900 dark:text-white">
+                  <div className="text-gray-900 dark:text-white leading-relaxed">
                     {item.text}
                   </div>
                 </div>
@@ -412,23 +423,48 @@ export default function DemoPage() {
         )}
 
         {/* Info Box */}
-        <div className="mt-8 p-6 bg-blue-50 dark:bg-blue-900 rounded-lg">
-          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">
-            💡 {selectedLanguage.startsWith('fr') ? 'Conseils' : 'Tips'}
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-2xl border border-blue-200 dark:border-blue-800 p-8">
+          <h3 className="text-xl font-bold text-blue-900 dark:text-blue-300 mb-4 flex items-center gap-2">
+            <span>💡</span>
+            {selectedLanguage.startsWith('fr') ? 'Conseils pour une meilleure expérience' : 'Tips for a better experience'}
           </h3>
           {selectedLanguage.startsWith('fr') ? (
-            <ul className="text-gray-700 dark:text-gray-300 space-y-1 text-sm">
-              <li>• Parlez clairement et naturellement</li>
-              <li>• Posez des questions en français</li>
-              <li>• L'agent peut vous aider avec diverses tâches</li>
-              <li>• La latence est inférieure à 300ms pour une conversation fluide</li>
+            <ul className="text-gray-700 dark:text-gray-300 space-y-3">
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">1</span>
+                <span>Parlez clairement et naturellement pour une meilleure reconnaissance</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">2</span>
+                <span>Posez des questions en français, l'agent comprend le contexte</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">3</span>
+                <span>L'agent peut vous aider avec diverses tâches et questions</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">4</span>
+                <span>Latence inférieure à 300ms pour une conversation ultra-fluide</span>
+              </li>
             </ul>
           ) : (
-            <ul className="text-gray-700 dark:text-gray-300 space-y-1 text-sm">
-              <li>• Speak clearly and naturally</li>
-              <li>• Ask questions in English</li>
-              <li>• The agent can help you with various tasks</li>
-              <li>• Latency is under 300ms for fluid conversation</li>
+            <ul className="text-gray-700 dark:text-gray-300 space-y-3">
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">1</span>
+                <span>Speak clearly and naturally for better recognition</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">2</span>
+                <span>Ask questions in English, the agent understands context</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">3</span>
+                <span>The agent can help you with various tasks and questions</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">4</span>
+                <span>Latency under 300ms for ultra-smooth conversation</span>
+              </li>
             </ul>
           )}
         </div>

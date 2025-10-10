@@ -35,6 +35,9 @@ langgraph==0.2.62
 # HTTP Client (for CRM webhooks)
 httpx==0.28.1
 
+# Payment Processing
+stripe==10.11.0
+
 # Required dependencies for above packages
 protobuf==5.29.5
 cryptography==42.0.0

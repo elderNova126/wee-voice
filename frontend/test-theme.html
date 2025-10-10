@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Theme Test</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+    }
+  </script>
+</head>
+<body class="bg-white dark:bg-gray-900 transition-colors duration-200">
+  <div class="min-h-screen flex items-center justify-center">
+    <div class="max-w-md w-full p-8 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+        Theme Test
+      </h1>
+      <p class="text-gray-600 dark:text-gray-400 mb-6">
+        Click the buttons below to test theme switching
+      </p>
+      
+      <div class="flex gap-2 mb-4">
+        <button onclick="setTheme('light')" class="flex-1 px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600">
+          ☀️ Light
+        </button>
+        <button onclick="setTheme('dark')" class="flex-1 px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-900">
+          🌙 Dark
+        </button>
+      </div>
+      
+      <div class="p-4 bg-gray-100 dark:bg-gray-700 rounded">
+        <p class="text-sm text-gray-700 dark:text-gray-300">
+          Current theme: <span id="current-theme" class="font-bold">-</span>
+        </p>
+        <p class="text-sm text-gray-700 dark:text-gray-300">
+          HTML classes: <span id="html-classes" class="font-mono text-xs">-</span>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function setTheme(theme) {
+      console.log('Setting theme to:', theme)
+      
+      if (theme === 'dark') {
+        document.documentElement.classList.add('dark')
+      } else {
+        document.documentElement.classList.remove('dark')
+      }
+      
+      updateDisplay()
+    }
+    
+    function updateDisplay() {
+      const isDark = document.documentElement.classList.contains('dark')
+      document.getElementById('current-theme').textContent = isDark ? 'Dark' : 'Light'
+      document.getElementById('html-classes').textContent = document.documentElement.className || '(none)'
+    }
+    
+    // Initial update
+    updateDisplay()
+    
+    // Update display every 100ms to catch any changes
+    setInterval(updateDisplay, 100)
+  </script>
+</body>
+</html>
+
