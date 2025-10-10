@@ -1,5 +1,7 @@
 import { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Menu, Transition } from '@headlessui/react'
+import { Fragment, useState } from 'react'
 import {
   HomeIcon,
   MicrophoneIcon,
@@ -12,11 +14,16 @@ import {
   CreditCardIcon,
   ChartBarIcon,
   ShieldCheckIcon,
-  ChatBubbleLeftRightIcon
+  ChatBubbleLeftRightIcon,
+  SunIcon,
+  MoonIcon,
+  ComputerDesktopIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  Cog6ToothIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
-import { useState } from 'react'
-import ThemeToggle from '@/components/ThemeToggle'
+import { useThemeStore } from '@/store/themeStore'
 
 interface DashboardLayoutProps {
   children: ReactNode
@@ -26,24 +33,39 @@ const navigation = [
   { name: 'Tableau de bord', href: '/dashboard', icon: HomeIcon },
   { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
   { name: 'Appels', href: '/dashboard/calls', icon: PhoneIcon },
-  { name: 'Utilisation', href: '/dashboard/usage', icon: ChartBarIcon },
-  { name: 'Facturation', href: '/dashboard/billing', icon: CreditCardIcon },
-  { name: 'Sécurité', href: '/dashboard/security', icon: ShieldCheckIcon },
   { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
   { name: 'Support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
-  { name: 'Profil', href: '/dashboard/profile', icon: UserCircleIcon },
+]
+
+const settingsNavigation = [
+  { name: 'Facturation', href: '/dashboard/billing', icon: CreditCardIcon },
+  { name: 'Utilisation', href: '/dashboard/usage', icon: ChartBarIcon },
+  { name: 'Sécurité', href: '/dashboard/security', icon: ShieldCheckIcon },
 ]
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
+  const { theme, setTheme } = useThemeStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(() => {
+    // Auto-expand Settings if user is on a settings page
+    return settingsNavigation.some(item => location.pathname === item.href)
+  })
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
+
+  const themeOptions = [
+    { name: 'Light', value: 'light' as const, icon: SunIcon },
+    { name: 'Dark', value: 'dark' as const, icon: MoonIcon },
+    { name: 'System', value: 'system' as const, icon: ComputerDesktopIcon },
+  ]
+
+  const isSettingsActive = settingsNavigation.some(item => location.pathname === item.href)
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
@@ -81,36 +103,139 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 </Link>
               )
             })}
+            
+            {/* Settings Section */}
+            <div>
+              <button
+                onClick={() => setSettingsOpen(!settingsOpen)}
+                className={`
+                  flex items-center w-full px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200
+                  ${isSettingsActive
+                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
+                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
+                  }
+                `}
+              >
+                <Cog6ToothIcon className="mr-3 h-5 w-5 flex-shrink-0" />
+                <span className="truncate flex-1 text-left">Paramètres</span>
+                {settingsOpen ? (
+                  <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
+                ) : (
+                  <ChevronDownIcon className="h-4 w-4 flex-shrink-0" />
+                )}
+              </button>
+              {settingsOpen && (
+                <div className="mt-1 space-y-1 ml-4">
+                  {settingsNavigation.map((item) => {
+                    const isActive = location.pathname === item.href
+                    return (
+                      <Link
+                        key={item.name}
+                        to={item.href}
+                        onClick={() => setSidebarOpen(false)}
+                        className={`
+                          flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
+                          ${isActive
+                            ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400'
+                            : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/50'
+                          }
+                        `}
+                      >
+                        <item.icon className="mr-3 h-4 w-4 flex-shrink-0" />
+                        <span className="truncate">{item.name}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </nav>
-          <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-3">
-            {/* Theme Toggle */}
-            <div className="flex justify-center">
-              <ThemeToggle />
-            </div>
-            
-            {/* User Info Card */}
-            <div className="bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 rounded-xl p-3">
-              <div className="flex items-center gap-3">
-                <div className="flex-shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
-                    {user?.full_name?.charAt(0).toUpperCase()}
+          <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+            {/* User Menu */}
+            <Menu as="div" className="relative">
+              <Menu.Button className="w-full bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 hover:from-gray-100 hover:to-gray-200 dark:hover:from-gray-600 dark:hover:to-gray-700 rounded-xl p-3 transition-all duration-200 cursor-pointer group">
+                <div className="flex items-center gap-3">
+                  <div className="flex-shrink-0">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
+                      {user?.full_name?.charAt(0).toUpperCase()}
+                    </div>
                   </div>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{user?.full_name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user?.email}</p>
+                  </div>
+                  <ChevronUpIcon className="h-5 w-5 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{user?.full_name}</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user?.email}</p>
-                </div>
-              </div>
-            </div>
-            
-            {/* Logout Button */}
-            <button
-              onClick={handleLogout}
-              className="flex items-center justify-center w-full px-4 py-2.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all duration-200 border border-red-200 dark:border-red-900/30"
-            >
-              <ArrowRightOnRectangleIcon className="mr-2 h-5 w-5" />
-              Déconnexion
-            </button>
+              </Menu.Button>
+              <Transition
+                as={Fragment}
+                enter="transition ease-out duration-100"
+                enterFrom="transform opacity-0 scale-95"
+                enterTo="transform opacity-100 scale-100"
+                leave="transition ease-in duration-75"
+                leaveFrom="transform opacity-100 scale-100"
+                leaveTo="transform opacity-0 scale-95"
+              >
+                <Menu.Items className="absolute bottom-full left-0 right-0 mb-2 origin-bottom bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                  {/* Profile */}
+                  <div className="p-1">
+                    <Menu.Item>
+                      {({ active }) => (
+                        <Link
+                          to="/dashboard/profile"
+                          onClick={() => setSidebarOpen(false)}
+                          className={`${
+                            active ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                          } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                        >
+                          <UserCircleIcon className="mr-3 h-5 w-5" />
+                          Profil
+                        </Link>
+                      )}
+                    </Menu.Item>
+                  </div>
+                  {/* Theme Options */}
+                  <div className="p-1">
+                    {themeOptions.map((option) => (
+                      <Menu.Item key={option.value}>
+                        {({ active }) => (
+                          <button
+                            onClick={() => setTheme(option.value)}
+                            className={`${
+                              active ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
+                            } ${
+                              theme === option.value ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                          >
+                            <option.icon className="mr-3 h-5 w-5" />
+                            {option.name}
+                            {theme === option.value && (
+                              <span className="ml-auto text-indigo-600 dark:text-indigo-400">✓</span>
+                            )}
+                          </button>
+                        )}
+                      </Menu.Item>
+                    ))}
+                  </div>
+                  {/* Logout */}
+                  <div className="p-1">
+                    <Menu.Item>
+                      {({ active }) => (
+                        <button
+                          onClick={handleLogout}
+                          className={`${
+                            active ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-400'
+                          } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                        >
+                          <ArrowRightOnRectangleIcon className="mr-3 h-5 w-5" />
+                          Déconnexion
+                        </button>
+                      )}
+                    </Menu.Item>
+                  </div>
+                </Menu.Items>
+              </Transition>
+            </Menu>
           </div>
         </div>
       </div>
@@ -144,36 +269,137 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 </Link>
               )
             })}
+            
+            {/* Settings Section */}
+            <div>
+              <button
+                onClick={() => setSettingsOpen(!settingsOpen)}
+                className={`
+                  flex items-center w-full px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200
+                  ${isSettingsActive
+                    ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-md'
+                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
+                  }
+                `}
+              >
+                <Cog6ToothIcon className="mr-3 h-5 w-5 flex-shrink-0" />
+                <span className="truncate flex-1 text-left">Paramètres</span>
+                {settingsOpen ? (
+                  <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
+                ) : (
+                  <ChevronDownIcon className="h-4 w-4 flex-shrink-0" />
+                )}
+              </button>
+              {settingsOpen && (
+                <div className="mt-1 space-y-1 ml-4">
+                  {settingsNavigation.map((item) => {
+                    const isActive = location.pathname === item.href
+                    return (
+                      <Link
+                        key={item.name}
+                        to={item.href}
+                        className={`
+                          flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
+                          ${isActive
+                            ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400'
+                            : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/50'
+                          }
+                        `}
+                      >
+                        <item.icon className="mr-3 h-4 w-4 flex-shrink-0" />
+                        <span className="truncate">{item.name}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </nav>
-          <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-3">
-            {/* Theme Toggle */}
-            <div className="flex justify-center">
-              <ThemeToggle />
-            </div>
-            
-            {/* User Info Card */}
-            <div className="bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 rounded-xl p-3">
-              <div className="flex items-center gap-3">
-                <div className="flex-shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
-                    {user?.full_name?.charAt(0).toUpperCase()}
+          <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+            {/* User Menu */}
+            <Menu as="div" className="relative">
+              <Menu.Button className="w-full bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 hover:from-gray-100 hover:to-gray-200 dark:hover:from-gray-600 dark:hover:to-gray-700 rounded-xl p-3 transition-all duration-200 cursor-pointer group">
+                <div className="flex items-center gap-3">
+                  <div className="flex-shrink-0">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
+                      {user?.full_name?.charAt(0).toUpperCase()}
+                    </div>
                   </div>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{user?.full_name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user?.email}</p>
+                  </div>
+                  <ChevronUpIcon className="h-5 w-5 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{user?.full_name}</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user?.email}</p>
-                </div>
-              </div>
-            </div>
-            
-            {/* Logout Button */}
-            <button
-              onClick={handleLogout}
-              className="flex items-center justify-center w-full px-4 py-2.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all duration-200 border border-red-200 dark:border-red-900/30"
-            >
-              <ArrowRightOnRectangleIcon className="mr-2 h-5 w-5" />
-              Déconnexion
-            </button>
+              </Menu.Button>
+              <Transition
+                as={Fragment}
+                enter="transition ease-out duration-100"
+                enterFrom="transform opacity-0 scale-95"
+                enterTo="transform opacity-100 scale-100"
+                leave="transition ease-in duration-75"
+                leaveFrom="transform opacity-100 scale-100"
+                leaveTo="transform opacity-0 scale-95"
+              >
+                <Menu.Items className="absolute bottom-full left-0 right-0 mb-2 origin-bottom bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                  {/* Profile */}
+                  <div className="p-1">
+                    <Menu.Item>
+                      {({ active }) => (
+                        <Link
+                          to="/dashboard/profile"
+                          className={`${
+                            active ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                          } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                        >
+                          <UserCircleIcon className="mr-3 h-5 w-5" />
+                          Profil
+                        </Link>
+                      )}
+                    </Menu.Item>
+                  </div>
+                  {/* Theme Options */}
+                  <div className="p-1">
+                    {themeOptions.map((option) => (
+                      <Menu.Item key={option.value}>
+                        {({ active }) => (
+                          <button
+                            onClick={() => setTheme(option.value)}
+                            className={`${
+                              active ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
+                            } ${
+                              theme === option.value ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                          >
+                            <option.icon className="mr-3 h-5 w-5" />
+                            {option.name}
+                            {theme === option.value && (
+                              <span className="ml-auto text-indigo-600 dark:text-indigo-400">✓</span>
+                            )}
+                          </button>
+                        )}
+                      </Menu.Item>
+                    ))}
+                  </div>
+                  {/* Logout */}
+                  <div className="p-1">
+                    <Menu.Item>
+                      {({ active }) => (
+                        <button
+                          onClick={handleLogout}
+                          className={`${
+                            active ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-400'
+                          } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                        >
+                          <ArrowRightOnRectangleIcon className="mr-3 h-5 w-5" />
+                          Déconnexion
+                        </button>
+                      )}
+                    </Menu.Item>
+                  </div>
+                </Menu.Items>
+              </Transition>
+            </Menu>
           </div>
         </div>
       </div>
