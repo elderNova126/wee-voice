@@ -65,7 +65,7 @@ export default function AgentsPage() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Voice Agents</h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Manage, test, and improve your AI voice agents
+            Manage, start, and improve your AI voice agents
           </p>
         </div>
         <Link
@@ -153,7 +153,7 @@ export default function AgentsPage() {
                   className="flex-1 inline-flex justify-center items-center gap-2 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-950 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 font-medium text-sm py-2 transition"
                 >
                   <PlayIcon className="h-4 w-4" />
-                  Test
+                  Start
                 </button>
                 <Link
                   to={`/dashboard/agents/${agent.id}/edit`}
@@ -358,7 +358,7 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
               className="inline-flex items-center px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-medium text-lg transition"
             >
               <PlayIcon className="h-5 w-5 mr-2" />
-              Start Test
+              Start
             </button>
           ) : (
             <>
