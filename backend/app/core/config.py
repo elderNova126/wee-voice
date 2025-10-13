@@ -51,8 +51,9 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     
-    # OpenAI (optional fallback)
+    # OpenAI (for OCR and optional fallback)
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
+    OPENAI_OCR_MODEL: str = "gpt-4o"  # gpt-4o has vision capabilities
     
     # Gemini Configuration
     GEMINI_MODEL: str = "gemini-2.5-flash-preview-native-audio-dialog"

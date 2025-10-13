@@ -40,8 +40,13 @@ class VoiceAgent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # RAG Configuration
+    rag_enabled = Column(Boolean, default=False)
+    rag_config = Column(JSON, nullable=True)  # RAG-specific settings (chunk size, retrieval count, etc.)
+    
     # Relationships
     user = relationship("User", back_populates="agents")
     calls = relationship("Call", back_populates="agent", cascade="all, delete-orphan")
     usage_records = relationship("UsageRecord", back_populates="agent", cascade="all, delete-orphan")
+    documents = relationship("Document", back_populates="agent", cascade="all, delete-orphan")
 

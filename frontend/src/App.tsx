@@ -8,6 +8,7 @@ import RegisterPage from './pages/RegisterPage'
 import DashboardPage from './pages/DashboardPage'
 import AgentsPage from './pages/AgentsPage'
 import AgentFormPage from './pages/AgentFormPage'
+import AgentDocumentsPage from './pages/AgentDocumentsPage'
 import CallsPage from './pages/CallsPage'
 import APIKeysPage from './pages/ApiKeysPage'
 import DemoPage from './pages/DemoPage'
@@ -56,6 +57,11 @@ function App() {
         <Route path="/dashboard/agents/:id/edit" element={
           <ProtectedRoute>
             <AgentFormPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/agents/:agentId/documents" element={
+          <ProtectedRoute>
+            <AgentDocumentsPage />
           </ProtectedRoute>
         } />
         <Route path="/dashboard/calls" element={

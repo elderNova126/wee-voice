@@ -49,4 +49,5 @@ class User(Base):
     domain_allowlists = relationship("DomainAllowlist", back_populates="user", cascade="all, delete-orphan")
     ip_allowlists = relationship("IPAllowlist", back_populates="user", cascade="all, delete-orphan")
     security_logs = relationship("SecurityLog", back_populates="user", cascade="all, delete-orphan")
+    documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
 

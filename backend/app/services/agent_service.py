@@ -33,6 +33,7 @@ except Exception as e:
 
 from app.core.config import settings
 from app.models import Call, CallMessage, CallStatus, VoiceAgent
+from app.services.rag_service import get_rag_service
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,10 @@ class FrenchVoiceAgentService:
         self.session_context = None
         self.audio_in_queue = asyncio.Queue()
         self.audio_out_queue = asyncio.Queue(maxsize=5)
+        
+        # RAG service (if enabled)
+        self.rag_service = get_rag_service() if agent.rag_enabled else None
+        self.conversation_buffer = []  # Store recent conversation for context
         
         # LangChain components (optional, only for summarization)
         if LANGCHAIN_AVAILABLE:
@@ -82,16 +87,39 @@ class FrenchVoiceAgentService:
             language_instruction = """Réponds TOUJOURS en français de manière naturelle et fluide.
 Utilise un ton amical et professionnel. Sois concis mais informatif."""
             greeting = "Tu es un assistant vocal intelligent qui parle français."
+            rag_instruction = """
+
+IMPORTANT - Utilisation des documents:
+Tu as accès à des documents qui seront fournis dans le contexte quand l'utilisateur pose une question.
+Quand tu reçois un contexte documentaire:
+- Utilise ces informations pour répondre de manière précise
+- Cite les sources quand c'est pertinent (numéro de document ou page)
+- Si l'information n'est pas dans les documents, dis-le clairement
+- Ne fabrique pas d'informations qui ne sont pas dans les documents fournis
+"""
         else:  # English
             language_instruction = """Always respond in English in a natural and fluent manner.
 Use a friendly and professional tone. Be concise but informative."""
             greeting = "You are an intelligent voice assistant that speaks English."
+            rag_instruction = """
+
+IMPORTANT - Using documents:
+You have access to documents that will be provided in the context when the user asks a question.
+When you receive document context:
+- Use this information to answer accurately
+- Cite sources when relevant (document number or page)
+- If information is not in the documents, say so clearly
+- Do not fabricate information that is not in the provided documents
+"""
+        
+        # Add RAG instructions if enabled
+        rag_note = rag_instruction if self.agent.rag_enabled else ""
         
         system_instruction = f"""{greeting}
 
 {self.agent.system_prompt}
 
-{language_instruction}
+{language_instruction}{rag_note}
 """
         
         # Simplified config matching test.py (no speech_config or voice_config)
@@ -114,6 +142,41 @@ Use a friendly and professional tone. Be concise but informative."""
     def _load_tools(self):
         """Load and configure tools for the agent"""
         tools = []
+        
+        # RAG Document Search Tool (if RAG is enabled)
+        if self.agent.rag_enabled and self.rag_service:
+            async def search_documents(query: str) -> dict:
+                """Recherche dans les documents pour trouver des informations pertinentes"""
+                try:
+                    chunks = await self.rag_service.retrieve_relevant_chunks(
+                        query=query,
+                        agent_id=self.agent.id,
+                        top_k=3,
+                        score_threshold=0.3
+                    )
+                    
+                    if not chunks:
+                        return {"found": False, "message": "Aucun document pertinent trouvé"}
+                    
+                    # Format results
+                    results = []
+                    for chunk in chunks:
+                        results.append({
+                            "content": chunk['content'][:500],  # Limit content length
+                            "source": f"Document {chunk['document_id']}, Page {chunk['page_number']}",
+                            "relevance": round(chunk['similarity'], 2)
+                        })
+                    
+                    return {
+                        "found": True,
+                        "results": results,
+                        "count": len(results)
+                    }
+                except Exception as e:
+                    logger.error(f"Error searching documents: {e}")
+                    return {"found": False, "error": str(e)}
+            
+            tools.append(search_documents)
         
         # Example: Customer lookup tool
         if "customer_lookup" in self.agent.tools_enabled:
@@ -193,6 +256,8 @@ Use a friendly and professional tone. Be concise but informative."""
                         if text := response.text:
                             logger.info(f"Gemini response: {text}")
                             await self._save_message("agent", text)
+                            # Add to conversation buffer for RAG
+                            self.conversation_buffer.append({"role": "agent", "text": text})
                         
                         # Handle tool calls
                         if function_call := response.tool_call:
