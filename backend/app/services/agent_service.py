@@ -148,12 +148,19 @@ When you receive document context:
             async def search_documents(query: str) -> dict:
                 """Recherche dans les documents pour trouver des informations pertinentes"""
                 try:
-                    chunks = await self.rag_service.retrieve_relevant_chunks(
-                        query=query,
-                        agent_id=self.agent.id,
-                        top_k=3,
-                        score_threshold=0.3
-                    )
+                    # Import db session
+                    from app.models.database import SessionLocal
+                    db = SessionLocal()
+                    try:
+                        chunks = await self.rag_service.search_similar_chunks(
+                            db=db,
+                            agent_id=self.agent.id,
+                            query=query,
+                            top_k=3,
+                            min_similarity=0.3
+                        )
+                    finally:
+                        db.close()
                     
                     if not chunks:
                         return {"found": False, "message": "Aucun document pertinent trouvé"}

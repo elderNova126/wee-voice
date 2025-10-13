@@ -1,13 +1,10 @@
--- Migration: Add RAG (Documents and Document Chunks) tables
--- This script adds support for PDF document upload and RAG functionality
+-- Add RAG support tables
+-- Run this SQL in Supabase SQL Editor to add RAG functionality
 
--- Add RAG configuration to voice_agents table
+-- Add RAG columns to voice_agents table
 ALTER TABLE voice_agents 
 ADD COLUMN IF NOT EXISTS rag_enabled BOOLEAN DEFAULT FALSE,
 ADD COLUMN IF NOT EXISTS rag_config JSONB;
-
-COMMENT ON COLUMN voice_agents.rag_enabled IS 'Whether RAG (Retrieval-Augmented Generation) is enabled for this agent';
-COMMENT ON COLUMN voice_agents.rag_config IS 'RAG-specific settings (chunk size, retrieval count, etc.)';
 
 -- Create documents table
 CREATE TABLE IF NOT EXISTS documents (
@@ -15,118 +12,89 @@ CREATE TABLE IF NOT EXISTS documents (
     agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
-    -- Document metadata
-    filename VARCHAR(255) NOT NULL,
-    original_filename VARCHAR(255) NOT NULL,
-    file_path VARCHAR(500),
+    -- File information
+    filename VARCHAR NOT NULL,
+    original_filename VARCHAR NOT NULL,
+    file_path VARCHAR,
     file_size INTEGER,
-    mime_type VARCHAR(100) DEFAULT 'application/pdf',
+    mime_type VARCHAR DEFAULT 'application/pdf',
     
     -- Source information
-    source_type VARCHAR(50) DEFAULT 'pdf',  -- pdf, website, text
-    source_url TEXT,  -- Original URL if from web
+    source_type VARCHAR DEFAULT 'pdf',  -- pdf, website, text
+    source_url VARCHAR,  -- For websites
     
     -- Processing status
-    status VARCHAR(50) DEFAULT 'pending',  -- pending, processing, completed, failed
+    status VARCHAR DEFAULT 'pending',  -- pending, processing, completed, failed
     error_message TEXT,
     
-    -- Document content
+    -- Content metadata
     total_pages INTEGER,
     total_chunks INTEGER DEFAULT 0,
-    
-    -- Metadata (renamed from 'metadata' to avoid SQLAlchemy reserved name conflict)
-    doc_metadata JSONB,
+    doc_metadata JSONB,  -- Renamed from metadata to avoid SQLAlchemy conflict
     
     -- Timestamps
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMP WITH TIME ZONE
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    processed_at TIMESTAMP,
+    
+    CONSTRAINT fk_documents_agent FOREIGN KEY (agent_id) REFERENCES voice_agents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_documents_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-
--- Create indexes for documents
-CREATE INDEX IF NOT EXISTS idx_documents_agent_id ON documents(agent_id);
-CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
-CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
-CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at DESC);
-
-COMMENT ON TABLE documents IS 'Stores uploaded PDF documents for RAG';
-COMMENT ON COLUMN documents.status IS 'Processing status: pending, processing, completed, failed';
 
 -- Create document_chunks table
 CREATE TABLE IF NOT EXISTS document_chunks (
     id SERIAL PRIMARY KEY,
     document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     
-    -- Chunk content
+    -- Chunk data
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
     page_number INTEGER,
     
-    -- Embedding (stored as JSON array)
-    embedding JSONB,
-    embedding_model VARCHAR(100) DEFAULT 'all-MiniLM-L6-v2',
+    -- Embedding data
+    embedding JSONB,  -- Vector embedding as JSON array
+    embedding_model VARCHAR DEFAULT 'all-MiniLM-L6-v2',
     
-    -- Metadata (renamed from 'metadata' to avoid SQLAlchemy reserved name conflict)
-    chunk_metadata JSONB,
+    -- Metadata
+    chunk_metadata JSONB,  -- Renamed from metadata to avoid SQLAlchemy conflict
     token_count INTEGER,
     
-    -- Timestamps
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT NOW(),
+    
+    CONSTRAINT fk_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 
--- Create indexes for document_chunks
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_documents_agent_id ON documents(agent_id);
+CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id ON document_chunks(document_id);
-CREATE INDEX IF NOT EXISTS idx_document_chunks_chunk_index ON document_chunks(document_id, chunk_index);
-
--- Full-text search index on chunk content
-CREATE INDEX IF NOT EXISTS idx_document_chunks_content_fts ON document_chunks USING GIN (to_tsvector('french', content));
-
-COMMENT ON TABLE document_chunks IS 'Stores text chunks from documents with embeddings for RAG';
-COMMENT ON COLUMN document_chunks.embedding IS 'Vector embedding for semantic search (stored as JSON array)';
 
 -- Create trigger to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_documents_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
+    NEW.updated_at = NOW();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER documents_updated_at_trigger
+CREATE TRIGGER trigger_update_documents_updated_at
     BEFORE UPDATE ON documents
     FOR EACH ROW
     EXECUTE FUNCTION update_documents_updated_at();
 
--- Grant permissions (adjust based on your database user)
--- GRANT SELECT, INSERT, UPDATE, DELETE ON documents TO your_app_user;
--- GRANT SELECT, INSERT, UPDATE, DELETE ON document_chunks TO your_app_user;
--- GRANT USAGE, SELECT ON SEQUENCE documents_id_seq TO your_app_user;
--- GRANT USAGE, SELECT ON SEQUENCE document_chunks_id_seq TO your_app_user;
+-- Add comments for documentation
+COMMENT ON TABLE documents IS 'Stores RAG knowledge sources (PDFs, websites, etc.)';
+COMMENT ON TABLE document_chunks IS 'Text chunks from documents with embeddings for semantic search';
+COMMENT ON COLUMN documents.doc_metadata IS 'Document metadata (renamed from metadata to avoid SQLAlchemy conflict)';
+COMMENT ON COLUMN document_chunks.chunk_metadata IS 'Chunk metadata (renamed from metadata to avoid SQLAlchemy conflict)';
+COMMENT ON COLUMN document_chunks.embedding IS 'Vector embedding as JSON array for semantic search';
 
--- Create a view for document statistics
-CREATE OR REPLACE VIEW document_statistics AS
-SELECT 
-    d.agent_id,
-    COUNT(DISTINCT d.id) as total_documents,
-    SUM(d.total_chunks) as total_chunks,
-    SUM(d.file_size) as total_storage_bytes,
-    COUNT(CASE WHEN d.status = 'completed' THEN 1 END) as completed_documents,
-    COUNT(CASE WHEN d.status = 'failed' THEN 1 END) as failed_documents,
-    COUNT(CASE WHEN d.status = 'processing' THEN 1 END) as processing_documents
-FROM documents d
-GROUP BY d.agent_id;
-
-COMMENT ON VIEW document_statistics IS 'Statistics about documents per agent';
-
--- Sample query to check RAG setup
--- SELECT 
---     a.id as agent_id,
---     a.name as agent_name,
---     a.rag_enabled,
---     COALESCE(ds.total_documents, 0) as total_documents,
---     COALESCE(ds.total_chunks, 0) as total_chunks
--- FROM voice_agents a
--- LEFT JOIN document_statistics ds ON a.id = ds.agent_id
--- WHERE a.rag_enabled = TRUE;
-
+-- Success message
+DO $$
+BEGIN
+    RAISE NOTICE 'RAG tables created successfully!';
+    RAISE NOTICE 'Tables: documents, document_chunks';
+    RAISE NOTICE 'Updated: voice_agents (added rag_enabled, rag_config)';
+END $$;

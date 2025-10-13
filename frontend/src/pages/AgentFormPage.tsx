@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
-import { ArrowLeftIcon } from '@heroicons/react/24/outline'
+import { 
+  ArrowLeftIcon, 
+  CloudArrowUpIcon, 
+  DocumentTextIcon,
+  TrashIcon,
+  CheckCircleIcon 
+} from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
-import { agentsAPI } from '@/lib/api'
+import { agentsAPI, api } from '@/lib/api'
 import toast from 'react-hot-toast'
 
 interface AgentFormData {
@@ -12,6 +18,16 @@ interface AgentFormData {
   system_prompt: string
   is_public: boolean
   is_active: boolean
+  rag_enabled?: boolean
+}
+
+interface KnowledgeDocument {
+  id: number
+  original_filename: string
+  source_type: 'pdf' | 'website'
+  source_url?: string
+  status: 'completed' | 'processing' | 'failed'
+  total_chunks: number
 }
 
 export default function AgentFormPage() {
@@ -25,11 +41,17 @@ export default function AgentFormPage() {
     language: 'fr-FR',
     system_prompt: '',
     is_public: false,
-    is_active: true
+    is_active: true,
+    rag_enabled: false
   })
 
   const [loading, setLoading] = useState(false)
   const [loadingAgent, setLoadingAgent] = useState(isEdit)
+  
+  // RAG/Knowledge Base state
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([])
+  const [websiteUrl, setWebsiteUrl] = useState('')
+  const [uploading, setUploading] = useState(false)
 
   const loadAgent = useCallback(async (agentId: number) => {
     try {
@@ -40,8 +62,19 @@ export default function AgentFormPage() {
         language: agent.language || 'fr-FR',
         system_prompt: agent.system_prompt || '',
         is_public: agent.is_public ?? false,
-        is_active: agent.is_active ?? true
+        is_active: agent.is_active ?? true,
+        rag_enabled: agent.rag_enabled ?? false
       })
+      
+      // Load documents if agent exists
+      if (agent.rag_enabled) {
+        try {
+          const { data: docs } = await api.get(`/agents/${agentId}/documents`)
+          setDocuments(docs)
+        } catch (err) {
+          console.log('No documents found or RAG not set up yet')
+        }
+      }
     } catch (err) {
       toast.error('Failed to load agent.')
       navigate('/dashboard/agents')
@@ -82,6 +115,104 @@ export default function AgentFormPage() {
       toast.error(err.response?.data?.detail || 'Failed to save agent.')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!id) {
+      toast.error('Please save the agent first before uploading documents')
+      return
+    }
+
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!file.name.endsWith('.pdf')) {
+      toast.error('Only PDF files are supported')
+      return
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('File size must be less than 10MB')
+      return
+    }
+
+    try {
+      setUploading(true)
+      const formData = new FormData()
+      formData.append('file', file)
+
+      await api.post(`/agents/${id}/documents`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+
+      toast.success('Document uploaded successfully')
+      // Reload documents
+      const { data: docs } = await api.get(`/agents/${id}/documents`)
+      setDocuments(docs)
+      
+      // Enable RAG if not already enabled
+      if (!formData.rag_enabled) {
+        setFormData(prev => ({ ...prev, rag_enabled: true }))
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to upload document')
+    } finally {
+      setUploading(false)
+      // Reset input
+      event.target.value = ''
+    }
+  }
+
+  const handleWebsiteScrape = async () => {
+    if (!id) {
+      toast.error('Please save the agent first before adding websites')
+      return
+    }
+
+    if (!websiteUrl) {
+      toast.error('Please enter a website URL')
+      return
+    }
+
+    try {
+      new URL(websiteUrl)
+    } catch {
+      toast.error('Please enter a valid URL')
+      return
+    }
+
+    try {
+      setUploading(true)
+      await api.post(`/agents/${id}/documents/website`, { url: websiteUrl })
+      
+      toast.success('Website scraped successfully')
+      setWebsiteUrl('')
+      
+      // Reload documents
+      const { data: docs } = await api.get(`/agents/${id}/documents`)
+      setDocuments(docs)
+      
+      // Enable RAG if not already enabled
+      if (!formData.rag_enabled) {
+        setFormData(prev => ({ ...prev, rag_enabled: true }))
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to scrape website')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleDeleteDocument = async (docId: number) => {
+    if (!confirm('Delete this document?')) return
+
+    try {
+      await api.delete(`/agents/${id}/documents/${docId}`)
+      toast.success('Document deleted')
+      setDocuments(docs => docs.filter(d => d.id !== docId))
+    } catch (err: any) {
+      toast.error('Failed to delete document')
     }
   }
 
@@ -205,6 +336,19 @@ export default function AgentFormPage() {
                   Public (no authentication)
                 </span>
               </label>
+
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="rag_enabled"
+                  checked={formData.rag_enabled}
+                  onChange={handleChange}
+                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  Enable Knowledge Base (RAG)
+                </span>
+              </label>
             </div>
           </div>
 
@@ -232,6 +376,122 @@ export default function AgentFormPage() {
             </p>
           </div>
         </div>
+
+        {/* Knowledge Base Section */}
+        {isEdit && formData.rag_enabled && (
+          <div className="mt-8 border-t border-gray-200 dark:border-gray-700/60 pt-8">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              📚 Knowledge Base
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+              Upload PDFs or add websites to give your agent knowledge for answering questions.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {/* PDF Upload */}
+              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center hover:border-primary-400 dark:hover:border-primary-500 transition">
+                <CloudArrowUpIcon className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  Upload PDF Document
+                </p>
+                <label className="cursor-pointer">
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                    disabled={uploading}
+                  />
+                  <span className="inline-block px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50">
+                    {uploading ? 'Uploading...' : 'Choose PDF'}
+                  </span>
+                </label>
+                <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">Max 10MB</p>
+              </div>
+
+              {/* Website Scraping */}
+              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 hover:border-primary-400 dark:hover:border-primary-500 transition">
+                <DocumentTextIcon className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                  Scrape Website
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={websiteUrl}
+                    onChange={(e) => setWebsiteUrl(e.target.value)}
+                    placeholder="https://example.com"
+                    className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900/60 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-400"
+                    disabled={uploading}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleWebsiteScrape}
+                    disabled={uploading || !websiteUrl}
+                    className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Documents List */}
+            {documents.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                  Uploaded Knowledge ({documents.length})
+                </h4>
+                {documents.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700"
+                  >
+                    <div className="flex items-center gap-3 flex-1">
+                      {doc.source_type === 'website' ? '🌐' : '📄'}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                          {doc.original_filename}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {doc.status === 'completed' && `${doc.total_chunks} chunks`}
+                          {doc.status === 'processing' && 'Processing...'}
+                          {doc.status === 'failed' && 'Failed'}
+                        </p>
+                      </div>
+                      {doc.status === 'completed' && (
+                        <CheckCircleIcon className="w-5 h-5 text-green-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDocument(doc.id)}
+                      className="ml-3 p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {documents.length === 0 && (
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
+                No documents added yet. Upload a PDF or add a website above.
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isEdit && formData.rag_enabled && (
+          <div className="mt-8 border-t border-gray-200 dark:border-gray-700/60 pt-8">
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+              <p className="text-sm text-blue-800 dark:text-blue-300">
+                💡 <strong>Tip:</strong> Save the agent first, then you can upload PDFs and add websites to the knowledge base.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="mt-10 flex justify-end gap-3 border-t border-gray-200 dark:border-gray-700/60 pt-6">

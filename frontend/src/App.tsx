@@ -59,11 +59,6 @@ function App() {
             <AgentFormPage />
           </ProtectedRoute>
         } />
-        <Route path="/dashboard/agents/:agentId/documents" element={
-          <ProtectedRoute>
-            <AgentDocumentsPage />
-          </ProtectedRoute>
-        } />
         <Route path="/dashboard/calls" element={
           <ProtectedRoute>
             <CallsPage />

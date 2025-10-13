@@ -157,13 +157,6 @@ export default function AgentsPage() {
                   Start
                 </button>
                 <Link
-                  to={`/dashboard/agents/${agent.id}/documents`}
-                  className="p-2.5 rounded-lg bg-purple-100 hover:bg-purple-200 dark:bg-purple-900 dark:hover:bg-purple-800 text-purple-700 dark:text-purple-300 transition"
-                  title="Manage Documents (RAG)"
-                >
-                  <DocumentTextIcon className="h-4 w-4" />
-                </Link>
-                <Link
                   to={`/dashboard/agents/${agent.id}/edit`}
                   className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
                 >

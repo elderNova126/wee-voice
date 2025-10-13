@@ -1,22 +1,39 @@
-# RAG (Retrieval-Augmented Generation) Setup Guide
+# RAG (Knowledge Base) Setup Guide
 
-## Overview
+## 📚 Overview
 
-Your VoiceAgent platform now supports **RAG with PDF documents**! This allows your voice agents to answer questions based on uploaded PDF documents during real-time conversations.
+Your voice agents can now have a **knowledge base** powered by RAG (Retrieval-Augmented Generation). This allows agents to answer questions based on:
+- 📄 **PDF documents** (including scanned PDFs with OCR)
+- 🌐 **Website content** (automatically scraped)
 
-## 🎯 Features
+## ✅ What's Been Added
 
-- ✅ **PDF Upload & Processing**: Upload PDFs up to 10MB
-- ✅ **Scanned PDF Support**: Automatic OCR using OpenAI Vision API (GPT-4o)
-- ✅ **Website Scraping**: Extract content from any web page
-- ✅ **Automatic Chunking**: Documents are intelligently split into searchable chunks
-- ✅ **Semantic Search**: Uses sentence transformers for accurate document retrieval
-- ✅ **Vector Storage**: ChromaDB for persistent vector embeddings
-- ✅ **Real-time Integration**: Documents are searched during voice conversations
-- ✅ **Multi-language Support**: Works with French and English agents
-- ✅ **Document Management UI**: Upload, view, and delete documents per agent
+### Backend Components
+- ✅ **Document Models** (`backend/app/models/document.py`)
+  - `Document`: Stores knowledge sources (PDFs, websites)
+  - `DocumentChunk`: Text chunks with vector embeddings for semantic search
 
-## 📦 Installation
+- ✅ **Services**
+  - `DocumentService`: PDF upload, text extraction, OCR for scanned PDFs
+  - `RAGService`: Embedding generation, semantic search
+  - `WebScraperService`: Website content extraction
+
+- ✅ **API Endpoints** (`backend/app/api/documents.py`)
+  - `POST /api/v1/agents/{id}/documents` - Upload PDF
+  - `POST /api/v1/agents/{id}/documents/website` - Scrape website
+  - `GET /api/v1/agents/{id}/documents` - List documents
+  - `DELETE /api/v1/agents/{id}/documents/{doc_id}` - Delete document
+  - `PUT /api/v1/agents/{id}/rag/toggle` - Enable/disable RAG
+
+### Frontend Components
+- ✅ **Agent Form Page** (`frontend/src/pages/AgentFormPage.tsx`)
+  - Added "Enable Knowledge Base (RAG)" checkbox
+  - PDF upload area (drag & drop)
+  - Website URL input
+  - Document list with status indicators
+  - Available when editing an existing agent
+
+## 🚀 Installation Steps
 
 ### 1. Install Python Dependencies
 
@@ -25,436 +42,221 @@ cd backend
 pip install -r requirements.txt
 ```
 
-This will install:
-- `pymupdf` - Fast PDF processing and text extraction
-- `Pillow` - Image processing
-- `openai` - OCR via OpenAI Vision API for scanned PDFs
-- `beautifulsoup4`, `requests`, `html2text` - Web scraping
-- `chromadb`, `langchain-chroma` - Vector database
-- `sentence-transformers` - Embeddings generation
+**New dependencies:**
+- `pymupdf` - Fast PDF processing
+- `sentence-transformers` - Embedding generation
+- `beautifulsoup4`, `html2text` - Web scraping
+- `openai` - OCR for scanned PDFs (optional)
+- `numpy` - Vector operations
 
-**No additional system dependencies required!** PyMuPDF is self-contained.
+### 2. Set Up Environment Variables
 
-### 2. Run Database Migration
+Add to your `.env` file:
 
-Apply the database schema for documents:
-
-```bash
-# Using PostgreSQL/Supabase
-psql -U your_user -d your_database -f database/add_rag_tables.sql
-
-# Or connect to your Supabase project and run the SQL file
-```
-
-The migration adds:
-- `documents` table - Stores PDF metadata
-- `document_chunks` table - Stores text chunks with embeddings
-- `rag_enabled` and `rag_config` columns to `voice_agents` table
-
-### 3. Configure Environment Variables
-
-Add your OpenAI API key to `.env` file:
-
-```bash
-# .env
+```env
+# Required for scanned PDF OCR (optional)
 OPENAI_API_KEY=sk-your-openai-api-key-here
-GOOGLE_API_KEY=your-gemini-api-key
 ```
 
-The OpenAI key is used exclusively for OCR on scanned PDFs.
+**Note:** OCR is only needed if you want to process scanned PDFs. Standard text-based PDFs work without it.
 
-### 4. Create Upload Directory
+### 3. Create Database Tables
+
+#### For Supabase (Production):
+
+Run the SQL migration in Supabase SQL Editor:
 
 ```bash
-mkdir -p backend/uploads/documents
-mkdir -p backend/data/chroma
+# Open database/add_rag_tables.sql and run it in Supabase
 ```
 
-## 🚀 Usage
+This will:
+- Add `rag_enabled` and `rag_config` columns to `voice_agents`
+- Create `documents` table
+- Create `document_chunks` table
+- Add indexes for performance
 
-### Step 1: Enable RAG for an Agent
+#### For SQLite (Development):
 
-1. Navigate to **Agents** page
-2. Click the **Documents icon** (purple) on any agent card
-3. Toggle **RAG Enabled** to ON
+Tables will be created automatically on first run.
 
-### Step 2: Add Knowledge Sources
+### 4. Restart Backend Server
 
-**Option A: Upload PDF Documents**
-1. On the Documents page, click **Choose File**
-2. Select a PDF (max 10MB, supports scanned PDFs)
-3. Wait for processing (automatic chunking and embedding generation)
-4. Document status will show as **Completed** when ready
+```bash
+cd backend
+python -m app.main
+# or
+uvicorn app.main:app --reload
+```
 
-**Option B: Scrape Websites**
-1. Enter a URL in the website scraping field
-2. Click **Scrape**
-3. The page content will be extracted and processed
-4. Works with any public website (documentation, articles, etc.)
+## 🎯 How to Use
 
-### Step 3: Test in Voice Conversation
+### 1. Create or Edit an Agent
 
-1. Start a voice conversation with the agent
-2. Ask questions related to the uploaded documents
-3. The agent will automatically search and use relevant information
+1. Go to **Dashboard → Agents**
+2. Create a new agent or edit an existing one
+3. Check **"Enable Knowledge Base (RAG)"**
+4. Save the agent
 
-## 🔧 How It Works
+### 2. Add Knowledge Sources
 
-### Architecture
+Once RAG is enabled, you'll see the **Knowledge Base** section:
+
+#### Upload a PDF:
+- Click **"Choose PDF"**
+- Select a PDF file (max 10MB)
+- Supports both regular and scanned PDFs (with OCR)
+- Processing happens automatically
+
+#### Add a Website:
+- Enter website URL (e.g., `https://docs.example.com`)
+- Click **"Add"**
+- Content is scraped and processed automatically
+
+### 3. View Documents
+
+The document list shows:
+- 📄 PDF or 🌐 Website icon
+- Status: Processing → Completed
+- Number of chunks created
+- Delete option
+
+### 4. Use in Conversations
+
+When RAG is enabled, the agent will:
+1. Automatically search relevant documents for each user query
+2. Include context from top 5 matching chunks
+3. Provide answers based on your knowledge base
+
+## 🔧 Technical Details
+
+### PDF Processing
+- Uses **PyMuPDF** (fast and reliable)
+- Automatic scanned PDF detection
+- OpenAI Vision API for OCR (GPT-4o)
+- Text extraction and chunking
+
+### Embeddings
+- Model: `all-MiniLM-L6-v2` (384 dimensions)
+- Fast, efficient, good quality
+- Embeddings stored in database as JSON
+
+### Chunking
+- Chunk size: 500 words
+- Overlap: 50 words (for context continuity)
+- Metadata preserved (page numbers, source info)
+
+### Semantic Search
+- Cosine similarity
+- Retrieves top 5 most relevant chunks
+- Minimum similarity threshold: 0.3
+
+## 📊 Architecture
 
 ```
-User Voice Input
+User Query
     ↓
-Gemini 2.5 Flash (Audio Native)
+Generate Query Embedding
     ↓
-[RAG Document Search Tool - if RAG enabled]
+Search Document Chunks (Cosine Similarity)
     ↓
-Retrieve Top 3 Relevant Chunks
+Retrieve Top 5 Relevant Chunks
     ↓
-Inject Context into Response
+Format Context for LLM
     ↓
-Agent Response (Audio)
-```
-
-### RAG Pipeline
-
-1. **Document Upload**: PDF is saved and queued for processing
-2. **Text Extraction**: 
-   - Regular PDFs: `PyMuPDF` extracts text (fast and reliable)
-   - Scanned PDFs: Auto-detected and processed with OpenAI Vision OCR
-3. **Chunking**: Text is split into ~1000 character chunks with 200 char overlap
-4. **Embedding**: `all-MiniLM-L6-v2` model generates embeddings
-5. **Storage**: Embeddings stored in ChromaDB + PostgreSQL backup
-6. **Retrieval**: During conversation, semantic search finds relevant chunks
-7. **Response**: Agent uses retrieved context to answer accurately
-
-### OCR for Scanned PDFs
-
-The system **automatically detects** scanned PDFs by analyzing:
-- Text density (less than 200 characters per page)
-- Presence of images on pages
-- PyMuPDF renders each page as high-quality image
-- OpenAI GPT-4o Vision API extracts text from each page
-- Extracted text is processed like regular PDFs
-
-**Cost**: ~$0.01-0.02 per scanned page (OpenAI pricing)
-
-**Benefits of PyMuPDF**:
-- 5-10x faster than other PDF libraries
-- Better text extraction quality
-- Built-in image rendering (no external dependencies)
-- Handles complex PDF formats reliably
-
-### Website Scraping
-
-The system can scrape and process web pages:
-- Extracts text content from HTML
-- Removes navigation, scripts, and styling
-- Converts to clean markdown format
-- Preserves structure and formatting
-- Automatically chunks like PDF documents
-
-**Supported**: Any public website (documentation, articles, blogs, etc.)  
-**Best for**: Product docs, FAQs, knowledge bases, tutorials
-
-### Embedding Model
-
-- **Model**: `sentence-transformers/all-MiniLM-L6-v2`
-- **Dimensions**: 384
-- **Language**: Multi-lingual (supports French & English)
-- **Speed**: ~3000 sentences/second on CPU
-- **Size**: ~80MB
-
-## 📝 API Endpoints
-
-### Upload PDF Document
-```http
-POST /api/v1/agents/{agent_id}/documents
-Content-Type: multipart/form-data
-
-file: <PDF file>
-```
-
-### Scrape Website
-```http
-POST /api/v1/agents/{agent_id}/documents/website
-Content-Type: application/json
-
-{
-  "url": "https://example.com/documentation"
-}
-```
-
-### List Documents
-```http
-GET /api/v1/agents/{agent_id}/documents
-```
-
-### Delete Document
-```http
-DELETE /api/v1/agents/{agent_id}/documents/{document_id}
-```
-
-### Toggle RAG
-```http
-PUT /api/v1/agents/{agent_id}/rag/toggle
-Content-Type: multipart/form-data
-
-enabled: true/false
+Agent Response with Context
 ```
 
 ## ⚙️ Configuration
 
-### Chunk Settings
+### Adjust Chunk Size
 
-Modify in `backend/app/services/document_service.py`:
-
-```python
-self.chunk_size = 1000      # characters per chunk
-self.chunk_overlap = 200    # overlap between chunks
-```
-
-### Retrieval Settings
-
-Modify in `backend/app/services/rag_service.py`:
+In `document_service.py` and `web_scraper_service.py`:
 
 ```python
-top_k=3,                    # number of chunks to retrieve
-score_threshold=0.3         # minimum similarity score (0-1)
+def _chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 50):
 ```
 
-### Vector Database
+### Change Number of Retrieved Chunks
 
-ChromaDB data is stored in:
-```
-backend/data/chroma/
-```
-
-To reset vector database:
-```bash
-rm -rf backend/data/chroma
-```
-
-## 🧪 Testing
-
-### 1. Test Document Upload
+In `rag_service.py`:
 
 ```python
-# backend/test_rag.py
-import asyncio
-from app.services.document_service import DocumentProcessingService
-from app.services.rag_service import get_rag_service
-
-async def test_upload():
-    service = DocumentProcessingService()
-    
-    with open('test.pdf', 'rb') as f:
-        content = f.read()
-    
-    doc = await service.upload_and_process_document(
-        file_content=content,
-        filename='test.pdf',
-        agent_id=1,
-        user_id=1
-    )
-    
-    # Generate embeddings
-    rag_service = get_rag_service()
-    await rag_service.embed_document_chunks(doc.id)
-    
-    print(f"Document uploaded: {doc.id}")
-
-asyncio.run(test_upload())
+async def search_similar_chunks(
+    self,
+    db: Session,
+    agent_id: int,
+    query: str,
+    top_k: int = 5,  # Change this
+    min_similarity: float = 0.3
+):
 ```
 
-### 2. Test Retrieval
+### Change Embedding Model
+
+In `rag_service.py`:
 
 ```python
-async def test_retrieval():
-    rag_service = get_rag_service()
-    
-    results = await rag_service.retrieve_relevant_chunks(
-        query="What is the main topic?",
-        agent_id=1,
-        top_k=3
-    )
-    
-    for chunk in results:
-        print(f"Similarity: {chunk['similarity']:.2f}")
-        print(f"Content: {chunk['content'][:200]}...")
-        print()
-
-asyncio.run(test_retrieval())
+def __init__(self):
+    self.embedding_model_name = "all-MiniLM-L6-v2"  # Change this
 ```
 
-## 🎨 Frontend Components
+Popular alternatives:
+- `all-mpnet-base-v2` (768 dims, higher quality, slower)
+- `paraphrase-multilingual-MiniLM-L12-v2` (384 dims, multilingual)
 
-### AgentDocumentsPage
+## 🐛 Troubleshooting
 
-Location: `frontend/src/pages/AgentDocumentsPage.tsx`
+### "No text could be extracted from PDF"
+- **Cause**: Scanned PDF without OpenAI API key
+- **Solution**: Add `OPENAI_API_KEY` to `.env`
 
-Features:
-- Document upload with drag & drop
-- Document list with status badges
-- RAG toggle switch
-- Delete documents
-- Real-time processing status
+### "OpenAI OCR failed"
+- **Cause**: Invalid API key or rate limit
+- **Solution**: Check API key, check OpenAI quota
 
-### Integration
+### "Import error: cannot import fitz"
+- **Cause**: PyMuPDF not installed
+- **Solution**: `pip install pymupdf==1.23.26`
 
-The Documents button is added to each agent card with a purple icon.
+### "Module 'sentence_transformers' not found"
+- **Cause**: Dependencies not installed
+- **Solution**: `pip install sentence-transformers==2.7.0`
 
-## 🔍 Troubleshooting
+### Documents not showing up
+- **Cause**: Database tables not created
+- **Solution**: Run `database/add_rag_tables.sql` in Supabase
 
-### Issue: Embeddings not generated
+## 🎨 Customization
 
-**Solution**: Check that ChromaDB directory has write permissions:
-```bash
-chmod -R 755 backend/data/chroma
-```
+### Add More Source Types
 
-### Issue: Scanned PDF processing fails
+You can extend to support:
+- Plain text files
+- Word documents (.docx)
+- CSV/Excel files
+- Google Docs
+- Notion pages
 
-**Solution**: Check that you have:
-1. OpenAI API key configured in `.env`
-2. PyMuPDF installed correctly
-3. Sufficient OpenAI credits
+Just add new methods to `document_service.py` or create new service classes.
 
-```bash
-# Test dependencies
-python -c "import fitz; print('PyMuPDF OK')"
-python -c "from openai import OpenAI; print('OpenAI OK')"
-```
+### Integrate Vector Database
 
-### Issue: Out of memory with large PDFs
+For production at scale, consider:
+- **Pinecone** (managed vector DB)
+- **Weaviate** (open-source)
+- **Qdrant** (Rust-based, fast)
+- **Chroma** (local, simple)
 
-**Solution**: Reduce chunk size or process chunks in batches:
-```python
-self.chunk_size = 500  # Reduce from 1000
-```
+Replace the in-database JSON embeddings with proper vector store.
 
-### Issue: Vector search is slow
+## 📚 Resources
 
-**Solution**: Use GPU acceleration (if available):
-```python
-# In rag_service.py
-self.embedding_model = SentenceTransformer(
-    self.embedding_model_name,
-    device='cuda'  # or 'mps' for Mac
-)
-```
+- [PyMuPDF Documentation](https://pymupdf.readthedocs.io/)
+- [Sentence Transformers](https://www.sbert.net/)
+- [OpenAI Vision API](https://platform.openai.com/docs/guides/vision)
+- [RAG Best Practices](https://www.pinecone.io/learn/retrieval-augmented-generation/)
 
-## 📊 Performance
+## 🎉 You're Ready!
 
-### Benchmarks (Average)
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| PDF Upload (1MB) | 1-2s | File I/O |
-| Text Extraction | 2-5s | 10-page PDF |
-| Chunking | <1s | Text processing |
-| Embedding Generation | 3-10s | 50 chunks on CPU |
-| Vector Search | <100ms | Per query |
-| Total Processing | 5-20s | End-to-end |
-
-### Optimization Tips
-
-1. **Use GPU**: 5-10x faster embedding generation
-2. **Batch Processing**: Process multiple PDFs in parallel
-3. **Cache Embeddings**: Store in database for backup
-4. **Index Tuning**: Adjust ChromaDB HNSW parameters
-
-## 🔐 Security
-
-### File Validation
-
-- Only PDF files accepted
-- Max file size: 10MB
-- MIME type validation
-- User ownership verification
-
-### Access Control
-
-- Documents are scoped to agents
-- Only agent owner can upload/delete
-- RAG queries only access agent's documents
-
-## 🚀 Production Deployment
-
-### 1. Environment Variables
-
-```bash
-# .env
-GOOGLE_API_KEY=your_gemini_api_key
-DATABASE_URL=postgresql://user:pass@host:5432/db
-```
-
-### 2. Volume Mounts (Docker)
-
-```yaml
-volumes:
-  - ./uploads:/app/uploads
-  - ./data/chroma:/app/data/chroma
-```
-
-### 3. Resource Requirements
-
-- **CPU**: 2+ cores recommended
-- **RAM**: 4GB minimum (8GB recommended)
-- **Storage**: 1GB + (documents + embeddings)
-- **GPU**: Optional but recommended for production
-
-## 📚 Examples
-
-### Example Use Cases
-
-1. **Customer Support**: 
-   - PDFs: Product manuals, user guides
-   - Websites: Online FAQs, support pages, troubleshooting guides
-   
-2. **HR Assistant**: 
-   - PDFs: Company policies, employee handbook
-   - Websites: Benefits pages, internal wiki
-
-3. **Sales Agent**: 
-   - PDFs: Product catalogs, pricing sheets
-   - Websites: Product pages, case studies, comparisons
-
-4. **Legal Assistant**: 
-   - PDFs: Contracts, legal documents
-   - Websites: Legal blogs, regulations, case law summaries
-
-5. **Education**: 
-   - PDFs: Course materials, textbooks
-   - Websites: Tutorials, documentation, research articles
-
-### Example Prompts
-
-After uploading documents:
-
-- "What are the main features of this product?"
-- "Can you summarize the return policy?"
-- "What does section 3.2 say about..."
-- "Find information about pricing..."
-
-## 🤝 Contributing
-
-To extend RAG functionality:
-
-1. **Add OCR Support**: For image-based PDFs
-2. **Add More File Types**: DOCX, TXT, Markdown
-3. **Improve Chunking**: Semantic chunking algorithms
-4. **Add Reranking**: Use cross-encoder for better results
-5. **Multi-modal**: Support images within documents
-
-## 📄 License
-
-This RAG implementation uses:
-- ChromaDB: Apache 2.0
-- Sentence Transformers: Apache 2.0
-- PyPDF2: BSD License
-
----
-
-**Need help?** Open an issue or contact support!
-
+Your voice agents now have a powerful knowledge base system. Upload documents, add websites, and let your agents provide intelligent, context-aware responses!

@@ -1,244 +1,159 @@
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import numpy as np
+from sqlalchemy.orm import Session
 from sentence_transformers import SentenceTransformer
-import chromadb
-from chromadb.config import Settings
-from pathlib import Path
 
-from app.models import Document, DocumentChunk
-from app.models.database import SessionLocal
+from app.models.document import DocumentChunk
 
 logger = logging.getLogger(__name__)
 
+# Singleton instance
+_rag_service_instance = None
+
+
+def get_rag_service():
+    """Get singleton RAG service instance"""
+    global _rag_service_instance
+    if _rag_service_instance is None:
+        _rag_service_instance = RAGService()
+    return _rag_service_instance
+
 
 class RAGService:
-    """Service for RAG: embeddings, vector storage, and retrieval"""
+    """Service for RAG (Retrieval-Augmented Generation) operations"""
     
-    def __init__(self, collection_name: str = "voice_agent_docs"):
-        # Initialize embedding model
+    def __init__(self):
         self.embedding_model_name = "all-MiniLM-L6-v2"
-        logger.info(f"Loading embedding model: {self.embedding_model_name}")
-        self.embedding_model = SentenceTransformer(self.embedding_model_name)
-        
-        # Initialize ChromaDB
-        chroma_path = Path("data/chroma")
-        chroma_path.mkdir(parents=True, exist_ok=True)
-        
-        self.client = chromadb.PersistentClient(
-            path=str(chroma_path),
-            settings=Settings(anonymized_telemetry=False)
-        )
-        
-        # Get or create collection
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"}
-        )
-        
-        logger.info(f"ChromaDB initialized with collection: {collection_name}")
+        self.embedding_model = None
+        self._load_model()
+    
+    def _load_model(self):
+        """Lazy load embedding model"""
+        try:
+            logger.info(f"Loading embedding model: {self.embedding_model_name}")
+            self.embedding_model = SentenceTransformer(self.embedding_model_name)
+            logger.info("Embedding model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model: {e}")
+            raise
     
     def generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding for a text"""
+        """Generate embedding vector for text"""
+        if not self.embedding_model:
+            self._load_model()
+        
         try:
-            embedding = self.embedding_model.encode(text, show_progress_bar=False)
+            embedding = self.embedding_model.encode(text, convert_to_numpy=True)
             return embedding.tolist()
         except Exception as e:
-            logger.error(f"Error generating embedding: {e}", exc_info=True)
+            logger.error(f"Error generating embedding: {e}")
             raise
     
-    async def embed_document_chunks(self, document_id: int):
-        """Generate and store embeddings for all chunks of a document"""
-        db = SessionLocal()
+    async def process_chunks_embeddings(self, db: Session, document_id: int):
+        """Generate embeddings for all chunks of a document"""
+        chunks = db.query(DocumentChunk).filter(
+            DocumentChunk.document_id == document_id
+        ).all()
         
-        try:
-            # Get all chunks for the document
-            chunks = db.query(DocumentChunk).filter(
-                DocumentChunk.document_id == document_id
-            ).all()
-            
-            if not chunks:
-                logger.warning(f"No chunks found for document {document_id}")
-                return
-            
-            logger.info(f"Embedding {len(chunks)} chunks for document {document_id}")
-            
-            # Prepare data for ChromaDB
-            texts = [chunk.content for chunk in chunks]
-            ids = [f"doc_{document_id}_chunk_{chunk.id}" for chunk in chunks]
-            metadatas = [
-                {
-                    "document_id": document_id,
-                    "chunk_id": chunk.id,
-                    "chunk_index": chunk.chunk_index,
-                    "page_number": chunk.page_number or 0
-                }
-                for chunk in chunks
-            ]
-            
-            # Generate embeddings
-            embeddings = self.embedding_model.encode(texts, show_progress_bar=False)
-            
-            # Store in ChromaDB
-            self.collection.add(
-                ids=ids,
-                embeddings=embeddings.tolist(),
-                documents=texts,
-                metadatas=metadatas
-            )
-            
-            # Also store embeddings in database for backup
-            for chunk, embedding in zip(chunks, embeddings):
-                chunk.embedding = embedding.tolist()
-                chunk.embedding_model = self.embedding_model_name
-            
-            db.commit()
-            
-            logger.info(f"Successfully embedded {len(chunks)} chunks for document {document_id}")
-            
-        except Exception as e:
-            logger.error(f"Error embedding document chunks: {e}", exc_info=True)
-            raise
-        finally:
-            db.close()
+        logger.info(f"Generating embeddings for {len(chunks)} chunks...")
+        
+        for chunk in chunks:
+            if not chunk.embedding:  # Skip if already has embedding
+                try:
+                    embedding = self.generate_embedding(chunk.content)
+                    chunk.embedding = embedding
+                except Exception as e:
+                    logger.error(f"Error generating embedding for chunk {chunk.id}: {e}")
+        
+        db.commit()
+        logger.info(f"Embeddings generated for {len(chunks)} chunks")
     
-    async def retrieve_relevant_chunks(
-        self, 
-        query: str, 
-        agent_id: int, 
+    def cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors"""
+        vec1 = np.array(vec1)
+        vec2 = np.array(vec2)
+        
+        dot_product = np.dot(vec1, vec2)
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        
+        return float(dot_product / (norm1 * norm2))
+    
+    async def search_similar_chunks(
+        self,
+        db: Session,
+        agent_id: int,
+        query: str,
         top_k: int = 5,
-        score_threshold: float = 0.3
+        min_similarity: float = 0.3
     ) -> List[Dict[str, Any]]:
-        """Retrieve most relevant chunks for a query"""
-        db = SessionLocal()
+        """
+        Search for similar document chunks using semantic search
         
+        Args:
+            db: Database session
+            agent_id: Agent ID to search documents for
+            query: Search query text
+            top_k: Number of top results to return
+            min_similarity: Minimum similarity threshold
+            
+        Returns:
+            List of matching chunks with metadata and similarity scores
+        """
         try:
-            # Get all document IDs for this agent
-            documents = db.query(Document).filter(
-                Document.agent_id == agent_id,
-                Document.status == "completed"
-            ).all()
-            
-            if not documents:
-                logger.info(f"No documents found for agent {agent_id}")
-                return []
-            
-            document_ids = [doc.id for doc in documents]
-            
             # Generate query embedding
             query_embedding = self.generate_embedding(query)
             
-            # Search in ChromaDB with filter for agent's documents
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k * 2,  # Get more results to filter
-                where={"document_id": {"$in": document_ids}}
-            )
-            
-            # Process results
-            relevant_chunks = []
-            
-            if results and results['ids'] and len(results['ids'][0]) > 0:
-                for i, (doc_id, distance, metadata, document) in enumerate(zip(
-                    results['ids'][0],
-                    results['distances'][0],
-                    results['metadatas'][0],
-                    results['documents'][0]
-                )):
-                    # Convert distance to similarity score (cosine similarity)
-                    similarity = 1 - distance
-                    
-                    if similarity >= score_threshold:
-                        chunk_data = {
-                            'content': document,
-                            'similarity': float(similarity),
-                            'document_id': metadata['document_id'],
-                            'chunk_id': metadata['chunk_id'],
-                            'chunk_index': metadata['chunk_index'],
-                            'page_number': metadata.get('page_number', 0)
-                        }
-                        relevant_chunks.append(chunk_data)
-                        
-                        if len(relevant_chunks) >= top_k:
-                            break
-            
-            logger.info(f"Retrieved {len(relevant_chunks)} relevant chunks for query")
-            return relevant_chunks
-            
-        except Exception as e:
-            logger.error(f"Error retrieving chunks: {e}", exc_info=True)
-            return []
-        finally:
-            db.close()
-    
-    async def delete_document_embeddings(self, document_id: int):
-        """Delete all embeddings for a document"""
-        try:
-            # Get all chunk IDs for this document
-            db = SessionLocal()
-            chunks = db.query(DocumentChunk).filter(
-                DocumentChunk.document_id == document_id
+            # Get all chunks for this agent's documents
+            from app.models.document import Document
+            chunks = db.query(DocumentChunk).join(Document).filter(
+                Document.agent_id == agent_id,
+                Document.status == "completed",
+                DocumentChunk.embedding.isnot(None)
             ).all()
             
             if not chunks:
-                return
+                logger.info(f"No chunks found for agent {agent_id}")
+                return []
             
-            # Delete from ChromaDB
-            ids = [f"doc_{document_id}_chunk_{chunk.id}" for chunk in chunks]
+            # Calculate similarities
+            results = []
+            for chunk in chunks:
+                if chunk.embedding:
+                    similarity = self.cosine_similarity(query_embedding, chunk.embedding)
+                    
+                    if similarity >= min_similarity:
+                        results.append({
+                            'chunk_id': chunk.id,
+                            'document_id': chunk.document_id,
+                            'content': chunk.content,
+                            'similarity': similarity,
+                            'page_number': chunk.page_number,
+                            'chunk_metadata': chunk.chunk_metadata
+                        })
             
-            try:
-                self.collection.delete(ids=ids)
-                logger.info(f"Deleted embeddings for document {document_id}")
-            except Exception as e:
-                logger.warning(f"Error deleting from ChromaDB: {e}")
+            # Sort by similarity and return top k
+            results.sort(key=lambda x: x['similarity'], reverse=True)
+            top_results = results[:top_k]
             
-            db.close()
+            logger.info(f"Found {len(top_results)} relevant chunks for query")
+            return top_results
             
         except Exception as e:
-            logger.error(f"Error deleting document embeddings: {e}", exc_info=True)
+            logger.error(f"Error searching chunks: {e}", exc_info=True)
+            return []
     
-    async def build_rag_context(
-        self, 
-        query: str, 
-        agent_id: int, 
-        max_chunks: int = 3
-    ) -> str:
-        """Build context string from retrieved chunks for RAG"""
-        try:
-            chunks = await self.retrieve_relevant_chunks(
-                query=query,
-                agent_id=agent_id,
-                top_k=max_chunks,
-                score_threshold=0.3
-            )
-            
-            if not chunks:
-                return ""
-            
-            # Format context
-            context_parts = []
-            for i, chunk in enumerate(chunks, 1):
-                context_parts.append(
-                    f"[Document {chunk['document_id']}, Page {chunk['page_number']}]:\n{chunk['content']}"
-                )
-            
-            context = "\n\n---\n\n".join(context_parts)
-            
-            logger.info(f"Built RAG context from {len(chunks)} chunks ({len(context)} characters)")
-            return context
-            
-        except Exception as e:
-            logger.error(f"Error building RAG context: {e}", exc_info=True)
+    def format_context_for_llm(self, chunks: List[Dict[str, Any]]) -> str:
+        """Format retrieved chunks into context for LLM"""
+        if not chunks:
             return ""
-
-
-# Global RAG service instance
-_rag_service = None
-
-def get_rag_service() -> RAGService:
-    """Get or create RAG service singleton"""
-    global _rag_service
-    if _rag_service is None:
-        _rag_service = RAGService()
-    return _rag_service
-
+        
+        context_parts = []
+        for i, chunk in enumerate(chunks, 1):
+            context_parts.append(f"[Source {i}] {chunk['content']}")
+        
+        return "\n\n".join(context_parts)
