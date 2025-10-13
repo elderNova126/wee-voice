@@ -56,8 +56,9 @@ class FrenchVoiceAgentService:
         self.audio_in_queue = asyncio.Queue()
         self.audio_out_queue = asyncio.Queue(maxsize=5)
         
-        # RAG service (if enabled)
-        self.rag_service = get_rag_service() if agent.rag_enabled else None
+        # RAG service (lazy load - only initialize when first needed)
+        self._rag_service = None
+        self._rag_service_initialized = False
         self.conversation_buffer = []  # Store recent conversation for context
         
         # LangChain components (optional, only for summarization)
@@ -79,6 +80,15 @@ class FrenchVoiceAgentService:
         
         # Configure French voice agent
         self.config = self._build_config()
+    
+    @property
+    def rag_service(self):
+        """Lazy load RAG service only when needed"""
+        if self.agent.rag_enabled and not self._rag_service_initialized:
+            logger.info("Lazy loading RAG service for agent...")
+            self._rag_service = get_rag_service()
+            self._rag_service_initialized = True
+        return self._rag_service
     
     def _build_config(self) -> Dict[str, Any]:
         """Build configuration for Gemini Live API (simplified, matching test.py)"""

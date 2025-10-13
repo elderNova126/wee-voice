@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from typing import List
-from pydantic import BaseModel
+from typing import List, Optional
+from pydantic import BaseModel, field_serializer
+from datetime import datetime
 import logging
 
 from app.models.database import get_db
@@ -28,15 +29,21 @@ class DocumentResponse(BaseModel):
     agent_id: int
     original_filename: str
     source_type: str
-    source_url: str | None = None
+    source_url: Optional[str] = None
     status: str
-    error_message: str | None = None
-    file_size: int | None = None
-    total_pages: int | None = None
+    error_message: Optional[str] = None
+    file_size: Optional[int] = None
+    total_pages: Optional[int] = None
     total_chunks: int
-    doc_metadata: dict | None = None
-    created_at: str
-    processed_at: str | None = None
+    doc_metadata: Optional[dict] = None
+    created_at: datetime
+    processed_at: Optional[datetime] = None
+
+    @field_serializer('created_at', 'processed_at')
+    def serialize_datetime(self, dt: Optional[datetime], _info):
+        if dt is None:
+            return None
+        return dt.isoformat()
 
     class Config:
         from_attributes = True
@@ -46,7 +53,7 @@ class WebsiteUploadRequest(BaseModel):
     url: str
 
 
-@router.post("/agents/{agent_id}/documents", response_model=DocumentResponse)
+@router.post("/{agent_id}/documents", response_model=DocumentResponse)
 async def upload_document(
     agent_id: int,
     file: UploadFile = File(...),
@@ -100,7 +107,7 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/agents/{agent_id}/documents/website", response_model=DocumentResponse)
+@router.post("/{agent_id}/documents/website", response_model=DocumentResponse)
 async def scrape_website(
     agent_id: int,
     request: WebsiteUploadRequest,
@@ -142,7 +149,7 @@ async def scrape_website(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/agents/{agent_id}/documents", response_model=List[DocumentResponse])
+@router.get("/{agent_id}/documents", response_model=List[DocumentResponse])
 async def list_documents(
     agent_id: int,
     db: Session = Depends(get_db),
@@ -166,7 +173,7 @@ async def list_documents(
     return documents
 
 
-@router.delete("/agents/{agent_id}/documents/{document_id}")
+@router.delete("/{agent_id}/documents/{document_id}")
 async def delete_document(
     agent_id: int,
     document_id: int,
@@ -209,7 +216,7 @@ async def delete_document(
     return {"message": "Document deleted successfully"}
 
 
-@router.put("/agents/{agent_id}/rag/toggle")
+@router.put("/{agent_id}/rag/toggle")
 async def toggle_rag(
     agent_id: int,
     enabled: bool = Form(...),

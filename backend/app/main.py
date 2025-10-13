@@ -76,7 +76,7 @@ app.include_router(billing.router, prefix=f"{settings.API_V1_STR}/billing", tags
 app.include_router(usage.router, prefix=f"{settings.API_V1_STR}/usage", tags=["Usage"])
 app.include_router(security.router, prefix=f"{settings.API_V1_STR}/security", tags=["Security"])
 app.include_router(profile.router, prefix=f"{settings.API_V1_STR}/profile", tags=["Profile"])
-app.include_router(documents.router, prefix=f"{settings.API_V1_STR}/agents", tags=["Documents & RAG"])
+app.include_router(documents.router, prefix=f"{settings.API_V1_STR}/agents", tags=["Documents & RAG"])  # Routes: /{agent_id}/documents, /{agent_id}/documents/website
 
 
 # Global exception handler

@@ -326,14 +326,11 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div
-        className="fixed inset-0 bg-black bg-opacity-50"
-        onClick={handleClose}
-      />
+      <div className="fixed inset-0 bg-black bg-opacity-50" />
       <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full p-8 z-10">
         <div className="mb-6 text-center">
           <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Testing: {agent.name}
+            Agent: {agent.name}
           </h3>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
             {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}
