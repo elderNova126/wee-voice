@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     CALL_RECORDINGS_PATH: str = "./data/recordings"
     TRANSCRIPTS_PATH: str = "./data/transcripts"
     
+    # Supabase Storage
+    SUPABASE_URL: Optional[str] = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY: Optional[str] = os.getenv("SUPABASE_KEY")
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    SUPABASE_STORAGE_BUCKET: str = os.getenv("SUPABASE_STORAGE_BUCKET", "voice-agent-documents")
+    
     # Monitoring
     SENTRY_DSN: Optional[str] = os.getenv("SENTRY_DSN")
     

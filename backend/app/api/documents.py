@@ -13,6 +13,7 @@ from app.core.security import get_current_active_user
 from app.services.document_service import DocumentService
 from app.services.web_scraper_service import WebScraperService
 from app.services.rag_service import RAGService
+from app.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class DocumentResponse(BaseModel):
     original_filename: str
     source_type: str
     source_url: Optional[str] = None
+    file_url: Optional[str] = None
     status: str
     error_message: Optional[str] = None
     file_size: Optional[int] = None
@@ -200,12 +202,20 @@ async def delete_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    # Delete file if it exists
+    # Delete file from storage
     if document.file_path:
-        import os
         try:
-            if os.path.exists(document.file_path):
-                os.remove(document.file_path)
+            # Check if using Supabase storage (file_url is set) or local storage
+            if document.file_url and storage_service.is_storage_enabled():
+                # Delete from Supabase storage
+                logger.info(f"Deleting file from Supabase: {document.file_path}")
+                await storage_service.delete_file(document.file_path)
+            else:
+                # Delete from local storage
+                import os
+                if os.path.exists(document.file_path):
+                    os.remove(document.file_path)
+                    logger.info(f"Deleted local file: {document.file_path}")
         except Exception as e:
             logger.warning(f"Failed to delete file {document.file_path}: {e}")
     

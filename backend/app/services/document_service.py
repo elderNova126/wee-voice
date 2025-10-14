@@ -1,6 +1,7 @@
 import os
 import logging
 import base64
+import tempfile
 from datetime import datetime
 from typing import List, Tuple
 import fitz  # PyMuPDF
@@ -9,6 +10,7 @@ from openai import OpenAI
 
 from app.models.document import Document, DocumentChunk
 from app.core.config import settings
+from app.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +19,17 @@ class DocumentService:
     """Service for handling document upload, processing, and text extraction"""
     
     def __init__(self):
+        # Use Supabase storage instead of local directory
+        # Keep upload_dir for backward compatibility with local fallback
         self.upload_dir = "uploads/documents"
-        os.makedirs(self.upload_dir, exist_ok=True)
+        self.use_supabase = storage_service.is_storage_enabled()
+        
+        if not self.use_supabase:
+            # Fallback to local storage if Supabase is not configured
+            os.makedirs(self.upload_dir, exist_ok=True)
+            logger.warning("⚠️ Supabase storage not configured. Using local file storage as fallback.")
+        else:
+            logger.info("✅ Using Supabase storage for document uploads")
         
         # Initialize OpenAI client for OCR if API key is available
         self.openai_client = None
@@ -216,17 +227,42 @@ class DocumentService:
         db.commit()
         db.refresh(document)
         
+        temp_file_path = None
+        
         try:
-            # Save file
-            file_path = os.path.join(self.upload_dir, document.filename)
-            with open(file_path, 'wb') as f:
-                f.write(file_content)
-            
-            document.file_path = file_path
+            if self.use_supabase:
+                # Upload to Supabase Storage
+                logger.info(f"Uploading {filename} to Supabase Storage...")
+                public_url, file_path = await storage_service.upload_file(
+                    file_content=file_content,
+                    filename=document.filename,
+                    agent_id=agent_id,
+                    user_id=user_id,
+                    mime_type="application/pdf"
+                )
+                
+                document.file_path = file_path
+                document.file_url = public_url
+                
+                # Create temporary file for PDF processing
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                    temp_file.write(file_content)
+                    temp_file_path = temp_file.name
+                
+                pdf_file_path = temp_file_path
+                
+            else:
+                # Fallback to local storage
+                file_path = os.path.join(self.upload_dir, document.filename)
+                with open(file_path, 'wb') as f:
+                    f.write(file_content)
+                
+                document.file_path = file_path
+                pdf_file_path = file_path
             
             # Extract text
             logger.info(f"Extracting text from {filename}...")
-            text, total_pages = self._extract_text_from_pdf(file_path)
+            text, total_pages = self._extract_text_from_pdf(pdf_file_path)
             
             if not text or len(text.strip()) < 50:
                 raise ValueError("No text could be extracted from PDF")
@@ -234,7 +270,8 @@ class DocumentService:
             document.total_pages = total_pages
             document.doc_metadata = {
                 'text_length': len(text),
-                'extraction_method': 'ocr' if self._is_scanned_pdf(fitz.open(file_path), text) else 'standard'
+                'extraction_method': 'ocr' if self._is_scanned_pdf(fitz.open(pdf_file_path), text) else 'standard',
+                'storage_type': 'supabase' if self.use_supabase else 'local'
             }
             
             # Chunk text
@@ -268,3 +305,12 @@ class DocumentService:
             document.error_message = str(e)
             db.commit()
             raise
+            
+        finally:
+            # Clean up temporary file if created
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    logger.info(f"Cleaned up temporary file: {temp_file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete temporary file {temp_file_path}: {e}")
