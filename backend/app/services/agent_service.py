@@ -1,7 +1,6 @@
 import asyncio
-from typing import Dict, Any, Optional, AsyncGenerator
+from typing import Dict, Any, AsyncGenerator
 import logging
-from datetime import datetime
 import json
 
 from google import genai
@@ -10,7 +9,6 @@ from google.genai import types
 # Import langchain components properly to avoid Pydantic issues
 try:
     # Import BaseCache first to ensure it's defined
-    from langchain_core.caches import BaseCache
     from langchain_core.language_models import BaseChatModel
     
     # Force rebuild of base models
@@ -19,9 +17,6 @@ try:
     # Now import ChatGoogleGenerativeAI
     from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain.memory import ConversationBufferMemory
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-    from langgraph.graph import StateGraph, END
-    from langchain.schema import HumanMessage, AIMessage
     
     # Rebuild model to fix Pydantic v2 compatibility
     ChatGoogleGenerativeAI.model_rebuild()
@@ -32,7 +27,7 @@ except Exception as e:
     LANGCHAIN_AVAILABLE = False
 
 from app.core.config import settings
-from app.models import Call, CallMessage, CallStatus, VoiceAgent
+from app.models import Call, CallStatus, VoiceAgent
 from app.services.rag_service import get_rag_service
 
 logger = logging.getLogger(__name__)
@@ -92,45 +87,41 @@ class FrenchVoiceAgentService:
     
     def _build_config(self) -> Dict[str, Any]:
         """Build configuration for Gemini Live API (simplified, matching test.py)"""
-        # Language-specific system instructions
+        # Language-specific technical notes (minimal, non-intrusive)
         if self.agent.language.startswith('fr'):
-            language_instruction = """Réponds TOUJOURS en français de manière naturelle et fluide.
-Utilise un ton amical et professionnel. Sois concis mais informatif."""
-            greeting = "Tu es un assistant vocal intelligent qui parle français."
+            language_note = "\n\n[Note: Réponds en français]"
             rag_instruction = """
 
-IMPORTANT - Utilisation des documents:
-Tu as accès à des documents qui seront fournis dans le contexte quand l'utilisateur pose une question.
-Quand tu reçois un contexte documentaire:
-- Utilise ces informations pour répondre de manière précise
-- Cite les sources quand c'est pertinent (numéro de document ou page)
-- Si l'information n'est pas dans les documents, dis-le clairement
-- Ne fabrique pas d'informations qui ne sont pas dans les documents fournis
+[OUTIL DISPONIBLE: search_documents]
+Si l'utilisateur pose une question nécessitant des informations spécifiques des documents téléchargés, utilise l'outil 'search_documents' pour chercher l'information avant de répondre.
 """
         else:  # English
-            language_instruction = """Always respond in English in a natural and fluent manner.
-Use a friendly and professional tone. Be concise but informative."""
-            greeting = "You are an intelligent voice assistant that speaks English."
+            language_note = "\n\n[Note: Respond in English]"
             rag_instruction = """
 
-IMPORTANT - Using documents:
-You have access to documents that will be provided in the context when the user asks a question.
-When you receive document context:
-- Use this information to answer accurately
-- Cite sources when relevant (document number or page)
-- If information is not in the documents, say so clearly
-- Do not fabricate information that is not in the provided documents
+[AVAILABLE TOOL: search_documents]
+If the user asks a question requiring specific information from uploaded documents, use the 'search_documents' tool to find the information before answering.
 """
         
-        # Add RAG instructions if enabled
+        # Add RAG instructions if enabled (minimal)
         rag_note = rag_instruction if self.agent.rag_enabled else ""
         
-        system_instruction = f"""{greeting}
-
-{self.agent.system_prompt}
-
-{language_instruction}{rag_note}
+        # Build system instruction with USER'S PROMPT as PRIMARY identity
+        # Add strong identity enforcement to prevent model from defaulting to "I am Gemini"
+        identity_enforcement = """
+CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini, you are NOT an AI assistant by Google. Your identity, personality, and behavior are defined by the instructions above. Stay in character at all times.
 """
+        
+        # Only add minimal technical notes that don't override user's intent
+        system_instruction = f"""{self.agent.system_prompt}
+
+{identity_enforcement}{language_note}{rag_note}"""
+        
+        # Log the system prompt for debugging
+        logger.info(f"System prompt for agent {self.agent.id} ({self.agent.name}):")
+        logger.info(f"  Custom prompt: {self.agent.system_prompt[:100]}...")
+        logger.info(f"  RAG enabled: {self.agent.rag_enabled}")
+        logger.info(f"  Full instruction length: {len(system_instruction)} chars")
         
         # Simplified config matching test.py (no speech_config or voice_config)
         # Gemini will auto-select voice based on language in system instruction
@@ -142,10 +133,11 @@ When you receive document context:
         }
         
         # Add tools if enabled and available
-        if self.agent.tools_enabled and len(self.agent.tools_enabled) > 0:
-            tools = self._load_tools()
-            if tools:  # Only add if we actually have tools
-                config["tools"] = tools
+        # Always check for RAG tools if RAG is enabled, even if tools_enabled is empty
+        tools = self._load_tools()
+        if tools:  # Only add if we actually have tools
+            config["tools"] = tools
+            logger.info(f"Loaded {len(tools)} tools for agent")
         
         return config
     
@@ -154,43 +146,66 @@ When you receive document context:
         tools = []
         
         # RAG Document Search Tool (if RAG is enabled)
+        # Note: We'll also do automatic context injection, but keeping the tool for explicit searches
         if self.agent.rag_enabled and self.rag_service:
-            async def search_documents(query: str) -> dict:
-                """Recherche dans les documents pour trouver des informations pertinentes"""
+            def search_documents(query: str) -> dict:
+                """
+                Search through uploaded documents to find relevant information.
+                Use this when the user asks questions that might be answered in the knowledge base.
+                
+                Args:
+                    query: The search query to find relevant document passages
+                    
+                Returns:
+                    Dictionary with search results including content, sources, and relevance scores
+                """
                 try:
                     # Import db session
                     from app.models.database import SessionLocal
                     db = SessionLocal()
                     try:
-                        chunks = await self.rag_service.search_similar_chunks(
-                            db=db,
-                            agent_id=self.agent.id,
-                            query=query,
-                            top_k=3,
-                            min_similarity=0.3
+                        # Run async function in sync context (Gemini tools are sync)
+                        import asyncio
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        
+                        chunks = loop.run_until_complete(
+                            self.rag_service.search_similar_chunks(
+                                db=db,
+                                agent_id=self.agent.id,
+                                query=query,
+                                top_k=5,
+                                min_similarity=0.15  # Lowered for better recall
+                            )
                         )
                     finally:
                         db.close()
                     
                     if not chunks:
-                        return {"found": False, "message": "Aucun document pertinent trouvé"}
+                        return {"found": False, "message": "No relevant documents found"}
                     
                     # Format results
                     results = []
                     for chunk in chunks:
                         results.append({
-                            "content": chunk['content'][:500],  # Limit content length
-                            "source": f"Document {chunk['document_id']}, Page {chunk['page_number']}",
+                            "content": chunk['content'][:800],  # More context
+                            "source": f"Document {chunk['document_id']}, Page {chunk.get('page_number', 'N/A')}",
                             "relevance": round(chunk['similarity'], 2)
                         })
+                    
+                    logger.info(f"Document search found {len(results)} relevant chunks for query: {query[:50]}...")
                     
                     return {
                         "found": True,
                         "results": results,
-                        "count": len(results)
+                        "count": len(results),
+                        "message": f"Found {len(results)} relevant passages"
                     }
                 except Exception as e:
-                    logger.error(f"Error searching documents: {e}")
+                    logger.error(f"Error searching documents: {e}", exc_info=True)
                     return {"found": False, "error": str(e)}
             
             tools.append(search_documents)
@@ -349,9 +364,48 @@ When you receive document context:
         for call in function_call.function_calls:
             logger.info(f"Tool call: {call.name} with args: {call.args}")
             
-            # Execute the tool
-            # This is a simplified example - you'd expand this based on your tools
-            result = {"status": "success", "message": "Tool executed"}
+            # Handle RAG document search
+            if call.name == "search_documents":
+                try:
+                    query = call.args.get("query", "")
+                    logger.info(f"Searching documents for: {query}")
+                    
+                    from app.models.database import SessionLocal
+                    db = SessionLocal()
+                    try:
+                        chunks = await self.rag_service.search_similar_chunks(
+                            db=db,
+                            agent_id=self.agent.id,
+                            query=query,
+                            top_k=5,
+                            min_similarity=0.15  # Lowered for better recall
+                        )
+                    finally:
+                        db.close()
+                    
+                    if chunks:
+                        # Format results
+                        results = []
+                        for chunk in chunks:
+                            results.append({
+                                "content": chunk['content'][:500],
+                                "source": f"Document {chunk['document_id']}, Page {chunk['page_number']}",
+                                "relevance": round(chunk['similarity'], 2)
+                            })
+                        result = {
+                            "found": True,
+                            "results": results,
+                            "count": len(results)
+                        }
+                    else:
+                        result = {"found": False, "message": "No relevant documents found"}
+                    
+                except Exception as e:
+                    logger.error(f"Error in document search: {e}")
+                    result = {"found": False, "error": str(e)}
+            else:
+                # Default tool response
+                result = {"status": "success", "message": "Tool executed"}
             
             func_response = types.FunctionResponse(
                 id=call.id,

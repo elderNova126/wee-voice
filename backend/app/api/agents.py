@@ -44,6 +44,7 @@ class AgentResponse(BaseModel):
     tools_enabled: List[str]
     is_active: bool
     is_public: bool
+    rag_enabled: bool = False  # RAG/Knowledge Base enabled status
     created_at: Any
     
     class Config:

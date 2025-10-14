@@ -244,7 +244,16 @@ async def toggle_rag(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
+    # Update RAG setting
     agent.rag_enabled = enabled
     db.commit()
+    db.refresh(agent)  # Refresh to confirm the change was saved
     
-    return {"message": f"RAG {'enabled' if enabled else 'disabled'} successfully"}
+    logger.info(f"RAG {'enabled' if enabled else 'disabled'} for agent {agent_id} (current state: {agent.rag_enabled})")
+    
+    return {
+        "message": f"RAG {'enabled' if enabled else 'disabled'} successfully",
+        "rag_enabled": agent.rag_enabled,
+        "agent_id": agent.id,
+        "agent_name": agent.name
+    }

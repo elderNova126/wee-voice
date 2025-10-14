@@ -135,17 +135,24 @@ export default function AgentDocumentsPage() {
 
   const handleToggleRAG = async (enabled: boolean) => {
     try {
+      setError('') // Clear any previous errors
+      
       const formData = new FormData()
       formData.append('enabled', enabled.toString())
       
-      await api.put(`/agents/${agentId}/rag/toggle`, formData)
+      const response = await api.put(`/agents/${agentId}/rag/toggle`, formData)
       
-      if (agent) {
-        setAgent({ ...agent, rag_enabled: enabled })
-      }
+      console.log('RAG toggle response:', response.data)
+      
+      // Reload agent data from server to confirm the setting was saved
+      await loadData()
+      
+      console.log('RAG successfully toggled to:', enabled)
     } catch (err: any) {
       console.error('Error toggling RAG:', err)
       setError(err.response?.data?.detail || 'Failed to toggle RAG')
+      // Reload data even on error to show current state
+      await loadData()
     }
   }
 
