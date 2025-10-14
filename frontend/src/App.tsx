@@ -12,6 +12,7 @@ import AgentDocumentsPage from './pages/AgentDocumentsPage'
 import CallsPage from './pages/CallsPage'
 import APIKeysPage from './pages/ApiKeysPage'
 import DemoPage from './pages/DemoPage'
+import PublicAgentPage from './pages/PublicAgentPage'
 import BillingPage from './pages/BillingPage'
 import UsagePage from './pages/UsagePage'
 import SecurityPage from './pages/SecurityPage'
@@ -35,6 +36,7 @@ function App() {
         {/* Public routes */}
         <Route path="/" element={<LandingPage />} />
         <Route path="/demo" element={<DemoPage />} />
+        <Route path="/agent/:agentId" element={<PublicAgentPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         
@@ -57,6 +59,11 @@ function App() {
         <Route path="/dashboard/agents/:id/edit" element={
           <ProtectedRoute>
             <AgentFormPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/agents/:agentId/documents" element={
+          <ProtectedRoute>
+            <AgentDocumentsPage />
           </ProtectedRoute>
         } />
         <Route path="/dashboard/calls" element={

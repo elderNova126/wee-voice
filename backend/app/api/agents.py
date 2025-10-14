@@ -82,6 +82,17 @@ def list_agents(
     return agents
 
 
+@router.get("/public/list", response_model=List[AgentResponse])
+def list_public_agents(db: Session = Depends(get_db)):
+    """Get all public agents (no authentication required)"""
+    agents = db.query(VoiceAgent).filter(
+        VoiceAgent.is_public == True,
+        VoiceAgent.is_active == True
+    ).order_by(VoiceAgent.created_at.desc()).all()
+    
+    return agents
+
+
 @router.get("/{agent_id}", response_model=AgentResponse)
 def get_agent(
     agent_id: int,
