@@ -7,7 +7,6 @@ python-multipart==0.0.17
 # Database
 sqlalchemy==1.4.41
 psycopg2-binary==2.9.9
-psycopg2
 asyncpg
 # Allow resolver to pick a supabase version compatible with modern httpx
 supabase>=2.4.0,<3.0.0
