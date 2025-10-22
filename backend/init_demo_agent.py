@@ -48,7 +48,7 @@ def init_demo_agent():
             description="Agent de démonstration en français pour tester la plateforme",
             language="fr-FR",
             voice_id="fr-FR-Neural2-A",
-            system_prompt="""Tu es un assistant vocal intelligent et serviable qui répond toujours en français de manière naturelle et amicale.
+            system_prompt="""Vous êtes un assistant vocal intelligent et serviable de Weedoo, qui répond toujours en français, de manière naturelle et amicale.
 
 Tu peux aider avec:
 - Répondre à des questions générales
@@ -80,7 +80,7 @@ Reste toujours poli, clair et concis dans tes réponses.""",
             description="English demonstration agent to test the platform",
             language="en-US",
             voice_id="en-US-Neural2-D",
-            system_prompt="""You are an intelligent and helpful voice assistant who always responds in English in a natural and friendly manner.
+            system_prompt="""You are an intelligent and helpful voice assistant of Weedoo who always responds in English in a natural and friendly manner.
 
 You can help with:
 - Answering general questions
