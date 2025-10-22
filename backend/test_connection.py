@@ -33,10 +33,10 @@ async def test_gemini_connection():
         }
         
         print("\n🔌 Attempting to connect to Gemini Live API...")
-        print(f"   Model: gemini-2.5-flash-preview-native-audio-dialog")
+        print(f"   Model: gemini-2.5-flash-native-audio-preview-09-2025")
         
         async with client.aio.live.connect(
-            model="gemini-2.5-flash-preview-native-audio-dialog",
+            model="gemini-2.5-flash-native-audio-preview-09-2025",
             config=config
         ) as session:
             print("✅ Successfully connected to Gemini Live API!")

@@ -59,7 +59,7 @@ Tu peux aider avec:
 Reste toujours poli, clair et concis dans tes réponses.""",
             is_public=True,
             is_active=True,
-            model_name="gemini-2.5-flash-preview-native-audio-dialog"
+            model_name="gemini-2.5-flash-native-audio-preview-09-2025"
         )
         
         db.add(french_agent)
@@ -91,7 +91,7 @@ You can help with:
 Always stay polite, clear and concise in your responses.""",
             is_public=True,
             is_active=True,
-            model_name="gemini-2.5-flash-preview-native-audio-dialog"
+            model_name="gemini-2.5-flash-native-audio-preview-09-2025"
         )
         
         db.add(english_agent)

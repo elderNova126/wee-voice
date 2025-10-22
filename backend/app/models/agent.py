@@ -23,7 +23,7 @@ class VoiceAgent(Base):
     tools_enabled = Column(JSON, default=list)  # List of enabled tools
     
     # Model settings
-    model_name = Column(String, default="gemini-2.5-flash-preview-native-audio-dialog")
+    model_name = Column(String, default="gemini-2.5-flash-native-audio-preview-09-2025")
     temperature = Column(String, default="0.7")
     max_tokens = Column(Integer, default=1000)
     

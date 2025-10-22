@@ -1,14 +1,16 @@
 -- ===================================================================
 -- VoiceAgent SaaS - Complete Database Schema
 -- PostgreSQL Schema for French Voice Agent Platform
--- Date: 2025-10-10
+-- Consolidated from: complete_schema.sql, add_rag_tables.sql, migrations
+-- Date: 2025-10-22
 -- ===================================================================
--- 
+--
 -- This file contains the complete database schema including:
 -- 1. Core tables (users, agents, calls, API keys)
--- 2. Billing & Usage tracking
--- 3. Security (domain/IP allowlists, logs)
--- 4. Support ticketing system
+-- 2. RAG support (documents, document_chunks)
+-- 3. Billing & Usage tracking
+-- 4. Security (domain/IP allowlists, logs)
+-- 5. Support ticketing system
 -- ===================================================================
 
 -- Enable UUID extension
@@ -43,6 +45,8 @@ DROP TABLE IF EXISTS invoices CASCADE;
 DROP TABLE IF EXISTS transactions CASCADE;
 DROP TABLE IF EXISTS call_messages CASCADE;
 DROP TABLE IF EXISTS calls CASCADE;
+DROP TABLE IF EXISTS document_chunks CASCADE;
+DROP TABLE IF EXISTS documents CASCADE;
 DROP TABLE IF EXISTS voice_agents CASCADE;
 DROP TABLE IF EXISTS api_keys CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
@@ -131,10 +135,14 @@ CREATE TABLE voice_agents (
     agent_config JSONB,
     tools_enabled JSONB DEFAULT '[]'::JSONB,
     
-    -- Model settings
-    model_name VARCHAR(255) DEFAULT 'gemini-2.5-flash-preview-native-audio-dialog',
+    -- Model settings (UPDATED TO CORRECT MODEL)
+    model_name VARCHAR(255) DEFAULT 'gemini-2.5-flash-native-audio-preview-09-2025',
     temperature VARCHAR(10) DEFAULT '0.7',
     max_tokens INTEGER DEFAULT 1000,
+    
+    -- RAG support
+    rag_enabled BOOLEAN DEFAULT FALSE,
+    rag_config JSONB,
     
     -- CRM Integration
     crm_webhook_url VARCHAR(500),
@@ -156,6 +164,80 @@ CREATE INDEX idx_agents_active ON voice_agents(is_active);
 CREATE INDEX idx_agents_public ON voice_agents(is_public);
 CREATE INDEX idx_agents_language ON voice_agents(language);
 CREATE INDEX idx_agents_user_active ON voice_agents(user_id, is_active);
+CREATE INDEX idx_agents_tools ON voice_agents USING GIN (tools_enabled);
+
+-- ===================================================================
+-- DOCUMENTS TABLE (RAG Support)
+-- ===================================================================
+
+CREATE TABLE documents (
+    id SERIAL PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- File information
+    filename VARCHAR NOT NULL,
+    original_filename VARCHAR NOT NULL,
+    file_path VARCHAR,
+    file_url VARCHAR,
+    file_size INTEGER,
+    mime_type VARCHAR DEFAULT 'application/pdf',
+    
+    -- Source information
+    source_type VARCHAR DEFAULT 'pdf',  -- pdf, website, text
+    source_url VARCHAR,  -- For websites
+    
+    -- Processing status
+    status VARCHAR DEFAULT 'pending',  -- pending, processing, completed, failed
+    error_message TEXT,
+    
+    -- Content metadata
+    total_pages INTEGER,
+    total_chunks INTEGER DEFAULT 0,
+    doc_metadata JSONB,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    processed_at TIMESTAMP,
+    
+    CONSTRAINT fk_documents_agent FOREIGN KEY (agent_id) REFERENCES voice_agents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_documents_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Create indexes for documents
+CREATE INDEX idx_documents_agent_id ON documents(agent_id);
+CREATE INDEX idx_documents_user_id ON documents(user_id);
+CREATE INDEX idx_documents_status ON documents(status);
+
+-- ===================================================================
+-- DOCUMENT CHUNKS TABLE (RAG Support)
+-- ===================================================================
+
+CREATE TABLE document_chunks (
+    id SERIAL PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    
+    -- Chunk data
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    page_number INTEGER,
+    
+    -- Embedding data
+    embedding JSONB,  -- Vector embedding as JSON array
+    embedding_model VARCHAR DEFAULT 'all-MiniLM-L6-v2',
+    
+    -- Metadata
+    chunk_metadata JSONB,
+    token_count INTEGER,
+    
+    created_at TIMESTAMP DEFAULT NOW(),
+    
+    CONSTRAINT fk_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+-- Create indexes for document chunks
+CREATE INDEX idx_document_chunks_document_id ON document_chunks(document_id);
 
 -- ===================================================================
 -- CALLS TABLE
@@ -213,6 +295,8 @@ CREATE INDEX idx_calls_sentiment ON calls(sentiment);
 CREATE INDEX idx_calls_user_created ON calls(user_id, created_at DESC);
 CREATE INDEX idx_calls_agent_created ON calls(agent_id, created_at DESC);
 CREATE INDEX idx_calls_user_status ON calls(user_id, status);
+CREATE INDEX idx_calls_key_points ON calls USING GIN (key_points);
+CREATE INDEX idx_calls_transcript ON calls USING GIN (to_tsvector('french', transcript));
 
 -- ===================================================================
 -- CALL MESSAGES TABLE
@@ -497,10 +581,12 @@ DROP TRIGGER IF EXISTS update_transactions_updated_at ON transactions;
 DROP TRIGGER IF EXISTS update_invoices_updated_at ON invoices;
 DROP TRIGGER IF EXISTS update_domain_allowlists_updated_at ON domain_allowlists;
 DROP TRIGGER IF EXISTS update_ip_allowlists_updated_at ON ip_allowlists;
+DROP TRIGGER IF EXISTS trigger_update_documents_updated_at ON documents;
 
 -- Drop existing functions
 DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
 DROP FUNCTION IF EXISTS calculate_call_duration() CASCADE;
+DROP FUNCTION IF EXISTS update_documents_updated_at() CASCADE;
 DROP FUNCTION IF EXISTS cleanup_old_calls(INTEGER) CASCADE;
 
 -- Function to update updated_at timestamp
@@ -547,6 +633,21 @@ CREATE TRIGGER update_ip_allowlists_updated_at
     BEFORE UPDATE ON ip_allowlists
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
+
+-- Function to update documents timestamp
+CREATE OR REPLACE FUNCTION update_documents_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger for documents
+CREATE TRIGGER trigger_update_documents_updated_at
+    BEFORE UPDATE ON documents
+    FOR EACH ROW
+    EXECUTE FUNCTION update_documents_updated_at();
 
 -- Function to calculate call duration
 CREATE OR REPLACE FUNCTION calculate_call_duration()
@@ -604,14 +705,6 @@ LEFT JOIN calls c ON va.id = c.agent_id
 GROUP BY va.id, va.name, va.user_id;
 
 -- ===================================================================
--- GIN INDEXES FOR JSONB COLUMNS
--- ===================================================================
-
-CREATE INDEX idx_agents_tools ON voice_agents USING GIN (tools_enabled);
-CREATE INDEX idx_calls_key_points ON calls USING GIN (key_points);
-CREATE INDEX idx_calls_transcript ON calls USING GIN (to_tsvector('french', transcript));
-
--- ===================================================================
 -- MAINTENANCE FUNCTIONS
 -- ===================================================================
 
@@ -631,14 +724,16 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ===================================================================
--- COMMENTS
+-- COMMENTS FOR DOCUMENTATION
 -- ===================================================================
 
 COMMENT ON TABLE users IS 'Platform users with authentication and subscription info';
 COMMENT ON TABLE api_keys IS 'API keys for programmatic access';
-COMMENT ON TABLE voice_agents IS 'Voice agent configurations';
+COMMENT ON TABLE voice_agents IS 'Voice agent configurations with model settings (model_name default: gemini-2.5-flash-native-audio-preview-09-2025)';
 COMMENT ON TABLE calls IS 'Call history and analytics';
 COMMENT ON TABLE call_messages IS 'Individual messages within calls';
+COMMENT ON TABLE documents IS 'Stores RAG knowledge sources (PDFs, websites, text, etc.)';
+COMMENT ON TABLE document_chunks IS 'Text chunks from documents with embeddings for semantic search';
 COMMENT ON TABLE transactions IS 'Payment transactions and billing history';
 COMMENT ON TABLE invoices IS 'Generated invoices for billing periods';
 COMMENT ON TABLE usage_records IS 'Detailed usage tracking per call/agent';
@@ -647,6 +742,8 @@ COMMENT ON TABLE ip_allowlists IS 'IP restrictions for security';
 COMMENT ON TABLE security_logs IS 'Security events and audit trail';
 COMMENT ON TABLE support_tickets IS 'Support tickets submitted by users';
 COMMENT ON TABLE ticket_responses IS 'Responses to support tickets from users or staff';
+COMMENT ON COLUMN voice_agents.model_name IS 'Gemini model ID (default: gemini-2.5-flash-native-audio-preview-09-2025)';
+COMMENT ON COLUMN documents.file_url IS 'Public URL for Supabase storage files (null for local storage)';
 
 -- ===================================================================
 -- SAMPLE DATA (Optional - for testing)
@@ -661,13 +758,14 @@ VALUES (
     'free'
 ) ON CONFLICT (email) DO NOTHING;
 
--- Insert a demo agent
+-- Insert a demo agent with correct model
 INSERT INTO voice_agents (
     user_id,
     name,
     description,
     language,
     system_prompt,
+    model_name,
     is_public
 )
 VALUES (
@@ -676,24 +774,28 @@ VALUES (
     'Agent de démonstration en français pour tester la plateforme',
     'fr-FR',
     'Tu es un assistant vocal intelligent et serviable qui répond toujours en français de manière naturelle et amicale.',
+    'gemini-2.5-flash-native-audio-preview-09-2025',
     TRUE
 ) ON CONFLICT DO NOTHING;
 
 -- ===================================================================
--- COMPLETION
+-- COMPLETION MESSAGE
 -- ===================================================================
 
 DO $$
 BEGIN
     RAISE NOTICE '=====================================================';
-    RAISE NOTICE 'VoiceAgent SaaS Complete Schema Created Successfully!';
+    RAISE NOTICE 'VoiceAgent SaaS Schema Created Successfully!';
     RAISE NOTICE '=====================================================';
     RAISE NOTICE 'Core Tables: users, api_keys, voice_agents, calls, call_messages';
+    RAISE NOTICE 'RAG Tables: documents, document_chunks';
     RAISE NOTICE 'Billing: transactions, invoices, usage_records';
     RAISE NOTICE 'Security: domain_allowlists, ip_allowlists, security_logs';
     RAISE NOTICE 'Support: support_tickets, ticket_responses';
     RAISE NOTICE 'Views: call_statistics, agent_performance';
     RAISE NOTICE '=====================================================';
+    RAISE NOTICE 'Model: gemini-2.5-flash-native-audio-preview-09-2025';
+    RAISE NOTICE 'All migrations included!';
+    RAISE NOTICE '=====================================================';
     RAISE NOTICE 'Remember to configure environment variables!';
 END $$;
-

@@ -6,6 +6,10 @@ import json
 from google import genai
 from google.genai import types
 
+# Suppress warnings from google_genai.types about non-text/non-data parts
+# These warnings occur when the model returns structured responses with multiple parts
+logging.getLogger('google_genai.types').setLevel(logging.ERROR)
+
 # Import langchain components properly to avoid Pydantic issues
 try:
     # Import BaseCache first to ensure it's defined
@@ -123,13 +127,14 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         logger.info(f"  RAG enabled: {self.agent.rag_enabled}")
         logger.info(f"  Full instruction length: {len(system_instruction)} chars")
         
-        # Simplified config matching test.py (no speech_config or voice_config)
-        # Gemini will auto-select voice based on language in system instruction
+        # Build config matching the working test.py
+        # Include both AUDIO and TEXT responses for better interaction
+        # The model will automatically transcribe and understand user input
         config = {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": types.Content(
-                parts=[types.Part(text=system_instruction)]
-            ),
+            "response_modalities": ["AUDIO"],  # Match test.py exactly
+            "system_instruction": system_instruction,  # Use plain string like test.py
+            "input_audio_transcription": {},  # Enable input transcription
+            "output_audio_transcription": {},  # Enable output transcription
         }
         
         # Add tools if enabled and available
@@ -256,7 +261,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             self.call.status = CallStatus.FAILED
             return False
     
-    async def send_audio(self, audio_data: bytes, mime_type: str = "audio/pcm"):
+    async def send_audio(self, audio_data: bytes, mime_type: str = "audio/pcm;rate=16000"):
         """Send audio chunk to the agent"""
         try:
             await self.audio_out_queue.put({"data": audio_data, "mime_type": mime_type})
@@ -267,6 +272,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         """Receive audio responses from the agent"""
         logger.info(f"Starting audio reception for call {self.call.session_id}")
         response_count = 0
+        turn_count = 0
         
         # Give the session a moment to fully initialize
         # This prevents error 1011 from calling receive() before session is ready
@@ -276,28 +282,43 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         try:
             while True:
                 try:
+                    turn_count += 1
+                    logger.debug(f"Listening for turn {turn_count}...")
                     turn = self.session.receive()
                     async for response in turn:
                         response_count += 1
-                        print("------------", response)
-                        # Handle audio data (inline_data)
-                        if data := response.data:
-                            yield data
+                        logger.debug(f"Received response #{response_count}: {type(response).__name__}")
                         
-                        # Handle text (for transcript)
-                        if text := response.text:
-                            logger.info(f"Gemini response: {text}")
-                            await self._save_message("agent", text)
+                        # Handle audio data (inline_data) - check for 'data' attribute
+                        if hasattr(response, 'data') and response.data:
+                            logger.debug(f"Yielding audio data: {len(response.data)} bytes")
+                            yield response.data
+                        
+                        # Handle text (for transcript) - check for 'text' attribute
+                        if hasattr(response, 'text') and response.text:
+                            logger.info(f"Gemini response: {response.text}")
+                            await self._save_message("agent", response.text)
                             # Add to conversation buffer for RAG
-                            self.conversation_buffer.append({"role": "agent", "text": text})
+                            self.conversation_buffer.append({"role": "agent", "text": response.text})
+                        
+                        # Handle thought (model's reasoning process) - log but don't save
+                        if hasattr(response, 'thought') and response.thought:
+                            logger.debug(f"Gemini thought: {response.thought}")
+                        
+                        # Handle input transcript
+                        if hasattr(response, "input_transcript") and response.input_transcript:
+                            logger.info(f"User said: {response.input_transcript}")
+                            await self._save_message("user", response.input_transcript)
+                            self.conversation_buffer.append({"role": "user", "text": response.input_transcript})
                         
                         # Handle tool calls
-                        if function_call := response.tool_call:
-                            logger.info(f"Gemini tool call: {function_call}")
-                            await self._handle_tool_calls(function_call)
+                        if hasattr(response, 'tool_call') and response.tool_call:
+                            logger.info(f"Gemini tool call: {response.tool_call}")
+                            await self._handle_tool_calls(response.tool_call)
                 
                 except StopAsyncIteration:
-                    # Turn completed, ready for next turn
+                    # Turn completed normally, ready for next turn
+                    logger.debug(f"Turn {turn_count} completed, waiting for next turn...")
                     continue
                 except asyncio.CancelledError:
                     logger.info("Audio reception cancelled")
@@ -309,7 +330,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                         logger.info(f"Gemini connection closed: {turn_error}")
                         break
                     else:
-                        logger.error(f"Error in turn: {turn_error}", exc_info=True)
+                        logger.error(f"Error in turn {turn_count}: {turn_error}", exc_info=True)
                         # Wait a bit before retrying
                         await asyncio.sleep(0.1)
         
@@ -320,7 +341,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             logger.error(f"Error receiving audio: {e}", exc_info=True)
             raise
         finally:
-            logger.info(f"Audio reception ended for call {self.call.session_id} ({response_count} responses)")
+            logger.info(f"Audio reception ended for call {self.call.session_id} ({response_count} responses from {turn_count} turns)")
     
     async def _save_message(self, role: str, content: str):
         """Save message to database and build transcript"""
@@ -429,7 +450,9 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                     # Use wait_for with timeout to allow cancellation
                     msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=1.0)
                     audio_sent_count += 1
+                    
                     # Send audio input to Gemini Live API
+                    # Format matches test.py: dict with "data" and "mime_type" keys
                     await self.session.send_realtime_input(audio=msg)
                 except asyncio.TimeoutError:
                     # No audio in queue, continue waiting
