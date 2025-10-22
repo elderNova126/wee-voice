@@ -283,11 +283,6 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         response_count = 0
         turn_count = 0
         
-        # Give the session a moment to fully initialize
-        # This prevents error 1011 from calling receive() before session is ready
-        await asyncio.sleep(0.5)
-        
-        
         try:
             while True:
                 try:
