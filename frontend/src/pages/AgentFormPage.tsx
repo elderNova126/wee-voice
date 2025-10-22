@@ -142,10 +142,10 @@ export default function AgentFormPage() {
 
     try {
       setUploading(true)
-      const formData = new FormData()
-      formData.append('file', file)
+      const uploadFormData = new FormData()
+      uploadFormData.append('file', file)
 
-      await api.post(`/agents/${id}/documents`, formData, {
+      await api.post(`/agents/${id}/documents`, uploadFormData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
 
