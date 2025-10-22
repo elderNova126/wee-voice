@@ -6,6 +6,10 @@ import json
 from google import genai
 from google.genai import types
 
+# Suppress warnings from google_genai.types about non-text/non-data parts
+# These warnings occur when the model returns structured responses with multiple parts
+logging.getLogger('google_genai.types').setLevel(logging.ERROR)
+
 # Import langchain components properly to avoid Pydantic issues
 try:
     # Import BaseCache first to ensure it's defined
@@ -127,10 +131,10 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         # Include both AUDIO and TEXT responses for better interaction
         # The model will automatically transcribe and understand user input
         config = {
-            "response_modalities": ["AUDIO", "TEXT"],  # Include TEXT for model to understand and respond
-            "system_instruction": types.Content(
-                parts=[types.Part(text=system_instruction)]
-            ),
+            "response_modalities": ["AUDIO"],  # Match test.py exactly
+            "system_instruction": system_instruction,  # Use plain string like test.py
+            "input_audio_transcription": {},  # Enable input transcription
+            "output_audio_transcription": {},  # Enable output transcription
         }
         
         # Add tools if enabled and available
@@ -257,7 +261,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             self.call.status = CallStatus.FAILED
             return False
     
-    async def send_audio(self, audio_data: bytes, mime_type: str = "audio/pcm"):
+    async def send_audio(self, audio_data: bytes, mime_type: str = "audio/pcm;rate=16000"):
         """Send audio chunk to the agent"""
         try:
             await self.audio_out_queue.put({"data": audio_data, "mime_type": mime_type})
@@ -285,17 +289,21 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                         response_count += 1
                         logger.debug(f"Received response #{response_count}: {type(response).__name__}")
                         
-                        # Handle audio data (inline_data)
-                        if data := response.data:
-                            logger.debug(f"Yielding audio data: {len(data)} bytes")
-                            yield data
+                        # Handle audio data (inline_data) - check for 'data' attribute
+                        if hasattr(response, 'data') and response.data:
+                            logger.debug(f"Yielding audio data: {len(response.data)} bytes")
+                            yield response.data
                         
-                        # Handle text (for transcript)
-                        if text := response.text:
-                            logger.info(f"Gemini response: {text}")
-                            await self._save_message("agent", text)
+                        # Handle text (for transcript) - check for 'text' attribute
+                        if hasattr(response, 'text') and response.text:
+                            logger.info(f"Gemini response: {response.text}")
+                            await self._save_message("agent", response.text)
                             # Add to conversation buffer for RAG
-                            self.conversation_buffer.append({"role": "agent", "text": text})
+                            self.conversation_buffer.append({"role": "agent", "text": response.text})
+                        
+                        # Handle thought (model's reasoning process) - log but don't save
+                        if hasattr(response, 'thought') and response.thought:
+                            logger.debug(f"Gemini thought: {response.thought}")
                         
                         # Handle input transcript
                         if hasattr(response, "input_transcript") and response.input_transcript:
@@ -304,9 +312,9 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                             self.conversation_buffer.append({"role": "user", "text": response.input_transcript})
                         
                         # Handle tool calls
-                        if function_call := response.tool_call:
-                            logger.info(f"Gemini tool call: {function_call}")
-                            await self._handle_tool_calls(function_call)
+                        if hasattr(response, 'tool_call') and response.tool_call:
+                            logger.info(f"Gemini tool call: {response.tool_call}")
+                            await self._handle_tool_calls(response.tool_call)
                 
                 except StopAsyncIteration:
                     # Turn completed normally, ready for next turn
@@ -443,14 +451,9 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                     msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=1.0)
                     audio_sent_count += 1
                     
-                    # Properly format audio as Blob with correct MIME type and sample rate
-                    audio_blob = types.Blob(
-                        data=msg["data"],
-                        mime_type="audio/pcm;rate=16000"
-                    )
-                    
                     # Send audio input to Gemini Live API
-                    await self.session.send_realtime_input(audio=audio_blob)
+                    # Format matches test.py: dict with "data" and "mime_type" keys
+                    await self.session.send_realtime_input(audio=msg)
                 except asyncio.TimeoutError:
                     # No audio in queue, continue waiting
                     continue
