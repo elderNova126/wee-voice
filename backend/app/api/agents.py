@@ -15,6 +15,7 @@ class AgentCreate(BaseModel):
     language: str = "fr-FR"
     voice_id: str = "fr-FR-Neural2-A"
     system_prompt: str
+    greeting: Optional[str] = None
     tools_enabled: List[str] = []
     crm_webhook_url: Optional[str] = None
     crm_enabled: bool = False
@@ -27,6 +28,7 @@ class AgentUpdate(BaseModel):
     language: Optional[str] = None
     voice_id: Optional[str] = None
     system_prompt: Optional[str] = None
+    greeting: Optional[str] = None
     tools_enabled: Optional[List[str]] = None
     crm_webhook_url: Optional[str] = None
     crm_enabled: Optional[bool] = None
@@ -41,6 +43,7 @@ class AgentResponse(BaseModel):
     language: str
     voice_id: str
     system_prompt: str
+    greeting: Optional[str] = None
     tools_enabled: List[str]
     is_active: bool
     is_public: bool

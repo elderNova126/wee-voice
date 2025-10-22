@@ -16,6 +16,7 @@ interface AgentFormData {
   description: string
   language: string
   system_prompt: string
+  greeting?: string
   is_public: boolean
   is_active: boolean
   rag_enabled?: boolean
@@ -40,6 +41,7 @@ export default function AgentFormPage() {
     description: '',
     language: 'fr-FR',
     system_prompt: '',
+    greeting: '',
     is_public: false,
     is_active: true,
     rag_enabled: false
@@ -61,6 +63,7 @@ export default function AgentFormPage() {
         description: agent.description || '',
         language: agent.language || 'fr-FR',
         system_prompt: agent.system_prompt || '',
+        greeting: agent.greeting || '',
         is_public: agent.is_public ?? false,
         is_active: agent.is_active ?? true,
         rag_enabled: agent.rag_enabled ?? false
@@ -286,9 +289,32 @@ export default function AgentFormPage() {
                 rows={3}
                 value={formData.description}
                 onChange={handleChange}
-                placeholder="Briefly describe this agent’s role..."
+                placeholder="Briefly describe this agent's role..."
                 className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all resize-none"
               />
+            </div>
+
+            {/* Greeting */}
+            <div>
+              <label htmlFor="greeting" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Greeting Message
+              </label>
+              <textarea
+                id="greeting"
+                name="greeting"
+                rows={2}
+                value={formData.greeting}
+                onChange={handleChange}
+                placeholder={
+                  formData.language === 'fr-FR'
+                    ? "Bonjour, je suis Cédric de Weedoo. Comment puis-je vous aider ?"
+                    : "Hello, I'm Cedric from Weedoo. How can I help you?"
+                }
+                className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all resize-none"
+              />
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                First message the agent will say when starting a conversation.
+              </p>
             </div>
 
             {/* Language */}

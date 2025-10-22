@@ -57,6 +57,7 @@ Tu peux aider avec:
 - Être courtois et professionnel
 
 Reste toujours poli, clair et concis dans tes réponses.""",
+            greeting="Bonjour, je suis un assistant vocal de Weedoo. Comment puis-je vous aider ?",
             is_public=True,
             is_active=True,
             model_name="gemini-2.5-flash-native-audio-preview-09-2025"
@@ -89,6 +90,7 @@ You can help with:
 - Being courteous and professional
 
 Always stay polite, clear and concise in your responses.""",
+            greeting="Hello, I'm a voice agent from Weedoo. How can I help you?",
             is_public=True,
             is_active=True,
             model_name="gemini-2.5-flash-native-audio-preview-09-2025"

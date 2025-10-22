@@ -130,6 +130,7 @@ CREATE TABLE voice_agents (
     language VARCHAR(50) DEFAULT 'fr-FR',
     voice_id VARCHAR(100) DEFAULT 'fr-FR-Neural2-A',
     system_prompt TEXT NOT NULL,
+    greeting TEXT,
     
     -- LangGraph configuration
     agent_config JSONB,
@@ -765,6 +766,7 @@ INSERT INTO voice_agents (
     description,
     language,
     system_prompt,
+    greeting,
     model_name,
     is_public
 )
@@ -774,6 +776,7 @@ VALUES (
     'Agent de démonstration en français pour tester la plateforme',
     'fr-FR',
     'Tu es un assistant vocal intelligent et serviable qui répond toujours en français de manière naturelle et amicale.',
+    'Bonjour, je suis un assistant vocal de Weedoo. Comment puis-je vous aider ?',
     'gemini-2.5-flash-native-audio-preview-09-2025',
     TRUE
 ) ON CONFLICT DO NOTHING;

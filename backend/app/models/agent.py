@@ -17,6 +17,7 @@ class VoiceAgent(Base):
     language = Column(String, default="fr-FR")  # French by default
     voice_id = Column(String, default="fr-FR-Neural2-A")
     system_prompt = Column(Text, nullable=False)
+    greeting = Column(Text, nullable=True)  # Custom greeting message for the agent
     
     # LangGraph configuration
     agent_config = Column(JSON, nullable=True)  # Store LangGraph workflow config

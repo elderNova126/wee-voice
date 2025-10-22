@@ -254,6 +254,15 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             self.session = await self.session_context.__aenter__()
             
             logger.info(f"Successfully started voice session for call {self.call.session_id}")
+            
+            # Send greeting message if configured
+            if self.agent.greeting:
+                try:
+                    logger.info(f"Sending greeting message: {self.agent.greeting}")
+                    await self.session.send(input=self.agent.greeting, end_of_turn=True)
+                except Exception as e:
+                    logger.warning(f"Failed to send greeting message: {e}")
+            
             # Note: Status and started_at are now set in websocket.py after this returns successfully
             return True
         except Exception as e:
