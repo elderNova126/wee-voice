@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     OPENAI_OCR_MODEL: str = "gpt-4o"  # gpt-4o has vision capabilities
     
     # Gemini Configuration
-    GEMINI_MODEL: str = "gemini-2.5-flash-preview-native-audio-dialog"
+    GEMINI_MODEL: str = "gemini-2.5-flash-native-audio-preview-09-2025"
     DEFAULT_LANGUAGE: str = "fr-FR"  # French
     
     # Audio Configuration

@@ -66,7 +66,7 @@ CHUNK_SIZE = 2048
 # ------------------------------------------------------
 client = genai.Client()  # GOOGLE_API_KEY must be in .env
 
-MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
+MODEL = "gemini-2.5-flash-native-audio-preview-09-2025"
 tools = [get_user_name]
 
 CONFIG = {

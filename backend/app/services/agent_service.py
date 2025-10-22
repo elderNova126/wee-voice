@@ -123,10 +123,11 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         logger.info(f"  RAG enabled: {self.agent.rag_enabled}")
         logger.info(f"  Full instruction length: {len(system_instruction)} chars")
         
-        # Simplified config matching test.py (no speech_config or voice_config)
-        # Gemini will auto-select voice based on language in system instruction
+        # Build config matching the working test.py
+        # Include both AUDIO and TEXT responses for better interaction
+        # The model will automatically transcribe and understand user input
         config = {
-            "response_modalities": ["AUDIO"],
+            "response_modalities": ["AUDIO", "TEXT"],  # Include TEXT for model to understand and respond
             "system_instruction": types.Content(
                 parts=[types.Part(text=system_instruction)]
             ),
@@ -267,6 +268,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         """Receive audio responses from the agent"""
         logger.info(f"Starting audio reception for call {self.call.session_id}")
         response_count = 0
+        turn_count = 0
         
         # Give the session a moment to fully initialize
         # This prevents error 1011 from calling receive() before session is ready
@@ -276,12 +278,16 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         try:
             while True:
                 try:
+                    turn_count += 1
+                    logger.debug(f"Listening for turn {turn_count}...")
                     turn = self.session.receive()
                     async for response in turn:
                         response_count += 1
-                        print("------------", response)
+                        logger.debug(f"Received response #{response_count}: {type(response).__name__}")
+                        
                         # Handle audio data (inline_data)
                         if data := response.data:
+                            logger.debug(f"Yielding audio data: {len(data)} bytes")
                             yield data
                         
                         # Handle text (for transcript)
@@ -291,13 +297,20 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                             # Add to conversation buffer for RAG
                             self.conversation_buffer.append({"role": "agent", "text": text})
                         
+                        # Handle input transcript
+                        if hasattr(response, "input_transcript") and response.input_transcript:
+                            logger.info(f"User said: {response.input_transcript}")
+                            await self._save_message("user", response.input_transcript)
+                            self.conversation_buffer.append({"role": "user", "text": response.input_transcript})
+                        
                         # Handle tool calls
                         if function_call := response.tool_call:
                             logger.info(f"Gemini tool call: {function_call}")
                             await self._handle_tool_calls(function_call)
                 
                 except StopAsyncIteration:
-                    # Turn completed, ready for next turn
+                    # Turn completed normally, ready for next turn
+                    logger.debug(f"Turn {turn_count} completed, waiting for next turn...")
                     continue
                 except asyncio.CancelledError:
                     logger.info("Audio reception cancelled")
@@ -309,7 +322,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                         logger.info(f"Gemini connection closed: {turn_error}")
                         break
                     else:
-                        logger.error(f"Error in turn: {turn_error}", exc_info=True)
+                        logger.error(f"Error in turn {turn_count}: {turn_error}", exc_info=True)
                         # Wait a bit before retrying
                         await asyncio.sleep(0.1)
         
@@ -320,7 +333,7 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             logger.error(f"Error receiving audio: {e}", exc_info=True)
             raise
         finally:
-            logger.info(f"Audio reception ended for call {self.call.session_id} ({response_count} responses)")
+            logger.info(f"Audio reception ended for call {self.call.session_id} ({response_count} responses from {turn_count} turns)")
     
     async def _save_message(self, role: str, content: str):
         """Save message to database and build transcript"""
@@ -429,8 +442,15 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
                     # Use wait_for with timeout to allow cancellation
                     msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=1.0)
                     audio_sent_count += 1
+                    
+                    # Properly format audio as Blob with correct MIME type and sample rate
+                    audio_blob = types.Blob(
+                        data=msg["data"],
+                        mime_type="audio/pcm;rate=16000"
+                    )
+                    
                     # Send audio input to Gemini Live API
-                    await self.session.send_realtime_input(audio=msg)
+                    await self.session.send_realtime_input(audio=audio_blob)
                 except asyncio.TimeoutError:
                     # No audio in queue, continue waiting
                     continue
