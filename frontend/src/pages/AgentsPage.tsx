@@ -7,6 +7,7 @@ import {
   TrashIcon,
   PlayIcon,
   DocumentTextIcon,
+  CodeBracketIcon,
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, VoiceWebSocket } from '@/lib/api'
@@ -157,14 +158,23 @@ export default function AgentsPage() {
                   Start
                 </button>
                 <Link
+                  to={`/dashboard/agents/${agent.id}/embed`}
+                  className="p-2.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition"
+                  title="Embed Widget"
+                >
+                  <CodeBracketIcon className="h-4 w-4" />
+                </Link>
+                <Link
                   to={`/dashboard/agents/${agent.id}/edit`}
                   className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
+                  title="Edit Agent"
                 >
                   <PencilIcon className="h-4 w-4" />
                 </Link>
                 <button
                   onClick={() => handleDelete(agent.id)}
                   className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
+                  title="Delete Agent"
                 >
                   <TrashIcon className="h-4 w-4" />
                 </button>

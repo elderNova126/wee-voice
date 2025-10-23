@@ -7,6 +7,7 @@ from app.models.billing import Transaction, Invoice, UsageRecord, PaymentStatus,
 from app.models.security import DomainAllowlist, IPAllowlist, SecurityLog
 from app.models.support import SupportTicket, TicketResponse, TicketStatus, TicketPriority, TicketCategory
 from app.models.document import Document, DocumentChunk
+from app.models.zadarma import PhoneNumber, PhoneNumberStatus, VerificationDocument, DocumentType, VerificationStatus, CallbackRequest
 
 __all__ = [
     "Base",
@@ -33,5 +34,11 @@ __all__ = [
     "TicketCategory",
     "Document",
     "DocumentChunk",
+    "PhoneNumber",
+    "PhoneNumberStatus",
+    "VerificationDocument",
+    "DocumentType",
+    "VerificationStatus",
+    "CallbackRequest",
 ]
 

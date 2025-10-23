@@ -9,12 +9,33 @@ import os
 from app.models import get_db, User, Transaction, Invoice, PaymentStatus, InvoiceStatus
 from app.core.security import get_current_user
 from app.core.config import settings
+import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-# Initialize Stripe
-if settings.STRIPE_API_KEY:
-    stripe.api_key = settings.STRIPE_API_KEY
+# Initialize Stripe (optional - gracefully handle missing credentials)
+STRIPE_ENABLED = False
+try:
+    stripe_key = getattr(settings, 'STRIPE_SECRET_KEY', None) or getattr(settings, 'STRIPE_API_KEY', None)
+    if stripe_key and stripe_key.startswith('sk_'):
+        stripe.api_key = stripe_key
+        STRIPE_ENABLED = True
+        logger.info("Stripe initialized successfully")
+    else:
+        logger.warning("Stripe API key not configured or invalid. Billing features will be limited.")
+except Exception as e:
+    logger.warning(f"Failed to initialize Stripe: {e}. Billing features will be limited.")
+
+
+# Helper function to check Stripe availability
+def require_stripe():
+    """Check if Stripe is enabled, raise HTTPException if not"""
+    if not STRIPE_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment processing is not configured. Please contact support."
+        )
 
 
 # Pydantic models
@@ -114,11 +135,7 @@ async def create_payment_intent(
     current_user: User = Depends(get_current_user)
 ):
     """Create a Stripe payment intent"""
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Payment service not configured"
-        )
+    require_stripe()
     
     try:
         # Create or get Stripe customer
@@ -180,11 +197,7 @@ async def upgrade_subscription(
     current_user: User = Depends(get_current_user)
 ):
     """Upgrade user subscription"""
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Payment service not configured"
-        )
+    require_stripe()
     
     try:
         # Price IDs for different tiers (you should set these in your Stripe dashboard)
@@ -265,11 +278,7 @@ async def cancel_subscription(
     current_user: User = Depends(get_current_user)
 ):
     """Cancel user subscription"""
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Payment service not configured"
-        )
+    require_stripe()
     
     if not current_user.stripe_subscription_id:
         raise HTTPException(
@@ -301,10 +310,13 @@ async def cancel_subscription(
 @router.post("/webhook")
 async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     """Handle Stripe webhook events"""
-    if not settings.STRIPE_API_KEY or not settings.STRIPE_WEBHOOK_SECRET:
+    require_stripe()
+    
+    # Additional check for webhook secret
+    if not getattr(settings, 'STRIPE_WEBHOOK_SECRET', None):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Webhook not configured"
+            detail="Webhook secret not configured"
         )
     
     payload = await request.body()
@@ -436,11 +448,7 @@ async def top_up_credits(
     current_user: User = Depends(get_current_user)
 ):
     """Top up user credits"""
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Payment service not configured"
-        )
+    require_stripe()
     
     try:
         # Create or get Stripe customer

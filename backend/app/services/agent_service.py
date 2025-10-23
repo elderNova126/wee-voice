@@ -137,6 +137,32 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             "output_audio_transcription": {},  # Enable output transcription
         }
         
+        # Add voice config only for Gemini 2.0 compatible voices
+        # Valid voices for Gemini 2.0: Puck, Charon, Kore, Fenrir, Aoede
+        # Map language to voice or use agent's voice_id if it's valid
+        valid_voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
+        voice_name = self.agent.voice_id if self.agent.voice_id in valid_voices else None
+        
+        # If no valid voice set, map by language
+        if not voice_name:
+            if self.agent.language.startswith('fr'):
+                voice_name = "Aoede"  # French-friendly voice
+            elif self.agent.language.startswith('es'):
+                voice_name = "Kore"  # Spanish-friendly
+            else:
+                voice_name = "Puck"  # Default English voice
+        
+        # Add voice config
+        config["speech_config"] = {
+            "voice_config": {
+                "prebuilt_voice_config": {
+                    "voice_name": voice_name
+                }
+            }
+        }
+        
+        logger.info(f"Using voice: {voice_name} for language: {self.agent.language}")
+        
         # Add tools if enabled and available
         # Always check for RAG tools if RAG is enabled, even if tools_enabled is empty
         tools = self._load_tools()

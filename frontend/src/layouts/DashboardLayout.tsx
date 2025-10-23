@@ -33,6 +33,8 @@ const navigation = [
   { name: 'Tableau de bord', href: '/dashboard', icon: HomeIcon },
   { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
   { name: 'Appels', href: '/dashboard/calls', icon: PhoneIcon },
+  { name: 'Numéros de téléphone', href: '/dashboard/phone-numbers', icon: PhoneIcon },
+  { name: 'Rappels', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
   { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
   { name: 'Support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
 ]

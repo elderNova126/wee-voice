@@ -45,9 +45,18 @@ class VoiceAgent(Base):
     rag_enabled = Column(Boolean, default=False)
     rag_config = Column(JSON, nullable=True)  # RAG-specific settings (chunk size, retrieval count, etc.)
     
+    # Website embed settings
+    embed_enabled = Column(Boolean, default=False)
+    embed_widget_color = Column(String, default="#4F46E5")  # Primary color for widget
+    embed_position = Column(String, default="bottom-right")  # "bottom-right", "bottom-left"
+    embed_greeting_message = Column(Text, nullable=True)
+    allowed_domains = Column(JSON, default=list)  # List of domains where embed is allowed
+    
     # Relationships
     user = relationship("User", back_populates="agents")
     calls = relationship("Call", back_populates="agent", cascade="all, delete-orphan")
     usage_records = relationship("UsageRecord", back_populates="agent", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="agent", cascade="all, delete-orphan")
+    phone_number = relationship("PhoneNumber", back_populates="agent", uselist=False)
+    callback_requests = relationship("CallbackRequest", back_populates="agent", cascade="all, delete-orphan")
 

@@ -1,13 +1,14 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook
 
 # Set up logging
 logging.basicConfig(
@@ -47,6 +48,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files for voice widget
+static_path = Path(__file__).parent.parent / "static"
+if static_path.exists():
+    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+    logger.info(f"Static files mounted from: {static_path}")
+else:
+    logger.warning(f"Static files directory not found: {static_path}")
+
 
 # Root endpoint
 @app.get("/")
@@ -77,6 +86,10 @@ app.include_router(usage.router, prefix=f"{settings.API_V1_STR}/usage", tags=["U
 app.include_router(security.router, prefix=f"{settings.API_V1_STR}/security", tags=["Security"])
 app.include_router(profile.router, prefix=f"{settings.API_V1_STR}/profile", tags=["Profile"])
 app.include_router(documents.router, prefix=f"{settings.API_V1_STR}/agents", tags=["Documents & RAG"])  # Routes: /{agent_id}/documents, /{agent_id}/documents/website
+app.include_router(phone_numbers.router, prefix=f"{settings.API_V1_STR}/phone-numbers", tags=["Phone Numbers"])
+app.include_router(callbacks.router, prefix=f"{settings.API_V1_STR}/callbacks", tags=["Callbacks"])
+app.include_router(embed.router, prefix=f"{settings.API_V1_STR}/embed", tags=["Embed Widget"])
+app.include_router(zadarma_webhook.router, prefix=f"{settings.API_V1_STR}/zadarma", tags=["Zadarma Webhooks"])
 
 
 # Global exception handler

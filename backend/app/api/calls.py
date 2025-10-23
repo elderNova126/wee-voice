@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.core.security import get_current_active_user
 from app.models import get_db, User, Call, CallMessage, CallStatus
 from app.services.agent_service import CallSummaryService
+from app.services.notification_service import get_notification_service
 
 router = APIRouter()
 
@@ -147,6 +148,11 @@ async def generate_summary(
     result = await summary_service.generate_summary(call)
     
     db.commit()
+    
+    # Send email notification with summary
+    if result.get("summary"):
+        notification_service = get_notification_service()
+        await notification_service.send_call_summary_email(db, call, result)
     
     return result
 

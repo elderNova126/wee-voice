@@ -56,3 +56,4 @@ htmlcov/
 # Docker
 docker-compose.override.yml
 
+ZADARMA_CREDENTIALS.txt

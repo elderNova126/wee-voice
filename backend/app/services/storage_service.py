@@ -13,22 +13,22 @@ class StorageService:
     
     def __init__(self):
         self.supabase: Optional[Client] = None
-        self.bucket_name = settings.SUPABASE_STORAGE_BUCKET
+        self.bucket_name = getattr(settings, 'SUPABASE_STORAGE_BUCKET', 'voice-agent-documents')
         self.initialized = False
         
-        # Initialize Supabase client
-        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:
+        # Initialize Supabase client (optional - gracefully handle missing credentials)
+        supabase_url = getattr(settings, 'SUPABASE_URL', None)
+        supabase_key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', None)
+        
+        if supabase_url and supabase_key:
             try:
-                self.supabase = create_client(
-                    settings.SUPABASE_URL,
-                    settings.SUPABASE_SERVICE_ROLE_KEY
-                )
+                self.supabase = create_client(supabase_url, supabase_key)
                 logger.info("✅ Supabase storage client initialized")
             except Exception as e:
-                logger.error(f"❌ Failed to initialize Supabase client: {e}")
-                raise
+                logger.warning(f"⚠️ Failed to initialize Supabase client: {e}. File uploads will use local storage.")
+                self.supabase = None
         else:
-            logger.warning("⚠️ Supabase credentials not configured. File upload will fail.")
+            logger.warning("⚠️ Supabase credentials not configured. File uploads will use local storage.")
     
     async def initialize_bucket(self) -> None:
         """Ensure Supabase Storage bucket exists"""
@@ -73,26 +73,35 @@ class StorageService:
     async def upload_file(
         self,
         file_content: bytes,
-        filename: str,
-        agent_id: int,
-        user_id: int,
-        mime_type: str = "application/pdf"
-    ) -> Tuple[str, str]:
+        file_path: str = None,
+        filename: str = None,
+        agent_id: int = None,
+        user_id: int = None,
+        mime_type: str = "application/pdf",
+        content_type: str = None
+    ) -> str:
         """
-        Upload a file to Supabase Storage
+        Upload a file to Supabase Storage or local storage
         
         Args:
             file_content: File content as bytes
+            file_path: Optional file path to use
             filename: Original filename
             agent_id: Agent ID for organizing files
             user_id: User ID for organizing files
             mime_type: MIME type of the file
+            content_type: Alternative parameter for mime_type
         
         Returns:
-            Tuple of (public_url, file_path)
+            File path or public URL
         """
+        # Use content_type if provided (for compatibility)
+        if content_type:
+            mime_type = content_type
+            
+        # If Supabase is not configured, fall back to local storage
         if not self.supabase:
-            raise Exception("Supabase client not initialized. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
+            return await self._upload_local(file_content, file_path or filename, user_id, agent_id)
         
         await self.initialize_bucket()
         
@@ -101,10 +110,14 @@ class StorageService:
         if len(file_content) > max_size:
             raise Exception(f"File size exceeds limit of {max_size / (1024 * 1024)}MB")
         
-        # Generate unique file path
-        timestamp = int(datetime.utcnow().timestamp() * 1000)
-        safe_filename = filename.replace(" ", "_").replace("/", "-")
-        file_path = f"users/{user_id}/agents/{agent_id}/{timestamp}_{safe_filename}"
+        # Generate unique file path  
+        if not file_path:
+            timestamp = int(datetime.utcnow().timestamp() * 1000)
+            safe_filename = (filename or "file").replace(" ", "_").replace("/", "-")
+            if user_id and agent_id:
+                file_path = f"users/{user_id}/agents/{agent_id}/{timestamp}_{safe_filename}"
+            else:
+                file_path = f"uploads/{timestamp}_{safe_filename}"
         
         logger.info(f"🔄 Uploading file: {filename} ({len(file_content)} bytes) to {file_path}")
         
@@ -156,7 +169,8 @@ class StorageService:
             
             logger.info(f"✅ Uploaded: {file_path} -> {public_url}")
             
-            return public_url, file_path
+            # Return just the file path for consistency (can be local path or storage path)
+            return file_path
             
         except Exception as e:
             logger.error(f"❌ Upload failed: {e}")
@@ -216,11 +230,73 @@ class StorageService:
             logger.error(f"❌ Error extracting file path from URL: {e}")
             return None
     
+    async def _upload_local(
+        self,
+        file_content: bytes,
+        filename: str,
+        user_id: int = None,
+        agent_id: int = None
+    ) -> str:
+        """
+        Upload file to local storage as fallback
+        
+        Args:
+            file_content: File content as bytes
+            filename: Filename
+            user_id: User ID
+            agent_id: Agent ID
+            
+        Returns:
+            Local file path
+        """
+        try:
+            # Create upload directory structure
+            upload_dir = getattr(settings, 'UPLOAD_DIR', 'uploads')
+            if user_id and agent_id:
+                full_path = os.path.join(upload_dir, 'documents', str(user_id), str(agent_id))
+            else:
+                full_path = os.path.join(upload_dir, 'documents')
+            
+            os.makedirs(full_path, exist_ok=True)
+            
+            # Generate unique filename
+            timestamp = int(datetime.utcnow().timestamp() * 1000)
+            safe_filename = filename.replace(" ", "_").replace("/", "-")
+            file_path = os.path.join(full_path, f"{timestamp}_{safe_filename}")
+            
+            # Write file
+            with open(file_path, 'wb') as f:
+                f.write(file_content)
+            
+            logger.info(f"✅ Uploaded to local storage: {file_path}")
+            return file_path
+            
+        except Exception as e:
+            logger.error(f"❌ Local upload failed: {e}")
+            raise Exception(f"Local upload failed: {str(e)}")
+    
     def is_storage_enabled(self) -> bool:
         """Check if Supabase storage is properly configured"""
         return self.supabase is not None
 
 
 # Global instance
-storage_service = StorageService()
+_storage_service = None
+
+
+def get_storage_service() -> StorageService:
+    """
+    Get or create the global storage service instance
+    
+    Returns:
+        StorageService instance
+    """
+    global _storage_service
+    if _storage_service is None:
+        _storage_service = StorageService()
+    return _storage_service
+
+
+# Legacy global instance for backward compatibility
+storage_service = get_storage_service()
 

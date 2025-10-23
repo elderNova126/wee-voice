@@ -1,0 +1,209 @@
+/* WeeVoice Widget Styles */
+
+.weevoice-widget {
+  position: fixed;
+  z-index: 9999;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.weevoice-widget.bottom-right {
+  bottom: 20px;
+  right: 20px;
+}
+
+.weevoice-widget.bottom-left {
+  bottom: 20px;
+  left: 20px;
+}
+
+.weevoice-button {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: none;
+  background-color: #4F46E5;
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.weevoice-button:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+.weevoice-button svg {
+  width: 28px;
+  height: 28px;
+}
+
+.weevoice-panel {
+  position: absolute;
+  bottom: 80px;
+  right: 0;
+  width: 350px;
+  max-width: calc(100vw - 40px);
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.weevoice-panel.hidden {
+  display: none;
+}
+
+.weevoice-header {
+  padding: 16px 20px;
+  background-color: #4F46E5;
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.weevoice-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.weevoice-close {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.weevoice-close:hover {
+  opacity: 1;
+}
+
+.weevoice-body {
+  padding: 20px;
+}
+
+.weevoice-status {
+  text-align: center;
+}
+
+.weevoice-status p {
+  margin: 0 0 20px 0;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.weevoice-start-btn,
+.weevoice-end-btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+}
+
+.weevoice-start-btn {
+  background-color: #4F46E5;
+  color: white;
+}
+
+.weevoice-start-btn:hover {
+  background-color: #4338CA;
+}
+
+.weevoice-end-btn {
+  background-color: #EF4444;
+  color: white;
+  margin-top: 16px;
+}
+
+.weevoice-end-btn:hover {
+  background-color: #DC2626;
+}
+
+.weevoice-call {
+  text-align: center;
+}
+
+.weevoice-call.hidden {
+  display: none;
+}
+
+.weevoice-waveform {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  height: 60px;
+  margin-bottom: 16px;
+}
+
+.weevoice-wave {
+  width: 4px;
+  background-color: #4F46E5;
+  border-radius: 2px;
+  animation: wave 1s ease-in-out infinite;
+}
+
+.weevoice-wave:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.weevoice-wave:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+.weevoice-wave:nth-child(4) {
+  animation-delay: 0.3s;
+}
+
+@keyframes wave {
+  0%, 100% {
+    height: 20px;
+  }
+  50% {
+    height: 40px;
+  }
+}
+
+.weevoice-transcript {
+  min-height: 60px;
+  padding: 12px;
+  background-color: #F3F4F6;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+/* Mobile responsive */
+@media (max-width: 480px) {
+  .weevoice-panel {
+    width: calc(100vw - 40px);
+  }
+  
+  .weevoice-button {
+    width: 56px;
+    height: 56px;
+  }
+}
+

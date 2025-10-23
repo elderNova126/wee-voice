@@ -307,8 +307,8 @@ export default function AgentFormPage() {
                 onChange={handleChange}
                 placeholder={
                   formData.language === 'fr-FR'
-                    ? "Bonjour, je suis Cédric de Weedoo. Comment puis-je vous aider ?"
-                    : "Hello, I'm Cedric from Weedoo. How can I help you?"
+                    ? "Bonjour, je suis assistante chez Weedoo. Comment puis-je vous aider ?"
+                    : "Hello, I'm a assistant from Weedoo. How can I help you?"
                 }
                 className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all resize-none"
               />

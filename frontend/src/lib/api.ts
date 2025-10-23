@@ -315,3 +315,6 @@ export class VoiceWebSocket {
   }
 }
 
+// Default export for backward compatibility
+export default api
+
