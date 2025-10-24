@@ -15,7 +15,8 @@ class VoiceAgent(Base):
     
     # Agent configuration
     language = Column(String, default="fr-FR")  # French by default
-    voice_id = Column(String, default="fr-FR-Neural2-A")
+    voice_id = Column(String, default="Charon")  # Gemini 2.5 voice (Puck, Charon, Kore, Fenrir, Aoede)
+    voice_gender = Column(String, default="male")  # Voice gender: male, female, neutral
     system_prompt = Column(Text, nullable=False)
     greeting = Column(Text, nullable=True)  # Custom greeting message for the agent
     

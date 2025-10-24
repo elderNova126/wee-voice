@@ -137,18 +137,34 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             "output_audio_transcription": {},  # Enable output transcription
         }
         
-        # Add voice config only for Gemini 2.0 compatible voices
-        # Valid voices for Gemini 2.0: Puck, Charon, Kore, Fenrir, Aoede
-        # Map language to voice or use agent's voice_id if it's valid
+        # Add voice config for Gemini 2.5 Flash compatible voices
+        # Valid voices for Gemini 2.5 Flash: Puck, Charon, Kore, Fenrir, Aoede
         valid_voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
-        voice_name = self.agent.voice_id if self.agent.voice_id in valid_voices else None
         
-        # If no valid voice set, map by language
-        if not voice_name:
+        # Priority 1: Use voice_gender preference (most important)
+        # Priority 2: Use voice_id if it's valid Gemini voice
+        # Priority 3: Default by language
+        voice_gender = getattr(self.agent, 'voice_gender', None)
+        
+        if voice_gender:
+            # User explicitly chose a voice type - respect it
+            if voice_gender == "female":
+                voice_name = "Kore"  # Female voice, softer tone
+            elif voice_gender == "male":
+                voice_name = "Charon"  # Male voice, deeper tone (less American)
+            elif voice_gender == "neutral":
+                voice_name = "Puck"  # Neutral/standard voice
+            else:
+                voice_name = "Charon"  # Default to male if invalid gender
+        elif self.agent.voice_id in valid_voices:
+            # Valid Gemini voice_id is set, use it
+            voice_name = self.agent.voice_id
+        else:
+            # No preference, default by language
             if self.agent.language.startswith('fr'):
-                voice_name = "Aoede"  # French-friendly voice
+                voice_name = "Charon"  # Deeper voice for French
             elif self.agent.language.startswith('es'):
-                voice_name = "Kore"  # Spanish-friendly
+                voice_name = "Kore"  # Female voice for Spanish
             else:
                 voice_name = "Puck"  # Default English voice
         
@@ -161,7 +177,11 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             }
         }
         
-        logger.info(f"Using voice: {voice_name} for language: {self.agent.language}")
+        logger.info(f"Voice selection for agent {self.agent.id}:")
+        logger.info(f"  - Language: {self.agent.language}")
+        logger.info(f"  - Voice Gender: {voice_gender}")
+        logger.info(f"  - Voice ID: {self.agent.voice_id}")
+        logger.info(f"  - Selected Voice: {voice_name}")
         
         # Add tools if enabled and available
         # Always check for RAG tools if RAG is enabled, even if tools_enabled is empty

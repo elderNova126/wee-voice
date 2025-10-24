@@ -128,7 +128,8 @@ CREATE TABLE voice_agents (
     
     -- Agent configuration
     language VARCHAR(50) DEFAULT 'fr-FR',
-    voice_id VARCHAR(100) DEFAULT 'fr-FR-Neural2-A',
+    voice_id VARCHAR(100) DEFAULT 'Charon',
+    voice_gender VARCHAR(20) DEFAULT 'male',
     system_prompt TEXT NOT NULL,
     greeting TEXT,
     

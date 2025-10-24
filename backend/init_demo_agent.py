@@ -47,7 +47,8 @@ def init_demo_agent():
             name="Assistant Démo Français",
             description="Agent de démonstration en français pour tester la plateforme",
             language="fr-FR",
-            voice_id="fr-FR-Neural2-A",
+            voice_id="Charon",  # Gemini 2.5 voice (deeper, less American for French)
+            voice_gender="male",
             system_prompt="""Vous êtes un assistant vocal intelligent et serviable de Weedoo, qui répond toujours en français, de manière naturelle et amicale.
 
 Tu peux aider avec:
@@ -80,7 +81,8 @@ Reste toujours poli, clair et concis dans tes réponses.""",
             name="English Demo Assistant",
             description="English demonstration agent to test the platform",
             language="en-US",
-            voice_id="en-US-Neural2-D",
+            voice_id="Puck",  # Gemini 2.5 voice (default English)
+            voice_gender="neutral",
             system_prompt="""You are an intelligent and helpful voice assistant of Weedoo who always responds in English in a natural and friendly manner.
 
 You can help with:

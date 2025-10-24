@@ -15,6 +15,7 @@ interface AgentFormData {
   name: string
   description: string
   language: string
+  voice_gender: string
   system_prompt: string
   greeting?: string
   is_public: boolean
@@ -40,6 +41,7 @@ export default function AgentFormPage() {
     name: '',
     description: '',
     language: 'fr-FR',
+    voice_gender: 'male',
     system_prompt: '',
     greeting: '',
     is_public: false,
@@ -62,6 +64,7 @@ export default function AgentFormPage() {
         name: agent.name,
         description: agent.description || '',
         language: agent.language || 'fr-FR',
+        voice_gender: agent.voice_gender || 'male',
         system_prompt: agent.system_prompt || '',
         greeting: agent.greeting || '',
         is_public: agent.is_public ?? false,
@@ -333,6 +336,28 @@ export default function AgentFormPage() {
                 <option value="fr-FR">🇫🇷 French</option>
                 <option value="en-US">🇬🇧 English</option>
               </select>
+            </div>
+
+            {/* Voice Gender */}
+            <div>
+              <label htmlFor="voice_gender" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Voice Type *
+              </label>
+              <select
+                id="voice_gender"
+                name="voice_gender"
+                required
+                value={formData.voice_gender}
+                onChange={handleChange}
+                className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all"
+              >
+                <option value="male">🗣️ Male (Charon - Deep voice)</option>
+                <option value="female">👤 Female (Kore - Soft voice)</option>
+                <option value="neutral">🎙️ Neutral (Puck - Standard voice)</option>
+              </select>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                Note: All voices have a slight English accent. This is a limitation of Gemini 2.5 Flash.
+              </p>
             </div>
 
             {/* Checkboxes */}

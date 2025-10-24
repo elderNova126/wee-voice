@@ -13,7 +13,8 @@ class AgentCreate(BaseModel):
     name: str
     description: Optional[str] = None
     language: str = "fr-FR"
-    voice_id: str = "fr-FR-Neural2-A"
+    voice_id: str = "Charon"  # Gemini 2.5 voice (Charon/Kore/Fenrir/Aoede/Puck only)
+    voice_gender: str = "male"  # Voice gender: male, female, neutral
     system_prompt: str
     greeting: Optional[str] = None
     tools_enabled: List[str] = []
@@ -27,6 +28,7 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = None
     language: Optional[str] = None
     voice_id: Optional[str] = None
+    voice_gender: Optional[str] = None
     system_prompt: Optional[str] = None
     greeting: Optional[str] = None
     tools_enabled: Optional[List[str]] = None
@@ -42,6 +44,7 @@ class AgentResponse(BaseModel):
     description: Optional[str]
     language: str
     voice_id: str
+    voice_gender: str
     system_prompt: str
     greeting: Optional[str] = None
     tools_enabled: List[str]
