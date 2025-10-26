@@ -572,7 +572,7 @@ Réponds en JSON avec les clés: summary, key_points (liste), sentiment, action_
         try:
             # Use native Gemini API for summarization
             response = await self.client.aio.models.generate_content(
-                model="gemini-2.0-flash-exp",
+                model="gemini-2.5-flash-native-audio-preview-09-2025",
                 contents=prompt,
                 config={
                     "temperature": 0.3,
