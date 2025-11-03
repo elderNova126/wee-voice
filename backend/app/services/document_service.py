@@ -19,17 +19,17 @@ class DocumentService:
     """Service for handling document upload, processing, and text extraction"""
     
     def __init__(self):
-        # Use Supabase storage instead of local directory
+        # Use storage service instead of local directory
         # Keep upload_dir for backward compatibility with local fallback
         self.upload_dir = "uploads/documents"
-        self.use_supabase = storage_service.is_storage_enabled()
+        self.use_storage = storage_service.is_storage_enabled()
         
-        if not self.use_supabase:
-            # Fallback to local storage if Supabase is not configured
+        if not self.use_storage:
+            # Fallback to local storage if storage is not configured
             os.makedirs(self.upload_dir, exist_ok=True)
-            logger.warning("⚠️ Supabase storage not configured. Using local file storage as fallback.")
+            logger.warning("⚠️ Storage service not configured. Using local file storage as fallback.")
         else:
-            logger.info("✅ Using Supabase storage for document uploads")
+            logger.info("✅ Using storage service for document uploads")
         
         # Initialize OpenAI client for OCR if API key is available
         self.openai_client = None
@@ -230,10 +230,10 @@ class DocumentService:
         temp_file_path = None
         
         try:
-            if self.use_supabase:
-                # Upload to Supabase Storage
-                logger.info(f"Uploading {filename} to Supabase Storage...")
-                public_url, file_path = await storage_service.upload_file(
+            if self.use_storage:
+                # Upload to storage service
+                logger.info(f"Uploading {filename} to storage service...")
+                file_path = await storage_service.upload_file(
                     file_content=file_content,
                     filename=document.filename,
                     agent_id=agent_id,
@@ -242,7 +242,13 @@ class DocumentService:
                 )
                 
                 document.file_path = file_path
-                document.file_url = public_url
+                # Generate public URL if needed
+                if storage_service.is_storage_enabled():
+                    try:
+                        public_url = storage_service.get_public_url(file_path)
+                        document.file_url = public_url
+                    except Exception as e:
+                        logger.warning(f"Could not generate public URL: {e}")
                 
                 # Create temporary file for PDF processing
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
@@ -271,7 +277,7 @@ class DocumentService:
             document.doc_metadata = {
                 'text_length': len(text),
                 'extraction_method': 'ocr' if self._is_scanned_pdf(fitz.open(pdf_file_path), text) else 'standard',
-                'storage_type': 'supabase' if self.use_supabase else 'local'
+                'storage_type': 'storage' if self.use_storage else 'local'
             }
             
             # Chunk text

@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     # Startup
     logger.info("Starting VoiceAgent SaaS application...")
-    logger.info("Skipping automatic table creation - use Supabase SQL schema instead")
+    logger.info("Skipping automatic table creation - use database SQL schema instead")
     
     yield
     

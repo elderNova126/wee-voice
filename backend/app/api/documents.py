@@ -205,10 +205,10 @@ async def delete_document(
     # Delete file from storage
     if document.file_path:
         try:
-            # Check if using Supabase storage (file_url is set) or local storage
+            # Check if using storage service (file_url is set) or local storage
             if document.file_url and storage_service.is_storage_enabled():
-                # Delete from Supabase storage
-                logger.info(f"Deleting file from Supabase: {document.file_path}")
+                # Delete from storage service
+                logger.info(f"Deleting file from storage: {document.file_path}")
                 await storage_service.delete_file(document.file_path)
             else:
                 # Delete from local storage

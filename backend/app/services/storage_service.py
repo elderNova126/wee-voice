@@ -9,45 +9,45 @@ logger = logging.getLogger(__name__)
 
 
 class StorageService:
-    """Service for handling file storage operations using Supabase Storage"""
+    """Service for handling file storage operations"""
     
     def __init__(self):
-        self.supabase: Optional[Client] = None
-        self.bucket_name = getattr(settings, 'SUPABASE_STORAGE_BUCKET', 'voice-agent-documents')
+        self.storage_client: Optional[Client] = None
+        self.bucket_name = getattr(settings, 'STORAGE_BUCKET', 'voice-agent-documents')
         self.initialized = False
         
-        # Initialize Supabase client (optional - gracefully handle missing credentials)
-        supabase_url = getattr(settings, 'SUPABASE_URL', None)
-        supabase_key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', None)
+        # Initialize storage client (optional - gracefully handle missing credentials)
+        storage_url = getattr(settings, 'STORAGE_URL', None)
+        storage_key = getattr(settings, 'STORAGE_KEY', None)
         
-        if supabase_url and supabase_key:
+        if storage_url and storage_key:
             try:
-                self.supabase = create_client(supabase_url, supabase_key)
-                logger.info("✅ Supabase storage client initialized")
+                self.storage_client = create_client(storage_url, storage_key)
+                logger.info("✅ Storage client initialized")
             except Exception as e:
-                logger.warning(f"⚠️ Failed to initialize Supabase client: {e}. File uploads will use local storage.")
-                self.supabase = None
+                logger.warning(f"⚠️ Failed to initialize storage client: {e}. File uploads will use local storage.")
+                self.storage_client = None
         else:
-            logger.warning("⚠️ Supabase credentials not configured. File uploads will use local storage.")
+            logger.warning("⚠️ Storage credentials not configured. File uploads will use local storage.")
     
     async def initialize_bucket(self) -> None:
-        """Ensure Supabase Storage bucket exists"""
-        if self.initialized or not self.supabase:
+        """Ensure storage bucket exists"""
+        if self.initialized or not self.storage_client:
             return
         
         try:
-            logger.info(f"🔄 Initializing Supabase storage bucket: {self.bucket_name}")
+            logger.info(f"🔄 Initializing storage bucket: {self.bucket_name}")
             
             # Check if bucket exists
             try:
-                bucket_info = self.supabase.storage.get_bucket(self.bucket_name)
-                logger.info(f"✅ Using existing Supabase storage bucket: {self.bucket_name}")
+                bucket_info = self.storage_client.storage.get_bucket(self.bucket_name)
+                logger.info(f"✅ Using existing storage bucket: {self.bucket_name}")
             except Exception as bucket_error:
                 # Bucket doesn't exist, create it
                 logger.info(f"📦 Bucket {self.bucket_name} not found, creating...")
                 
                 try:
-                    self.supabase.storage.create_bucket(
+                    self.storage_client.storage.create_bucket(
                         self.bucket_name,
                         options={
                             "public": True,
@@ -59,7 +59,7 @@ class StorageService:
                             ]
                         }
                     )
-                    logger.info(f"✅ Created Supabase storage bucket: {self.bucket_name}")
+                    logger.info(f"✅ Created storage bucket: {self.bucket_name}")
                 except Exception as create_error:
                     logger.error(f"❌ Error creating storage bucket: {create_error}")
                     raise Exception(f"Failed to create storage bucket: {str(create_error)}")
@@ -81,7 +81,7 @@ class StorageService:
         content_type: str = None
     ) -> str:
         """
-        Upload a file to Supabase Storage or local storage
+        Upload a file to storage or local storage
         
         Args:
             file_content: File content as bytes
@@ -99,8 +99,8 @@ class StorageService:
         if content_type:
             mime_type = content_type
             
-        # If Supabase is not configured, fall back to local storage
-        if not self.supabase:
+        # If storage client is not configured, fall back to local storage
+        if not self.storage_client:
             return await self._upload_local(file_content, file_path or filename, user_id, agent_id)
         
         await self.initialize_bucket()
@@ -131,8 +131,8 @@ class StorageService:
                 try:
                     logger.info(f"🔄 Upload attempt {retry_count + 1}/{max_retries} for {file_path}")
                     
-                    # Upload to Supabase Storage
-                    result = self.supabase.storage.from_(self.bucket_name).upload(
+                    # Upload to storage
+                    result = self.storage_client.storage.from_(self.bucket_name).upload(
                         path=file_path,
                         file=file_content,
                         file_options={
@@ -161,7 +161,7 @@ class StorageService:
                 raise Exception(f"Upload failed: {str(upload_error)}")
             
             # Get public URL
-            public_url_response = self.supabase.storage.from_(self.bucket_name).get_public_url(file_path)
+            public_url_response = self.storage_client.storage.from_(self.bucket_name).get_public_url(file_path)
             public_url = public_url_response
             
             if not public_url:
@@ -178,13 +178,13 @@ class StorageService:
     
     async def delete_file(self, file_path: str) -> None:
         """
-        Delete a file from Supabase Storage
+        Delete a file from storage
         
         Args:
             file_path: Path to the file in the storage bucket
         """
-        if not self.supabase:
-            raise Exception("Supabase client not initialized")
+        if not self.storage_client:
+            raise Exception("Storage client not initialized")
         
         if not file_path:
             raise Exception("File path is required")
@@ -194,7 +194,7 @@ class StorageService:
         try:
             logger.info(f"🔄 Deleting file: {file_path}")
             
-            result = self.supabase.storage.from_(self.bucket_name).remove([file_path])
+            result = self.storage_client.storage.from_(self.bucket_name).remove([file_path])
             
             logger.info(f"✅ Deleted file: {file_path}")
             
@@ -204,7 +204,7 @@ class StorageService:
     
     def extract_file_path_from_url(self, url: str) -> Optional[str]:
         """
-        Extract the file path from a Supabase public URL
+        Extract the file path from a storage public URL
         
         Args:
             url: Public URL of the file
@@ -218,7 +218,7 @@ class StorageService:
             parsed_url = urlparse(url)
             path = parsed_url.path
             
-            # Supabase storage URLs format: /storage/v1/object/public/{bucket}/{path}
+            # Storage URLs format: /storage/v1/object/public/{bucket}/{path}
             prefix = f'/storage/v1/object/public/{self.bucket_name}/'
             
             if prefix in path:
@@ -275,9 +275,29 @@ class StorageService:
             logger.error(f"❌ Local upload failed: {e}")
             raise Exception(f"Local upload failed: {str(e)}")
     
+    def get_public_url(self, file_path: str) -> Optional[str]:
+        """
+        Get the public URL for a file in storage
+        
+        Args:
+            file_path: Path to the file in storage
+        
+        Returns:
+            Public URL or None if storage is not enabled
+        """
+        if not self.storage_client:
+            return None
+        
+        try:
+            public_url_response = self.storage_client.storage.from_(self.bucket_name).get_public_url(file_path)
+            return public_url_response
+        except Exception as e:
+            logger.error(f"❌ Error getting public URL: {e}")
+            return None
+    
     def is_storage_enabled(self) -> bool:
-        """Check if Supabase storage is properly configured"""
-        return self.supabase is not None
+        """Check if storage is properly configured"""
+        return self.storage_client is not None
 
 
 # Global instance

@@ -18,12 +18,10 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./voiceagent.db")
     
-    # Supabase (optional - for PostgreSQL)
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
-    SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", "")
-    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-    SUPABASE_STORAGE_BUCKET: str = os.getenv("SUPABASE_STORAGE_BUCKET", "voice-agent-documents")
+    # Storage (for file storage service)
+    STORAGE_URL: str = os.getenv("STORAGE_URL", "")
+    STORAGE_KEY: str = os.getenv("STORAGE_KEY", "")
+    STORAGE_BUCKET: str = os.getenv("STORAGE_BUCKET", "voice-agent-documents")
     
     # Google Gemini API
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")

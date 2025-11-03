@@ -15,8 +15,8 @@ class Document(Base):
     # File information
     filename = Column(String, nullable=False)  # Stored filename
     original_filename = Column(String, nullable=False)  # User's original filename
-    file_path = Column(String, nullable=True)  # Path to stored file (local path or Supabase path)
-    file_url = Column(String, nullable=True)  # Public URL for Supabase storage
+    file_path = Column(String, nullable=True)  # Path to stored file (local path or storage path)
+    file_url = Column(String, nullable=True)  # Public URL for storage
     file_size = Column(Integer, nullable=True)  # File size in bytes
     mime_type = Column(String, default="application/pdf")
     
