@@ -1,7 +1,7 @@
 -- ===================================================================
 -- VoiceAgent SaaS - Complete Database Schema
--- PostgreSQL Schema for French Voice Agent Platform
--- Consolidated from: complete_schema.sql, add_rag_tables.sql, migrations
+-- PostgreSQL Schema for Voice Agent Platform
+-- Consolidated Schema with all migrations included
 -- Date: 2025-10-22
 -- ===================================================================
 --
@@ -11,6 +11,8 @@
 -- 3. Billing & Usage tracking
 -- 4. Security (domain/IP allowlists, logs)
 -- 5. Support ticketing system
+-- 6. Phone numbers and Zadarma integration
+-- 7. Verification documents and callback requests
 -- ===================================================================
 
 -- Enable UUID extension
@@ -43,6 +45,9 @@ DROP TABLE IF EXISTS domain_allowlists CASCADE;
 DROP TABLE IF EXISTS usage_records CASCADE;
 DROP TABLE IF EXISTS invoices CASCADE;
 DROP TABLE IF EXISTS transactions CASCADE;
+DROP TABLE IF EXISTS callback_requests CASCADE;
+DROP TABLE IF EXISTS verification_documents CASCADE;
+DROP TABLE IF EXISTS phone_numbers CASCADE;
 DROP TABLE IF EXISTS call_messages CASCADE;
 DROP TABLE IF EXISTS calls CASCADE;
 DROP TABLE IF EXISTS document_chunks CASCADE;
@@ -137,7 +142,7 @@ CREATE TABLE voice_agents (
     agent_config JSONB,
     tools_enabled JSONB DEFAULT '[]'::JSONB,
     
-    -- Model settings (UPDATED TO CORRECT MODEL)
+    -- Model settings
     model_name VARCHAR(255) DEFAULT 'gemini-2.5-flash-native-audio-preview-09-2025',
     temperature VARCHAR(10) DEFAULT '0.7',
     max_tokens INTEGER DEFAULT 1000,
@@ -150,6 +155,13 @@ CREATE TABLE voice_agents (
     crm_webhook_url VARCHAR(500),
     crm_enabled BOOLEAN DEFAULT FALSE,
     crm_config JSONB,
+    
+    -- Embed settings
+    embed_enabled BOOLEAN DEFAULT FALSE,
+    embed_widget_color VARCHAR(20) DEFAULT '#4F46E5',
+    embed_position VARCHAR(20) DEFAULT 'bottom-right',
+    embed_greeting_message TEXT,
+    allowed_domains JSONB,
     
     -- Status
     is_active BOOLEAN DEFAULT TRUE,
@@ -251,12 +263,13 @@ CREATE TABLE calls (
     agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
     
     -- Call metadata
-    session_id VARCHAR(255) UNIQUE NOT NULL,
+    session_id VARCHAR(255) UNIQUE,  -- Nullable for phone calls
     status call_status DEFAULT 'initiated',
     
     -- Duration and cost
     duration_seconds FLOAT DEFAULT 0.0,
     duration_minutes FLOAT DEFAULT 0.0,
+    duration INTEGER DEFAULT 0,  -- Integer version for compatibility
     cost FLOAT DEFAULT 0.0,
     
     -- Audio files
@@ -281,6 +294,17 @@ CREATE TABLE calls (
     crm_record_id VARCHAR(255),
     crm_response JSONB,
     
+    -- Zadarma integration
+    zadarma_call_id VARCHAR(255),
+    direction VARCHAR(50),  -- inbound, outbound
+    disposition VARCHAR(50),  -- answered, no_answer, busy, failed
+    
+    -- Callback and email
+    callback_requested BOOLEAN DEFAULT FALSE,
+    callback_reason TEXT,
+    summary_email_sent BOOLEAN DEFAULT FALSE,
+    summary_email_sent_at TIMESTAMP,
+    
     -- Timestamps
     started_at TIMESTAMP,
     ended_at TIMESTAMP,
@@ -299,6 +323,8 @@ CREATE INDEX idx_calls_agent_created ON calls(agent_id, created_at DESC);
 CREATE INDEX idx_calls_user_status ON calls(user_id, status);
 CREATE INDEX idx_calls_key_points ON calls USING GIN (key_points);
 CREATE INDEX idx_calls_transcript ON calls USING GIN (to_tsvector('french', transcript));
+CREATE INDEX idx_calls_zadarma_call_id ON calls(zadarma_call_id);
+CREATE INDEX idx_calls_callback_requested ON calls(callback_requested);
 
 -- ===================================================================
 -- CALL MESSAGES TABLE
@@ -324,10 +350,134 @@ CREATE INDEX idx_messages_timestamp ON call_messages(timestamp);
 CREATE INDEX idx_messages_role ON call_messages(role);
 
 -- ===================================================================
+-- PHONE NUMBERS TABLE
+-- ===================================================================
+
+CREATE TABLE phone_numbers (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id INTEGER REFERENCES voice_agents(id) ON DELETE SET NULL,
+    
+    -- Phone number details
+    phone_number VARCHAR(50) UNIQUE NOT NULL,
+    country_code VARCHAR(10) NOT NULL,
+    number_type VARCHAR(20) NOT NULL,  -- "local", "toll-free", "mobile"
+    
+    -- Integration
+    zadarma_number_id VARCHAR(255),
+    zadarma_status VARCHAR(50),
+    zadarma_config JSONB,
+    
+    -- Status
+    status VARCHAR(50) DEFAULT 'pending',  -- pending, documents_submitted, under_review, approved, rejected, active, suspended, cancelled
+    status_message TEXT,
+    
+    -- Pricing
+    monthly_cost VARCHAR(20) DEFAULT '0.00',
+    per_minute_cost VARCHAR(20) DEFAULT '0.00',
+    
+    -- Business information
+    business_name VARCHAR(255),
+    business_type VARCHAR(50),  -- "company" or "individual"
+    business_address TEXT,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    activated_at TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_phone_numbers_phone ON phone_numbers(phone_number);
+CREATE INDEX idx_phone_numbers_user ON phone_numbers(user_id);
+CREATE INDEX idx_phone_numbers_agent ON phone_numbers(agent_id);
+CREATE INDEX idx_phone_numbers_status ON phone_numbers(status);
+
+-- ===================================================================
+-- VERIFICATION DOCUMENTS TABLE
+-- ===================================================================
+
+CREATE TABLE verification_documents (
+    id SERIAL PRIMARY KEY,
+    phone_number_id INTEGER NOT NULL REFERENCES phone_numbers(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- Document details
+    document_type VARCHAR(50) NOT NULL,  -- company_registration, proof_of_address, passport, national_id, other
+    document_name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    file_url VARCHAR(500),
+    file_size INTEGER,
+    mime_type VARCHAR(100),
+    
+    -- Verification status
+    status VARCHAR(50) DEFAULT 'received',  -- pending, received, in_review, accepted, rejected
+    
+    -- Review details
+    reviewed_by VARCHAR(255),
+    reviewed_at TIMESTAMP,
+    rejection_reason TEXT,
+    notes TEXT,
+    
+    -- Metadata
+    document_metadata JSONB,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_verification_docs_phone ON verification_documents(phone_number_id);
+CREATE INDEX idx_verification_docs_user ON verification_documents(user_id);
+CREATE INDEX idx_verification_docs_status ON verification_documents(status);
+
+-- ===================================================================
+-- CALLBACK REQUESTS TABLE
+-- ===================================================================
+
+CREATE TABLE callback_requests (
+    id SERIAL PRIMARY KEY,
+    call_id INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
+    
+    -- Callback details
+    reason TEXT NOT NULL,
+    priority VARCHAR(20) DEFAULT 'normal',  -- urgent, high, normal, low
+    
+    -- Caller information
+    caller_name VARCHAR(255),
+    caller_phone VARCHAR(50),
+    caller_email VARCHAR(255),
+    preferred_callback_time VARCHAR(255),
+    
+    -- Status
+    status VARCHAR(50) DEFAULT 'pending',  -- pending, contacted, completed, cancelled
+    assigned_to VARCHAR(255),
+    
+    -- Notes and follow-up
+    notes TEXT,
+    resolution TEXT,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    contacted_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_callback_requests_call ON callback_requests(call_id);
+CREATE INDEX idx_callback_requests_user ON callback_requests(user_id);
+CREATE INDEX idx_callback_requests_agent ON callback_requests(agent_id);
+CREATE INDEX idx_callback_requests_status ON callback_requests(status);
+CREATE INDEX idx_callback_requests_priority ON callback_requests(priority);
+
+-- ===================================================================
 -- TRANSACTIONS TABLE (Billing)
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS transactions (
+CREATE TABLE transactions (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
@@ -358,7 +508,7 @@ CREATE INDEX idx_transactions_created_at ON transactions(created_at);
 -- INVOICES TABLE (Billing)
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS invoices (
+CREATE TABLE invoices (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
@@ -397,7 +547,7 @@ CREATE INDEX idx_invoices_created_at ON invoices(created_at);
 -- USAGE RECORDS TABLE
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS usage_records (
+CREATE TABLE usage_records (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     agent_id INTEGER REFERENCES voice_agents(id) ON DELETE SET NULL,
@@ -430,7 +580,7 @@ CREATE INDEX idx_usage_records_year ON usage_records(year);
 -- DOMAIN ALLOWLIST TABLE (Security)
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS domain_allowlists (
+CREATE TABLE domain_allowlists (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
@@ -464,7 +614,7 @@ CREATE UNIQUE INDEX idx_domain_allowlists_user_domain ON domain_allowlists(user_
 -- IP ALLOWLIST TABLE (Security)
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS ip_allowlists (
+CREATE TABLE ip_allowlists (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
@@ -491,7 +641,7 @@ CREATE UNIQUE INDEX idx_ip_allowlists_user_ip ON ip_allowlists(user_id, ip_addre
 -- SECURITY LOGS TABLE
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS security_logs (
+CREATE TABLE security_logs (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     
@@ -518,7 +668,7 @@ CREATE INDEX idx_security_logs_created_at ON security_logs(created_at);
 -- SUPPORT TICKETS TABLE
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS support_tickets (
+CREATE TABLE support_tickets (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     ticket_number VARCHAR(50) UNIQUE NOT NULL,
@@ -555,7 +705,7 @@ CREATE INDEX idx_support_tickets_created_at ON support_tickets(created_at);
 -- TICKET RESPONSES TABLE
 -- ===================================================================
 
-CREATE TABLE IF NOT EXISTS ticket_responses (
+CREATE TABLE ticket_responses (
     id SERIAL PRIMARY KEY,
     ticket_id INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
     
@@ -584,6 +734,8 @@ DROP TRIGGER IF EXISTS update_invoices_updated_at ON invoices;
 DROP TRIGGER IF EXISTS update_domain_allowlists_updated_at ON domain_allowlists;
 DROP TRIGGER IF EXISTS update_ip_allowlists_updated_at ON ip_allowlists;
 DROP TRIGGER IF EXISTS trigger_update_documents_updated_at ON documents;
+DROP TRIGGER IF EXISTS update_phone_numbers_updated_at ON phone_numbers;
+DROP TRIGGER IF EXISTS update_verification_documents_updated_at ON verification_documents;
 
 -- Drop existing functions
 DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
@@ -636,6 +788,18 @@ CREATE TRIGGER update_ip_allowlists_updated_at
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
+-- Trigger for phone_numbers
+CREATE TRIGGER update_phone_numbers_updated_at
+    BEFORE UPDATE ON phone_numbers
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Trigger for verification_documents
+CREATE TRIGGER update_verification_documents_updated_at
+    BEFORE UPDATE ON verification_documents
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
 -- Function to update documents timestamp
 CREATE OR REPLACE FUNCTION update_documents_updated_at()
 RETURNS TRIGGER AS $$
@@ -658,6 +822,7 @@ BEGIN
     IF NEW.ended_at IS NOT NULL AND NEW.started_at IS NOT NULL THEN
         NEW.duration_seconds = EXTRACT(EPOCH FROM (NEW.ended_at - NEW.started_at));
         NEW.duration_minutes = NEW.duration_seconds / 60.0;
+        NEW.duration = CAST(NEW.duration_seconds AS INTEGER);
         NEW.cost = NEW.duration_minutes * 0.05; -- $0.05 per minute
     END IF;
     RETURN NEW;
@@ -744,8 +909,13 @@ COMMENT ON TABLE ip_allowlists IS 'IP restrictions for security';
 COMMENT ON TABLE security_logs IS 'Security events and audit trail';
 COMMENT ON TABLE support_tickets IS 'Support tickets submitted by users';
 COMMENT ON TABLE ticket_responses IS 'Responses to support tickets from users or staff';
+COMMENT ON TABLE phone_numbers IS 'Phone numbers for voice agents';
+COMMENT ON TABLE verification_documents IS 'Documents for phone number verification';
+COMMENT ON TABLE callback_requests IS 'Callback requests from callers';
 COMMENT ON COLUMN voice_agents.model_name IS 'Gemini model ID (default: gemini-2.5-flash-native-audio-preview-09-2025)';
-COMMENT ON COLUMN documents.file_url IS 'Public URL for Supabase storage files (null for local storage)';
+COMMENT ON COLUMN voice_agents.voice_gender IS 'Voice gender/type: male (Charon), female (Kore), neutral (Puck)';
+COMMENT ON COLUMN documents.file_url IS 'Public URL for storage files (null for local storage)';
+COMMENT ON COLUMN calls.session_id IS 'Web session ID (nullable for phone calls)';
 
 -- ===================================================================
 -- SAMPLE DATA (Optional - for testing)
@@ -769,6 +939,7 @@ INSERT INTO voice_agents (
     system_prompt,
     greeting,
     model_name,
+    voice_gender,
     is_public
 )
 VALUES (
@@ -779,6 +950,7 @@ VALUES (
     'Tu es un assistant vocal intelligent et serviable qui répond toujours en français de manière naturelle et amicale.',
     'Bonjour, je suis un assistant vocal de Weedoo. Comment puis-je vous aider ?',
     'gemini-2.5-flash-native-audio-preview-09-2025',
+    'male',
     TRUE
 ) ON CONFLICT DO NOTHING;
 
@@ -796,10 +968,13 @@ BEGIN
     RAISE NOTICE 'Billing: transactions, invoices, usage_records';
     RAISE NOTICE 'Security: domain_allowlists, ip_allowlists, security_logs';
     RAISE NOTICE 'Support: support_tickets, ticket_responses';
+    RAISE NOTICE 'Phone: phone_numbers, verification_documents, callback_requests';
     RAISE NOTICE 'Views: call_statistics, agent_performance';
     RAISE NOTICE '=====================================================';
     RAISE NOTICE 'Model: gemini-2.5-flash-native-audio-preview-09-2025';
+    RAISE NOTICE 'Voice Gender: male (Charon), female (Kore), neutral (Puck)';
     RAISE NOTICE 'All migrations included!';
     RAISE NOTICE '=====================================================';
     RAISE NOTICE 'Remember to configure environment variables!';
 END $$;
+
