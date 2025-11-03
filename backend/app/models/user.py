@@ -21,6 +21,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
+    is_approved = Column(Boolean, default=False)  # Admin approval required
     
     # Subscription
     subscription_tier = Column(Enum(SubscriptionTier, values_callable=lambda x: [e.value for e in x]), default=SubscriptionTier.FREE)

@@ -315,6 +315,48 @@ export class VoiceWebSocket {
   }
 }
 
+// Admin API
+export const adminAPI = {
+  // Users
+  listUsers: (params?: { 
+    skip?: number; 
+    limit?: number; 
+    search?: string; 
+    is_approved?: boolean; 
+    is_active?: boolean;
+    sort_by?: string;
+    order?: string;
+  }) =>
+    api.get('/admin/users', { params }),
+  
+  getUser: (userId: number) =>
+    api.get(`/admin/users/${userId}`),
+  
+  updateUser: (userId: number, data: {
+    is_approved?: boolean;
+    is_active?: boolean;
+    is_superuser?: boolean;
+    subscription_tier?: string;
+  }) =>
+    api.patch(`/admin/users/${userId}`, data),
+  
+  approveUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/approve`),
+  
+  rejectUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/reject`),
+  
+  activateUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/activate`),
+  
+  deactivateUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/deactivate`),
+  
+  // Stats
+  getUserStats: () =>
+    api.get('/admin/users/stats/summary'),
+}
+
 // Default export for backward compatibility
 export default api
 

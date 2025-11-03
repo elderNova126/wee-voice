@@ -71,6 +71,7 @@ CREATE TABLE users (
     hashed_password VARCHAR(255) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
     is_superuser BOOLEAN DEFAULT FALSE,
+    is_approved BOOLEAN DEFAULT FALSE,  -- Admin approval required
     
     -- Subscription
     subscription_tier subscription_tier DEFAULT 'free',

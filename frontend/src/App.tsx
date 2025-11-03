@@ -21,12 +21,27 @@ import SupportPage from './pages/SupportPage'
 import { PhoneNumbersPage } from './pages/PhoneNumbersPage'
 import { CallbacksPage } from './pages/CallbacksPage'
 import { AgentEmbedPage } from './pages/AgentEmbedPage'
+import AdminUsersPage from './pages/AdminUsersPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
   
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+  
+  return <>{children}</>
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, user } = useAuthStore()
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+  
+  if (!user?.is_superuser) {
+    return <Navigate to="/dashboard" replace />
   }
   
   return <>{children}</>
@@ -118,6 +133,11 @@ function App() {
           <ProtectedRoute>
             <AgentEmbedPage />
           </ProtectedRoute>
+        } />
+        <Route path="/dashboard/admin/users" element={
+          <AdminRoute>
+            <AdminUsersPage />
+          </AdminRoute>
         } />
         <Route path="/support" element={<SupportPage />} />
       </Routes>

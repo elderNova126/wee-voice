@@ -42,7 +42,7 @@ export default function RegisterPage() {
         full_name: formData.full_name,
       })
       
-      toast.success('Compte créé avec succès!')
+      toast.success('Compte créé avec succès! Veuillez attendre l\'approbation d\'un administrateur avant de vous connecter.')
       navigate('/login')
     } catch (error: any) {
       console.error('Registration error:', error)

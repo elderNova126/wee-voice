@@ -44,6 +44,8 @@ class UserResponse(BaseModel):
     full_name: str
     subscription_tier: str
     is_active: bool
+    is_approved: bool
+    is_superuser: bool
     
     class Config:
         from_attributes = True
@@ -76,11 +78,13 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
         )
     
     # Create new user (password truncation handled in get_password_hash)
+    # New users require admin approval before they can login
     user = User(
         email=user_data.email,
         full_name=user_data.full_name,
         hashed_password=get_password_hash(user_data.password),
-        subscription_tier=SubscriptionTier.FREE
+        subscription_tier=SubscriptionTier.FREE,
+        is_approved=False  # Requires admin approval
     )
     
     db.add(user)
@@ -107,6 +111,13 @@ def login(
     
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+    
+    # Check if user is approved by admin
+    if not user.is_approved:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is pending approval by an administrator. Please wait for approval before logging in."
+        )
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
