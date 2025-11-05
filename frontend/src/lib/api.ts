@@ -223,6 +223,42 @@ export const supportAPI = {
     api.get('/support/categories'),
 }
 
+// Integrations API
+export const integrationsAPI = {
+  list: (params?: { integration_type?: string; provider?: string; is_active?: boolean }) =>
+    api.get('/integrations/', { params }),
+  
+  get: (id: number) =>
+    api.get(`/integrations/${id}`),
+  
+  create: (data: {
+    name: string
+    description?: string
+    integration_type: string
+    provider: string
+    config: Record<string, any>
+  }) => api.post('/integrations/', data),
+  
+  update: (id: number, data: {
+    name?: string
+    description?: string
+    config?: Record<string, any>
+    is_active?: boolean
+  }) => api.put(`/integrations/${id}`, data),
+  
+  delete: (id: number) =>
+    api.delete(`/integrations/${id}`),
+  
+  test: (id: number) =>
+    api.post(`/integrations/${id}/test`),
+  
+  sync: (id: number) =>
+    api.post(`/integrations/${id}/sync`),
+  
+  getTypes: () =>
+    api.get('/integrations/types/list'),
+}
+
 // WebSocket API
 export class VoiceWebSocket {
   private ws: WebSocket | null = null

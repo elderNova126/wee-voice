@@ -41,3 +41,25 @@ stripe==10.11.0
 # Required dependencies for above packages
 protobuf==5.29.5
 cryptography==42.0.0
+
+# Integration Dependencies
+# Google APIs (for Calendar, Gmail)
+google-api-python-client==2.150.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.1
+
+# Microsoft Graph API (for Outlook Calendar/Email)
+msal==1.28.0
+
+# Database connectors (already have psycopg2 for PostgreSQL)
+pymongo==4.10.1  # MongoDB
+redis==5.2.0  # Redis (if needed for integration)
+
+# Email (SMTP is built-in, but adding for completeness)
+aiosmtplib==3.0.2  # Async SMTP
+
+# Additional OAuth/OAuth2 support
+authlib==1.3.1
+
+# Additional utilities
+python-dateutil==2.9.0

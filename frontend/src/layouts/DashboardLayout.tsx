@@ -20,7 +20,8 @@ import {
   ComputerDesktopIcon,
   ChevronUpIcon,
   ChevronDownIcon,
-  Cog6ToothIcon
+  Cog6ToothIcon,
+  PuzzlePieceIcon,
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
 import { useThemeStore } from '@/store/themeStore'
@@ -33,6 +34,7 @@ const navigation = [
   { name: 'Tableau de bord', href: '/dashboard', icon: HomeIcon },
   { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
   { name: 'Appels', href: '/dashboard/calls', icon: PhoneIcon },
+  { name: 'Intégrations', href: '/dashboard/integrations', icon: PuzzlePieceIcon },
   { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
   { name: 'Support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
 ]

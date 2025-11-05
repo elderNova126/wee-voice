@@ -16,6 +16,8 @@ import UsagePage from './pages/UsagePage'
 import SecurityPage from './pages/SecurityPage'
 import ProfilePage from './pages/ProfilePage'
 import SupportPage from './pages/SupportPage'
+import IntegrationsPage from './pages/IntegrationsPage'
+import IntegrationFormPage from './pages/IntegrationFormPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -91,6 +93,21 @@ function App() {
         <Route path="/dashboard/support" element={
           <ProtectedRoute>
             <SupportPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/integrations" element={
+          <ProtectedRoute>
+            <IntegrationsPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/integrations/new" element={
+          <ProtectedRoute>
+            <IntegrationFormPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/integrations/:id/edit" element={
+          <ProtectedRoute>
+            <IntegrationFormPage />
           </ProtectedRoute>
         } />
         <Route path="/support" element={<SupportPage />} />
