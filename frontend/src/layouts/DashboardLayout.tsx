@@ -21,6 +21,7 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   Cog6ToothIcon,
+  PuzzlePieceIcon,
   UserGroupIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
@@ -34,6 +35,7 @@ const navigation = [
   { name: 'Tableau de bord', href: '/dashboard', icon: HomeIcon },
   { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
   { name: 'Appels', href: '/dashboard/calls', icon: PhoneIcon },
+  { name: 'Intégrations', href: '/dashboard/integrations', icon: PuzzlePieceIcon },
   { name: 'Numéros de téléphone', href: '/dashboard/phone-numbers', icon: PhoneIcon },
   { name: 'Rappels', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
   { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
