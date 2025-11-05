@@ -15,15 +15,17 @@ class VoiceAgent(Base):
     
     # Agent configuration
     language = Column(String, default="fr-FR")  # French by default
-    voice_id = Column(String, default="fr-FR-Neural2-A")
+    voice_id = Column(String, default="Charon")  # Gemini 2.5 voice (Puck, Charon, Kore, Fenrir, Aoede)
+    voice_gender = Column(String, default="male")  # Voice gender: male, female, neutral
     system_prompt = Column(Text, nullable=False)
+    greeting = Column(Text, nullable=True)  # Custom greeting message for the agent
     
     # LangGraph configuration
     agent_config = Column(JSON, nullable=True)  # Store LangGraph workflow config
     tools_enabled = Column(JSON, default=list)  # List of enabled tools
     
     # Model settings
-    model_name = Column(String, default="gemini-2.5-flash-preview-native-audio-dialog")
+    model_name = Column(String, default="gemini-2.5-flash-native-audio-preview-09-2025")
     temperature = Column(String, default="0.7")
     max_tokens = Column(Integer, default=1000)
     
@@ -40,8 +42,22 @@ class VoiceAgent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # RAG Configuration
+    rag_enabled = Column(Boolean, default=False)
+    rag_config = Column(JSON, nullable=True)  # RAG-specific settings (chunk size, retrieval count, etc.)
+    
+    # Website embed settings
+    embed_enabled = Column(Boolean, default=False)
+    embed_widget_color = Column(String, default="#4F46E5")  # Primary color for widget
+    embed_position = Column(String, default="bottom-right")  # "bottom-right", "bottom-left"
+    embed_greeting_message = Column(Text, nullable=True)
+    allowed_domains = Column(JSON, default=list)  # List of domains where embed is allowed
+    
     # Relationships
     user = relationship("User", back_populates="agents")
     calls = relationship("Call", back_populates="agent", cascade="all, delete-orphan")
     usage_records = relationship("UsageRecord", back_populates="agent", cascade="all, delete-orphan")
+    documents = relationship("Document", back_populates="agent", cascade="all, delete-orphan")
+    phone_number = relationship("PhoneNumber", back_populates="agent", uselist=False)
+    callback_requests = relationship("CallbackRequest", back_populates="agent", cascade="all, delete-orphan")
 

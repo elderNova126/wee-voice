@@ -1,91 +1,95 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional, List
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+from typing import List
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Application
-    APP_NAME: str = "VoiceAgent SaaS"
+    # App
+    APP_NAME: str = "WeeVoice - Voice Agent SaaS"
     VERSION: str = "1.0.0"
-    API_V1_STR: str = "/api/v1"
     DEBUG: bool = True
-    HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    API_V1_STR: str = "/api/v1"
     
     # Security
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
     ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 1 week
+    
+    # Database
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./voiceagent.db")
+    
+    # Storage (for file storage service)
+    STORAGE_URL: str = os.getenv("STORAGE_URL", "")
+    STORAGE_KEY: str = os.getenv("STORAGE_KEY", "")
+    STORAGE_BUCKET: str = os.getenv("STORAGE_BUCKET", "voice-agent-documents")
+    
+    # Google Gemini API
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    GEMINI_MODEL: str = "gemini-2.5-flash-native-audio-preview-09-2025"
     
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8000",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8000",
     ]
     
-    # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL", 
-        "sqlite:///./voiceagent.db"  # SQLite fallback for development
-    )
+    # File Storage
+    UPLOAD_DIR: str = "uploads"
+    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     
-    @property
-    def sync_database_url(self) -> str:
-        """Ensure database URL uses synchronous driver"""
-        url = self.DATABASE_URL
-        # Replace async drivers with sync ones
-        if "+asyncpg" in url:
-            url = url.replace("+asyncpg", "")
-        if "+aiomysql" in url:
-            url = url.replace("+aiomysql", "")
-        return url
+    # Stripe (for payments) - Optional
+    STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_API_KEY: str = os.getenv("STRIPE_API_KEY", "")  # Alias for STRIPE_SECRET_KEY
+    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     
-    # Redis
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    # Email (SMTP)
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "noreply@weevoice.com")
+    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "WeeVoice")
     
-    # Google Cloud
-    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    # Frontend URL (for email links)
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
     
-    # OpenAI (optional fallback)
-    OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
+    # Zadarma Integration
+    ZADARMA_API_KEY: str = os.getenv("ZADARMA_API_KEY", "")
+    ZADARMA_API_SECRET: str = os.getenv("ZADARMA_API_SECRET", "")
     
-    # Gemini Configuration
-    GEMINI_MODEL: str = "gemini-2.5-flash-preview-native-audio-dialog"
-    DEFAULT_LANGUAGE: str = "fr-FR"  # French
+    # Zadarma SIP Settings (optional, for direct SIP connection)
+    ZADARMA_SIP_SERVER: str = os.getenv("ZADARMA_SIP_SERVER", "sip.zadarma.com")
+    ZADARMA_SIP_LOGIN: str = os.getenv("ZADARMA_SIP_LOGIN", "")
+    ZADARMA_SIP_PASSWORD: str = os.getenv("ZADARMA_SIP_PASSWORD", "")
+    ZADARMA_PHONE_NUMBER: str = os.getenv("ZADARMA_PHONE_NUMBER", "")
+    
+    # Pricing Configuration
+    COST_PER_MINUTE: float = float(os.getenv("COST_PER_MINUTE", "0.05"))  # $0.05 per minute default
+    PHONE_NUMBER_MONTHLY_COST: float = float(os.getenv("PHONE_NUMBER_MONTHLY_COST", "4.99"))
     
     # Audio Configuration
-    AUDIO_FORMAT: str = "audio/pcm"
-    SEND_SAMPLE_RATE: int = 16000
-    RECEIVE_SAMPLE_RATE: int = 24000
-    CHUNK_SIZE: int = 2048
+    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "2048"))
+    RECEIVE_SAMPLE_RATE: int = int(os.getenv("RECEIVE_SAMPLE_RATE", "24000"))
+    SEND_SAMPLE_RATE: int = int(os.getenv("SEND_SAMPLE_RATE", "16000"))
     
-    # Stripe (for billing)
-    STRIPE_API_KEY: Optional[str] = os.getenv("STRIPE_API_KEY")
-    STRIPE_WEBHOOK_SECRET: Optional[str] = os.getenv("STRIPE_WEBHOOK_SECRET")
+    # Storage Paths
+    CALL_RECORDINGS_PATH: str = os.getenv("CALL_RECORDINGS_PATH", "./data/recordings")
+    TRANSCRIPTS_PATH: str = os.getenv("TRANSCRIPTS_PATH", "./data/transcripts")
     
-    # Usage Limits
-    FREE_TIER_MINUTES: int = 30
-    BASIC_TIER_MINUTES: int = 1000
-    PRO_TIER_MINUTES: int = 10000
+    # Server Configuration
+    HOST: str = os.getenv("HOST", "0.0.0.0")
+    PORT: int = int(os.getenv("PORT", "8000"))
     
-    # Storage
-    CALL_RECORDINGS_PATH: str = "./data/recordings"
-    TRANSCRIPTS_PATH: str = "./data/transcripts"
-    
-    # Monitoring
-    SENTRY_DSN: Optional[str] = os.getenv("SENTRY_DSN")
-    
-    model_config = SettingsConfigDict(
-        case_sensitive=True,
-        env_file=".env",
-        extra="ignore"  # Ignore extra fields from .env
-    )
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+        extra = "ignore"  # Ignore extra fields from .env to prevent validation errors
 
 
 settings = Settings()
-

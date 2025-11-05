@@ -1,19 +1,18 @@
 -- ===================================================================
--- VoiceAgent SaaS - Complete Database Schema
--- Single Comprehensive SQL File for PostgreSQL
--- Date: 2025-10-10
+-- PostgreSQL Schema for Voice Agent Platform
+-- Consolidated Schema with all migrations included
+-- Date: 2025-10-22
 -- ===================================================================
--- 
--- This file contains the COMPLETE database schema including:
+--
+-- This file contains the complete database schema including:
 -- 1. Core tables (users, agents, calls, API keys)
--- 2. Billing & Usage tracking (transactions, invoices, usage_records)
--- 3. Security (domain/IP allowlists, logs)
--- 4. Support ticketing system
--- 5. Integrations (Calendar, Email, CRM, Database, Accounting, etc.)
--- 6. Views, Triggers, Functions
--- 
--- This file is IDEMPOTENT - safe to run multiple times
--- Works for both standard PostgreSQL and Supabase
+-- 2. RAG support (documents, document_chunks)
+-- 3. Billing & Usage tracking
+-- 4. Security (domain/IP allowlists, logs)
+-- 5. Support ticketing system
+-- 6. Phone numbers and Zadarma integration
+-- 7. Verification documents and callback requests
+-- 8. Integrations (Calendar, Email, CRM, Database, Accounting, etc.)
 -- ===================================================================
 
 -- Enable UUID extension
@@ -29,7 +28,6 @@ DROP TYPE IF EXISTS call_status CASCADE;
 DROP TYPE IF EXISTS ticket_status CASCADE;
 DROP TYPE IF EXISTS ticket_priority CASCADE;
 DROP TYPE IF EXISTS ticket_category CASCADE;
--- Note: Integration types use VARCHAR instead of ENUM to match Python SQLAlchemy model
 DROP TYPE IF EXISTS integration_type CASCADE;
 DROP TYPE IF EXISTS integration_provider CASCADE;
 DROP TYPE IF EXISTS integration_status CASCADE;
@@ -44,6 +42,11 @@ CREATE TYPE call_status AS ENUM ('initiated', 'in_progress', 'completed', 'faile
 CREATE TYPE ticket_status AS ENUM ('open', 'in_progress', 'resolved', 'closed');
 CREATE TYPE ticket_priority AS ENUM ('low', 'medium', 'high', 'urgent');
 CREATE TYPE ticket_category AS ENUM ('technical', 'billing', 'feature_request', 'bug', 'other');
+
+-- Integration types
+CREATE TYPE integration_type AS ENUM ('calendar', 'email', 'contact_management', 'database', 'crm', 'accounting', 'other');
+CREATE TYPE integration_provider AS ENUM ('google_calendar', 'gmail', 'hubspot', 'postgresql', 'quickbooks', 'webhook', 'custom');
+CREATE TYPE integration_status AS ENUM ('active', 'inactive', 'error', 'pending_auth');
 
 -- ===================================================================
 -- DROP EXISTING OBJECTS (for clean re-runs)
@@ -60,26 +63,19 @@ DROP TABLE IF EXISTS security_logs CASCADE;
 DROP TABLE IF EXISTS ip_allowlists CASCADE;
 DROP TABLE IF EXISTS domain_allowlists CASCADE;
 DROP TABLE IF EXISTS integrations CASCADE;
+DROP TABLE IF EXISTS callback_requests CASCADE;
+DROP TABLE IF EXISTS verification_documents CASCADE;
+DROP TABLE IF EXISTS phone_numbers CASCADE;
 DROP TABLE IF EXISTS usage_records CASCADE;
 DROP TABLE IF EXISTS invoices CASCADE;
 DROP TABLE IF EXISTS transactions CASCADE;
 DROP TABLE IF EXISTS call_messages CASCADE;
 DROP TABLE IF EXISTS calls CASCADE;
+DROP TABLE IF EXISTS document_chunks CASCADE;
+DROP TABLE IF EXISTS documents CASCADE;
 DROP TABLE IF EXISTS voice_agents CASCADE;
 DROP TABLE IF EXISTS api_keys CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
-
--- Drop triggers
-DROP TRIGGER IF EXISTS update_users_updated_at ON users;
-DROP TRIGGER IF EXISTS update_voice_agents_updated_at ON voice_agents;
-DROP TRIGGER IF EXISTS update_integrations_updated_at ON integrations;
-DROP TRIGGER IF EXISTS update_support_tickets_updated_at ON support_tickets;
-DROP TRIGGER IF EXISTS calculate_call_duration_trigger ON calls;
-
--- Drop functions
-DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
-DROP FUNCTION IF EXISTS calculate_call_duration() CASCADE;
-DROP FUNCTION IF EXISTS cleanup_old_calls(INTEGER) CASCADE;
 
 -- ===================================================================
 -- USERS TABLE
@@ -92,6 +88,7 @@ CREATE TABLE users (
     hashed_password VARCHAR(255) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
     is_superuser BOOLEAN DEFAULT FALSE,
+    is_approved BOOLEAN DEFAULT FALSE,
     
     -- Subscription
     subscription_tier subscription_tier DEFAULT 'free',
@@ -154,22 +151,35 @@ CREATE TABLE voice_agents (
     
     -- Agent configuration
     language VARCHAR(50) DEFAULT 'fr-FR',
-    voice_id VARCHAR(100) DEFAULT 'fr-FR-Neural2-A',
+    voice_id VARCHAR(100) DEFAULT 'Charon',
+    voice_gender VARCHAR(20) DEFAULT 'male',
     system_prompt TEXT NOT NULL,
+    greeting TEXT,
     
     -- LangGraph configuration
     agent_config JSONB,
     tools_enabled JSONB DEFAULT '[]'::JSONB,
     
     -- Model settings
-    model_name VARCHAR(255) DEFAULT 'gemini-2.5-flash-preview-native-audio-dialog',
+    model_name VARCHAR(255) DEFAULT 'gemini-2.5-flash-native-audio-preview-09-2025',
     temperature VARCHAR(10) DEFAULT '0.7',
     max_tokens INTEGER DEFAULT 1000,
     
-    -- CRM Integration (legacy - now use integrations table)
+    -- RAG support
+    rag_enabled BOOLEAN DEFAULT FALSE,
+    rag_config JSONB,
+    
+    -- CRM Integration
     crm_webhook_url VARCHAR(500),
     crm_enabled BOOLEAN DEFAULT FALSE,
     crm_config JSONB,
+    
+    -- Embed settings
+    embed_enabled BOOLEAN DEFAULT FALSE,
+    embed_widget_color VARCHAR(20) DEFAULT '#4F46E5',
+    embed_position VARCHAR(20) DEFAULT 'bottom-right',
+    embed_greeting_message TEXT,
+    allowed_domains JSONB,
     
     -- Status
     is_active BOOLEAN DEFAULT TRUE,
@@ -186,6 +196,7 @@ CREATE INDEX idx_agents_active ON voice_agents(is_active);
 CREATE INDEX idx_agents_public ON voice_agents(is_public);
 CREATE INDEX idx_agents_language ON voice_agents(language);
 CREATE INDEX idx_agents_user_active ON voice_agents(user_id, is_active);
+CREATE INDEX idx_agents_tools ON voice_agents USING GIN (tools_enabled);
 
 -- ===================================================================
 -- INTEGRATIONS TABLE
@@ -198,19 +209,19 @@ CREATE TABLE integrations (
     -- Integration identification
     name VARCHAR(255) NOT NULL,
     description TEXT,
-    integration_type VARCHAR(50) NOT NULL,
-    provider VARCHAR(50) NOT NULL,
+    integration_type integration_type NOT NULL,
+    provider integration_provider NOT NULL,
     
-    -- Configuration (encrypted credentials stored here)
+    -- Configuration
     config JSONB NOT NULL DEFAULT '{}'::JSONB,
     
     -- Status
-    status VARCHAR(50) DEFAULT 'inactive',
+    status integration_status DEFAULT 'inactive',
     is_active BOOLEAN DEFAULT TRUE,
     last_sync_at TIMESTAMP,
     last_error TEXT,
     
-    -- Metadata (using integration_metadata to avoid SQLAlchemy conflict)
+    -- Metadata
     integration_metadata JSONB DEFAULT '{}'::JSONB,
     
     -- Timestamps
@@ -228,17 +239,78 @@ CREATE INDEX idx_integrations_user_type ON integrations(user_id, integration_typ
 CREATE INDEX idx_integrations_user_active ON integrations(user_id, is_active);
 CREATE INDEX idx_integrations_created ON integrations(created_at DESC);
 
--- Add constraints for data integrity
-ALTER TABLE integrations 
-ADD CONSTRAINT check_integration_type 
-CHECK (integration_type IN (
-    'calendar', 'email', 'contact_management', 
-    'database', 'crm', 'accounting', 'other'
-));
+-- ===================================================================
+-- DOCUMENTS TABLE (RAG Support)
+-- ===================================================================
 
-ALTER TABLE integrations 
-ADD CONSTRAINT check_status 
-CHECK (status IN ('active', 'inactive', 'error', 'pending_auth'));
+CREATE TABLE documents (
+    id SERIAL PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- File information
+    filename VARCHAR NOT NULL,
+    original_filename VARCHAR NOT NULL,
+    file_path VARCHAR,
+    file_url VARCHAR,
+    file_size INTEGER,
+    mime_type VARCHAR DEFAULT 'application/pdf',
+    
+    -- Source information
+    source_type VARCHAR DEFAULT 'pdf',
+    source_url VARCHAR,
+    
+    -- Processing status
+    status VARCHAR DEFAULT 'pending',
+    error_message TEXT,
+    
+    -- Content metadata
+    total_pages INTEGER,
+    total_chunks INTEGER DEFAULT 0,
+    doc_metadata JSONB,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    processed_at TIMESTAMP,
+    
+    CONSTRAINT fk_documents_agent FOREIGN KEY (agent_id) REFERENCES voice_agents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_documents_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Create indexes for documents
+CREATE INDEX idx_documents_agent_id ON documents(agent_id);
+CREATE INDEX idx_documents_user_id ON documents(user_id);
+CREATE INDEX idx_documents_status ON documents(status);
+
+-- ===================================================================
+-- DOCUMENT CHUNKS TABLE (RAG Support)
+-- ===================================================================
+
+CREATE TABLE document_chunks (
+    id SERIAL PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    
+    -- Chunk data
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    page_number INTEGER,
+    
+    -- Embedding data
+    embedding JSONB,
+    embedding_model VARCHAR DEFAULT 'all-MiniLM-L6-v2',
+    
+    -- Metadata
+    chunk_metadata JSONB,
+    token_count INTEGER,
+    
+    created_at TIMESTAMP DEFAULT NOW(),
+    
+    CONSTRAINT fk_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+-- Create indexes for document chunks
+CREATE INDEX idx_document_chunks_document_id ON document_chunks(document_id);
 
 -- ===================================================================
 -- CALLS TABLE
@@ -250,15 +322,25 @@ CREATE TABLE calls (
     agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
     
     -- Session identification
-    session_id VARCHAR(255) UNIQUE NOT NULL,
+    session_id VARCHAR(255) UNIQUE,
     
     -- Call data
     status call_status DEFAULT 'initiated',
-    duration_seconds FLOAT DEFAULT 0.0,
-    duration_minutes FLOAT GENERATED ALWAYS AS (duration_seconds / 60.0) STORED,
     
-    -- Transcript and analysis
+    -- Duration and cost
+    duration_seconds FLOAT DEFAULT 0.0,
+    duration_minutes FLOAT DEFAULT 0.0,
+    duration INTEGER DEFAULT 0,
+    cost FLOAT DEFAULT 0.0,
+    
+    -- Audio files
+    recording_url VARCHAR(500),
+    
+    -- Transcription
     transcript TEXT,
+    transcript_json JSONB,
+    
+    -- Summary and analysis
     summary TEXT,
     sentiment VARCHAR(50),
     key_points JSONB,
@@ -268,16 +350,21 @@ CREATE TABLE calls (
     caller_name VARCHAR(255),
     caller_metadata JSONB,
     
-    -- Recording
-    recording_url VARCHAR(500),
-    
-    -- CRM sync (legacy - now use integrations)
+    -- CRM data
     crm_synced BOOLEAN DEFAULT FALSE,
     crm_record_id VARCHAR(255),
     crm_response JSONB,
     
-    -- Cost tracking
-    cost_usd FLOAT DEFAULT 0.0,
+    -- Zadarma integration
+    zadarma_call_id VARCHAR(255),
+    direction VARCHAR(50),
+    disposition VARCHAR(50),
+    
+    -- Callback and email
+    callback_requested BOOLEAN DEFAULT FALSE,
+    callback_reason TEXT,
+    summary_email_sent BOOLEAN DEFAULT FALSE,
+    summary_email_sent_at TIMESTAMP,
     
     -- Timestamps
     started_at TIMESTAMP,
@@ -295,6 +382,10 @@ CREATE INDEX idx_calls_sentiment ON calls(sentiment);
 CREATE INDEX idx_calls_user_created ON calls(user_id, created_at DESC);
 CREATE INDEX idx_calls_agent_created ON calls(agent_id, created_at DESC);
 CREATE INDEX idx_calls_user_status ON calls(user_id, status);
+CREATE INDEX idx_calls_key_points ON calls USING GIN (key_points);
+CREATE INDEX idx_calls_transcript ON calls USING GIN (to_tsvector('french', transcript));
+CREATE INDEX idx_calls_zadarma_call_id ON calls(zadarma_call_id);
+CREATE INDEX idx_calls_callback_requested ON calls(callback_requested);
 
 -- ===================================================================
 -- CALL MESSAGES TABLE
@@ -318,6 +409,130 @@ CREATE TABLE call_messages (
 CREATE INDEX idx_messages_call ON call_messages(call_id);
 CREATE INDEX idx_messages_timestamp ON call_messages(timestamp);
 CREATE INDEX idx_messages_role ON call_messages(role);
+
+-- ===================================================================
+-- PHONE NUMBERS TABLE
+-- ===================================================================
+
+CREATE TABLE phone_numbers (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id INTEGER REFERENCES voice_agents(id) ON DELETE SET NULL,
+    
+    -- Phone number details
+    phone_number VARCHAR(50) UNIQUE NOT NULL,
+    country_code VARCHAR(10) NOT NULL,
+    number_type VARCHAR(20) NOT NULL,
+    
+    -- Integration
+    zadarma_number_id VARCHAR(255),
+    zadarma_status VARCHAR(50),
+    zadarma_config JSONB,
+    
+    -- Status
+    status VARCHAR(50) DEFAULT 'pending',
+    status_message TEXT,
+    
+    -- Pricing
+    monthly_cost VARCHAR(20) DEFAULT '0.00',
+    per_minute_cost VARCHAR(20) DEFAULT '0.00',
+    
+    -- Business information
+    business_name VARCHAR(255),
+    business_type VARCHAR(50),
+    business_address TEXT,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    activated_at TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_phone_numbers_phone ON phone_numbers(phone_number);
+CREATE INDEX idx_phone_numbers_user ON phone_numbers(user_id);
+CREATE INDEX idx_phone_numbers_agent ON phone_numbers(agent_id);
+CREATE INDEX idx_phone_numbers_status ON phone_numbers(status);
+
+-- ===================================================================
+-- VERIFICATION DOCUMENTS TABLE
+-- ===================================================================
+
+CREATE TABLE verification_documents (
+    id SERIAL PRIMARY KEY,
+    phone_number_id INTEGER NOT NULL REFERENCES phone_numbers(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- Document details
+    document_type VARCHAR(50) NOT NULL,
+    document_name VARCHAR(255) NOT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    file_url VARCHAR(500),
+    file_size INTEGER,
+    mime_type VARCHAR(100),
+    
+    -- Verification status
+    status VARCHAR(50) DEFAULT 'received',
+    
+    -- Review details
+    reviewed_by VARCHAR(255),
+    reviewed_at TIMESTAMP,
+    rejection_reason TEXT,
+    notes TEXT,
+    
+    -- Metadata
+    document_metadata JSONB,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_verification_docs_phone ON verification_documents(phone_number_id);
+CREATE INDEX idx_verification_docs_user ON verification_documents(user_id);
+CREATE INDEX idx_verification_docs_status ON verification_documents(status);
+
+-- ===================================================================
+-- CALLBACK REQUESTS TABLE
+-- ===================================================================
+
+CREATE TABLE callback_requests (
+    id SERIAL PRIMARY KEY,
+    call_id INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
+    
+    -- Callback details
+    reason TEXT NOT NULL,
+    priority VARCHAR(20) DEFAULT 'normal',
+    
+    -- Caller information
+    caller_name VARCHAR(255),
+    caller_phone VARCHAR(50),
+    caller_email VARCHAR(255),
+    preferred_callback_time VARCHAR(255),
+    
+    -- Status
+    status VARCHAR(50) DEFAULT 'pending',
+    assigned_to VARCHAR(255),
+    
+    -- Notes and follow-up
+    notes TEXT,
+    resolution TEXT,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    contacted_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_callback_requests_call ON callback_requests(call_id);
+CREATE INDEX idx_callback_requests_user ON callback_requests(user_id);
+CREATE INDEX idx_callback_requests_agent ON callback_requests(agent_id);
+CREATE INDEX idx_callback_requests_status ON callback_requests(status);
+CREATE INDEX idx_callback_requests_priority ON callback_requests(priority);
 
 -- ===================================================================
 -- TRANSACTIONS TABLE (Billing)
@@ -388,6 +603,7 @@ CREATE TABLE invoices (
 CREATE INDEX idx_invoices_user_id ON invoices(user_id);
 CREATE INDEX idx_invoices_status ON invoices(status);
 CREATE INDEX idx_invoices_invoice_number ON invoices(invoice_number);
+CREATE INDEX idx_invoices_created_at ON invoices(created_at);
 
 -- ===================================================================
 -- USAGE RECORDS TABLE
@@ -397,67 +613,121 @@ CREATE TABLE usage_records (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     agent_id INTEGER REFERENCES voice_agents(id) ON DELETE SET NULL,
+    call_id INTEGER REFERENCES calls(id) ON DELETE SET NULL,
     
     -- Usage details
-    date DATE NOT NULL,
-    minutes_used FLOAT DEFAULT 0.0,
-    calls_count INTEGER DEFAULT 0,
-    cost_usd FLOAT DEFAULT 0.0,
+    minutes_used FLOAT NOT NULL,
+    cost FLOAT NOT NULL,
     
     -- Metadata
-    metadata JSONB,
+    date TIMESTAMP NOT NULL,
+    month VARCHAR(7) NOT NULL,
+    year INTEGER NOT NULL,
+    
+    -- Additional metrics
+    api_calls INTEGER DEFAULT 0,
+    tokens_used INTEGER DEFAULT 0,
     
     -- Timestamps
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_usage_user ON usage_records(user_id);
-CREATE INDEX idx_usage_agent ON usage_records(agent_id);
-CREATE INDEX idx_usage_date ON usage_records(date);
-CREATE INDEX idx_usage_user_date ON usage_records(user_id, date DESC);
+CREATE INDEX idx_usage_records_user_id ON usage_records(user_id);
+CREATE INDEX idx_usage_records_agent_id ON usage_records(agent_id);
+CREATE INDEX idx_usage_records_date ON usage_records(date);
+CREATE INDEX idx_usage_records_month ON usage_records(month);
+CREATE INDEX idx_usage_records_year ON usage_records(year);
 
 -- ===================================================================
--- SECURITY TABLES
+-- DOMAIN ALLOWLIST TABLE (Security)
 -- ===================================================================
 
 CREATE TABLE domain_allowlists (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- Domain details
     domain VARCHAR(255) NOT NULL,
     description TEXT,
     is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT NOW()
+    
+    -- Public key for this domain
+    public_key VARCHAR(255) UNIQUE NOT NULL,
+    
+    -- Validation
+    verified BOOLEAN DEFAULT FALSE,
+    verification_token VARCHAR(255),
+    
+    -- Usage stats
+    total_requests INTEGER DEFAULT 0,
+    last_used_at TIMESTAMP,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_domain_allowlists_user_id ON domain_allowlists(user_id);
+CREATE INDEX idx_domain_allowlists_domain ON domain_allowlists(domain);
+CREATE INDEX idx_domain_allowlists_public_key ON domain_allowlists(public_key);
+CREATE UNIQUE INDEX idx_domain_allowlists_user_domain ON domain_allowlists(user_id, domain);
+
+-- ===================================================================
+-- IP ALLOWLIST TABLE (Security)
+-- ===================================================================
 
 CREATE TABLE ip_allowlists (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    ip_address VARCHAR(45) NOT NULL,  -- IPv6 max length
+    
+    -- IP details
+    ip_address VARCHAR(45) NOT NULL,
+    ip_range VARCHAR(50),
     description TEXT,
     is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT NOW()
+    
+    -- Usage stats
+    total_requests INTEGER DEFAULT 0,
+    last_used_at TIMESTAMP,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_ip_allowlists_user_id ON ip_allowlists(user_id);
+CREATE INDEX idx_ip_allowlists_ip_address ON ip_allowlists(ip_address);
+CREATE UNIQUE INDEX idx_ip_allowlists_user_ip ON ip_allowlists(user_id, ip_address);
+
+-- ===================================================================
+-- SECURITY LOGS TABLE
+-- ===================================================================
 
 CREATE TABLE security_logs (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    
+    -- Event details
     event_type VARCHAR(100) NOT NULL,
-    event_description TEXT,
+    severity VARCHAR(50) DEFAULT 'info',
+    message TEXT NOT NULL,
+    
+    -- Request details
     ip_address VARCHAR(45),
     user_agent TEXT,
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT NOW()
+    endpoint VARCHAR(255),
+    
+    -- Timestamp
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create indexes
-CREATE INDEX idx_domain_allowlists_user ON domain_allowlists(user_id);
-CREATE INDEX idx_ip_allowlists_user ON ip_allowlists(user_id);
-CREATE INDEX idx_security_logs_user ON security_logs(user_id);
-CREATE INDEX idx_security_logs_event ON security_logs(event_type);
-CREATE INDEX idx_security_logs_created ON security_logs(created_at DESC);
+CREATE INDEX idx_security_logs_user_id ON security_logs(user_id);
+CREATE INDEX idx_security_logs_event_type ON security_logs(event_type);
+CREATE INDEX idx_security_logs_severity ON security_logs(severity);
+CREATE INDEX idx_security_logs_created_at ON security_logs(created_at);
 
 -- ===================================================================
--- SUPPORT TABLES
+-- SUPPORT TICKETS TABLE
 -- ===================================================================
 
 CREATE TABLE support_tickets (
@@ -478,9 +748,14 @@ CREATE TABLE support_tickets (
     resolved_at TIMESTAMP,
     resolved_by INTEGER REFERENCES users(id),
     
+    -- Metadata
+    user_agent VARCHAR(500),
+    ip_address VARCHAR(45),
+    
     -- Timestamps
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    closed_at TIMESTAMP
 );
 
 CREATE TABLE ticket_responses (
@@ -490,7 +765,8 @@ CREATE TABLE ticket_responses (
     
     -- Response data
     message TEXT NOT NULL,
-    is_internal BOOLEAN DEFAULT FALSE,
+    is_staff_response BOOLEAN DEFAULT FALSE,
+    staff_name VARCHAR(255),
     
     -- Timestamps
     created_at TIMESTAMP DEFAULT NOW()
@@ -502,13 +778,24 @@ CREATE INDEX idx_tickets_status ON support_tickets(status);
 CREATE INDEX idx_tickets_category ON support_tickets(category);
 CREATE INDEX idx_tickets_created ON support_tickets(created_at DESC);
 CREATE INDEX idx_ticket_responses_ticket ON ticket_responses(ticket_id);
+CREATE INDEX idx_support_tickets_ticket_number ON support_tickets(ticket_number);
+CREATE INDEX idx_support_tickets_email ON support_tickets(email);
 
 -- ===================================================================
--- FUNCTIONS
+-- FUNCTIONS AND TRIGGERS
 -- ===================================================================
 
 -- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to update documents timestamp
+CREATE OR REPLACE FUNCTION update_documents_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = NOW();
@@ -516,38 +803,21 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to calculate call duration (optional - can be computed in application)
+-- Function to calculate call duration
 CREATE OR REPLACE FUNCTION calculate_call_duration()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.ended_at IS NOT NULL AND NEW.started_at IS NOT NULL THEN
         NEW.duration_seconds = EXTRACT(EPOCH FROM (NEW.ended_at - NEW.started_at));
-        -- cost calculation can be done here or in application
+        NEW.duration_minutes = NEW.duration_seconds / 60.0;
+        NEW.duration = CAST(NEW.duration_seconds AS INTEGER);
+        NEW.cost = NEW.duration_minutes * 0.05;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to clean up old calls (optional maintenance)
-CREATE OR REPLACE FUNCTION cleanup_old_calls(days_to_keep INTEGER DEFAULT 90)
-RETURNS INTEGER AS $$
-DECLARE
-    deleted_count INTEGER;
-BEGIN
-    DELETE FROM calls
-    WHERE created_at < NOW() - INTERVAL '1 day' * days_to_keep
-    AND status IN ('completed', 'failed');
-    
-    GET DIAGNOSTICS deleted_count = ROW_COUNT;
-    RETURN deleted_count;
-END;
-$$ LANGUAGE plpgsql;
-
--- ===================================================================
--- TRIGGERS
--- ===================================================================
-
--- Apply triggers to tables with updated_at
+-- Apply triggers
 CREATE TRIGGER update_users_updated_at 
     BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -564,12 +834,37 @@ CREATE TRIGGER update_support_tickets_updated_at
     BEFORE UPDATE ON support_tickets
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Optional trigger for auto-calculating call duration
--- Uncomment if you want automatic duration calculation
--- CREATE TRIGGER calculate_call_duration_trigger
---     BEFORE INSERT OR UPDATE ON calls
---     FOR EACH ROW
---     EXECUTE FUNCTION calculate_call_duration();
+CREATE TRIGGER update_transactions_updated_at 
+    BEFORE UPDATE ON transactions
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_invoices_updated_at 
+    BEFORE UPDATE ON invoices
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_domain_allowlists_updated_at 
+    BEFORE UPDATE ON domain_allowlists
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_ip_allowlists_updated_at 
+    BEFORE UPDATE ON ip_allowlists
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trigger_update_documents_updated_at
+    BEFORE UPDATE ON documents
+    FOR EACH ROW EXECUTE FUNCTION update_documents_updated_at();
+
+CREATE TRIGGER update_phone_numbers_updated_at
+    BEFORE UPDATE ON phone_numbers
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_verification_documents_updated_at
+    BEFORE UPDATE ON verification_documents
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER calculate_call_duration_trigger
+    BEFORE INSERT OR UPDATE ON calls
+    FOR EACH ROW EXECUTE FUNCTION calculate_call_duration();
 
 -- ===================================================================
 -- VIEWS
@@ -582,8 +877,8 @@ SELECT
     u.email,
     COUNT(c.id) as total_calls,
     SUM(c.duration_minutes) as total_minutes,
-    AVG(c.duration_minutes) as avg_call_duration,
-    SUM(c.cost_usd) as total_cost,
+    SUM(c.cost) as total_cost,
+    AVG(c.duration_minutes) as avg_duration_minutes,
     COUNT(CASE WHEN c.status = 'completed' THEN 1 END) as completed_calls,
     COUNT(CASE WHEN c.status = 'failed' THEN 1 END) as failed_calls
 FROM users u
@@ -598,7 +893,7 @@ SELECT
     va.user_id,
     COUNT(c.id) as total_calls,
     SUM(c.duration_minutes) as total_minutes,
-    AVG(c.duration_minutes) as avg_call_duration,
+    AVG(c.duration_minutes) as avg_duration,
     COUNT(CASE WHEN c.status = 'completed' THEN 1 END) as completed_calls,
     COUNT(CASE WHEN c.sentiment = 'positive' THEN 1 END) as positive_calls,
     COUNT(CASE WHEN c.sentiment = 'negative' THEN 1 END) as negative_calls,
@@ -608,141 +903,82 @@ LEFT JOIN calls c ON va.id = c.agent_id
 GROUP BY va.id, va.name, va.user_id;
 
 -- ===================================================================
--- COMMENTS
+-- MAINTENANCE FUNCTIONS
 -- ===================================================================
 
-COMMENT ON TABLE users IS 'Platform users with authentication and subscription info';
-COMMENT ON TABLE api_keys IS 'API keys for programmatic access';
-COMMENT ON TABLE voice_agents IS 'Voice agent configurations';
-COMMENT ON TABLE integrations IS 'Stores user integrations with third-party services (Calendar, Email, CRM, Database, Accounting, etc.)';
-COMMENT ON TABLE calls IS 'Call history and analytics';
-COMMENT ON TABLE call_messages IS 'Individual messages within calls';
-COMMENT ON TABLE transactions IS 'Payment transactions';
-COMMENT ON TABLE invoices IS 'Billing invoices';
-COMMENT ON TABLE usage_records IS 'Usage tracking records';
-COMMENT ON TABLE domain_allowlists IS 'Domain-based security allowlists';
-COMMENT ON TABLE ip_allowlists IS 'IP address-based security allowlists';
-COMMENT ON TABLE security_logs IS 'Security event logs';
-COMMENT ON TABLE support_tickets IS 'Customer support tickets';
-COMMENT ON TABLE ticket_responses IS 'Responses to support tickets';
-
-COMMENT ON COLUMN integrations.integration_type IS 'Type: calendar, email, contact_management, database, crm, accounting, other';
-COMMENT ON COLUMN integrations.provider IS 'Provider: google_calendar, gmail, hubspot, postgresql, quickbooks, webhook, etc.';
-COMMENT ON COLUMN integrations.config IS 'Encrypted credentials and configuration (should be encrypted in production)';
-COMMENT ON COLUMN integrations.integration_metadata IS 'Additional provider-specific metadata (JSON)';
+-- Function to clean up old calls
+CREATE OR REPLACE FUNCTION cleanup_old_calls(days_to_keep INTEGER DEFAULT 90)
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM calls
+    WHERE created_at < NOW() - INTERVAL '1 day' * days_to_keep
+    AND status IN ('completed', 'failed');
+    
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
 
 -- ===================================================================
--- SUPABASE ROW LEVEL SECURITY (RLS) - OPTIONAL
+-- SAMPLE DATA (Optional - for testing)
 -- ===================================================================
 
--- Uncomment the following section if using Supabase and want RLS policies
--- Note: Requires Supabase auth.uid() function to be available
+-- Insert a test user (password is 'password123')
+INSERT INTO users (email, full_name, hashed_password, subscription_tier, is_approved)
+VALUES (
+    'demo@voiceagent.com',
+    'Demo User',
+    '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYqNk8L9Eia',
+    'free',
+    TRUE
+) ON CONFLICT (email) DO NOTHING;
 
-/*
--- Enable RLS on all tables
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
-ALTER TABLE voice_agents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE calls ENABLE ROW LEVEL SECURITY;
-ALTER TABLE call_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE integrations ENABLE ROW LEVEL SECURITY;
-
--- Users can only see their own data
-CREATE POLICY users_select_own ON users
-    FOR SELECT
-    USING (auth.uid()::text = id::text);
-
-CREATE POLICY users_update_own ON users
-    FOR UPDATE
-    USING (auth.uid()::text = id::text);
-
--- API Keys policies
-CREATE POLICY api_keys_select_own ON api_keys
-    FOR SELECT
-    USING (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY api_keys_insert_own ON api_keys
-    FOR INSERT
-    WITH CHECK (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY api_keys_delete_own ON api_keys
-    FOR DELETE
-    USING (user_id = (auth.uid()::text)::integer);
-
--- Voice Agents policies (including public agents)
-CREATE POLICY agents_select_own_or_public ON voice_agents
-    FOR SELECT
-    USING (user_id = (auth.uid()::text)::integer OR is_public = TRUE);
-
-CREATE POLICY agents_insert_own ON voice_agents
-    FOR INSERT
-    WITH CHECK (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY agents_update_own ON voice_agents
-    FOR UPDATE
-    USING (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY agents_delete_own ON voice_agents
-    FOR DELETE
-    USING (user_id = (auth.uid()::text)::integer);
-
--- Calls policies
-CREATE POLICY calls_select_own ON calls
-    FOR SELECT
-    USING (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY calls_insert_own ON calls
-    FOR INSERT
-    WITH CHECK (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY calls_update_own ON calls
-    FOR UPDATE
-    USING (user_id = (auth.uid()::text)::integer);
-
--- Integrations policies
-CREATE POLICY integrations_select_own ON integrations
-    FOR SELECT
-    USING (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY integrations_insert_own ON integrations
-    FOR INSERT
-    WITH CHECK (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY integrations_update_own ON integrations
-    FOR UPDATE
-    USING (user_id = (auth.uid()::text)::integer);
-
-CREATE POLICY integrations_delete_own ON integrations
-    FOR DELETE
-    USING (user_id = (auth.uid()::text)::integer);
-*/
+-- Insert a demo agent with correct model
+INSERT INTO voice_agents (
+    user_id,
+    name,
+    description,
+    language,
+    system_prompt,
+    greeting,
+    model_name,
+    voice_gender,
+    is_public
+)
+VALUES (
+    1,
+    'Assistant Démo Français',
+    'Agent de démonstration en français pour tester la plateforme',
+    'fr-FR',
+    'Tu es un assistant vocal intelligent et serviable qui répond toujours en français de manière naturelle et amicale.',
+    'Bonjour, je suis un assistant vocal de Weedoo. Comment puis-je vous aider ?',
+    'gemini-2.5-flash-native-audio-preview-09-2025',
+    'male',
+    TRUE
+) ON CONFLICT DO NOTHING;
 
 -- ===================================================================
--- COMPLETION
+-- COMPLETION MESSAGE
 -- ===================================================================
 
 DO $$
 BEGIN
-    RAISE NOTICE '====================================================================';
-    RAISE NOTICE 'VoiceAgent SaaS - Complete Database Schema Created Successfully!';
-    RAISE NOTICE '====================================================================';
-    RAISE NOTICE 'Tables Created:';
-    RAISE NOTICE '  - users';
-    RAISE NOTICE '  - api_keys';
-    RAISE NOTICE '  - voice_agents';
-    RAISE NOTICE '  - integrations';
-    RAISE NOTICE '  - calls';
-    RAISE NOTICE '  - call_messages';
-    RAISE NOTICE '  - transactions';
-    RAISE NOTICE '  - invoices';
-    RAISE NOTICE '  - usage_records';
-    RAISE NOTICE '  - domain_allowlists';
-    RAISE NOTICE '  - ip_allowlists';
-    RAISE NOTICE '  - security_logs';
-    RAISE NOTICE '  - support_tickets';
-    RAISE NOTICE '  - ticket_responses';
+    RAISE NOTICE '=====================================================';
+    RAISE NOTICE 'VoiceAgent SaaS Schema Created Successfully!';
+    RAISE NOTICE '=====================================================';
+    RAISE NOTICE 'Core Tables: users, api_keys, voice_agents, calls, call_messages';
+    RAISE NOTICE 'RAG Tables: documents, document_chunks';
+    RAISE NOTICE 'Billing: transactions, invoices, usage_records';
+    RAISE NOTICE 'Security: domain_allowlists, ip_allowlists, security_logs';
+    RAISE NOTICE 'Support: support_tickets, ticket_responses';
+    RAISE NOTICE 'Phone: phone_numbers, verification_documents, callback_requests';
+    RAISE NOTICE 'Integrations: integrations';
     RAISE NOTICE 'Views: call_statistics, agent_performance';
-    RAISE NOTICE 'Triggers: Auto-update updated_at columns';
-    RAISE NOTICE '====================================================================';
+    RAISE NOTICE '=====================================================';
+    RAISE NOTICE 'Model: gemini-2.5-flash-native-audio-preview-09-2025';
+    RAISE NOTICE 'Voice Gender: male (Charon), female (Kore), neutral (Puck)';
+    RAISE NOTICE 'All migrations included!';
+    RAISE NOTICE '=====================================================';
 END $$;
-

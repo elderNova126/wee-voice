@@ -21,6 +21,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
+    is_approved = Column(Boolean, default=False)  # Admin approval required
     
     # Subscription
     subscription_tier = Column(Enum(SubscriptionTier, values_callable=lambda x: [e.value for e in x]), default=SubscriptionTier.FREE)
@@ -50,4 +51,8 @@ class User(Base):
     ip_allowlists = relationship("IPAllowlist", back_populates="user", cascade="all, delete-orphan")
     security_logs = relationship("SecurityLog", back_populates="user", cascade="all, delete-orphan")
     integrations = relationship("Integration", back_populates="user", cascade="all, delete-orphan")
+    documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
+    phone_numbers = relationship("PhoneNumber", back_populates="user", cascade="all, delete-orphan")
+    verification_documents = relationship("VerificationDocument", back_populates="user", cascade="all, delete-orphan")
+    callback_requests = relationship("CallbackRequest", back_populates="user", cascade="all, delete-orphan")
 

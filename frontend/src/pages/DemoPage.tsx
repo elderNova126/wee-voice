@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { MicrophoneIcon, StopIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { VoiceWebSocket, agentsAPI } from '@/lib/api'
@@ -12,13 +12,16 @@ interface Agent {
 }
 
 export default function DemoPage() {
+  const [searchParams] = useSearchParams()
+  const urlAgentId = searchParams.get('agent')
+  
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [transcript, setTranscript] = useState<{ role: string; text: string }[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedLanguage, setSelectedLanguage] = useState<string>('fr-FR')
-  const [agentId, setAgentId] = useState<number | null>(null)
+  const [agentId, setAgentId] = useState<number | null>(urlAgentId ? parseInt(urlAgentId) : null)
   
   const wsRef = useRef<VoiceWebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -43,7 +46,17 @@ export default function DemoPage() {
           return
         }
         
-        // Select French agent by default
+        // If agent is specified in URL, use that
+        if (urlAgentId) {
+          const selectedAgent = agentsList.find((a: Agent) => a.id === parseInt(urlAgentId))
+          if (selectedAgent) {
+            setAgentId(selectedAgent.id)
+            setSelectedLanguage(selectedAgent.language)
+            return
+          }
+        }
+        
+        // Otherwise, select French agent by default
         const frenchAgent = agentsList.find((a: Agent) => a.language.startsWith('fr'))
         if (frenchAgent) {
           setAgentId(frenchAgent.id)

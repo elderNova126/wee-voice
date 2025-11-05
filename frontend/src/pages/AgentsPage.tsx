@@ -6,6 +6,8 @@ import {
   PencilIcon,
   TrashIcon,
   PlayIcon,
+  DocumentTextIcon,
+  CodeBracketIcon,
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, VoiceWebSocket } from '@/lib/api'
@@ -156,14 +158,23 @@ export default function AgentsPage() {
                   Start
                 </button>
                 <Link
+                  to={`/dashboard/agents/${agent.id}/embed`}
+                  className="p-2.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition"
+                  title="Embed Widget"
+                >
+                  <CodeBracketIcon className="h-4 w-4" />
+                </Link>
+                <Link
                   to={`/dashboard/agents/${agent.id}/edit`}
                   className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
+                  title="Edit Agent"
                 >
                   <PencilIcon className="h-4 w-4" />
                 </Link>
                 <button
                   onClick={() => handleDelete(agent.id)}
                   className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
+                  title="Delete Agent"
                 >
                   <TrashIcon className="h-4 w-4" />
                 </button>
@@ -325,14 +336,11 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div
-        className="fixed inset-0 bg-black bg-opacity-50"
-        onClick={handleClose}
-      />
+      <div className="fixed inset-0 bg-black bg-opacity-50" />
       <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full p-8 z-10">
         <div className="mb-6 text-center">
           <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Testing: {agent.name}
+            Agent: {agent.name}
           </h3>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
             {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}

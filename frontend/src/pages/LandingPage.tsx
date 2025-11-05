@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Menu, Transition } from '@headlessui/react'
-import { Fragment } from 'react'
+import { Fragment, useState, useEffect } from 'react'
 import {
   MicrophoneIcon,
   ClockIcon,
@@ -16,11 +16,13 @@ import {
   ComputerDesktopIcon,
   ChevronDownIcon,
   UserCircleIcon,
-  ArrowRightOnRectangleIcon
+  ArrowRightOnRectangleIcon,
+  SparklesIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
 import { useNavigate } from 'react-router-dom'
+import { api } from '../lib/api'
 
 const features = [
   {
@@ -68,10 +70,36 @@ const stats = [
   { label: 'Clients', value: '1000+' },
 ]
 
+interface PublicAgent {
+  id: number
+  name: string
+  description: string | null
+  language: string
+  rag_enabled: boolean
+}
+
 export default function LandingPage() {
   const { isAuthenticated, user, logout } = useAuthStore()
   const { theme, setTheme } = useThemeStore()
   const navigate = useNavigate()
+  const [publicAgents, setPublicAgents] = useState<PublicAgent[]>([])
+  const [loadingAgents, setLoadingAgents] = useState(true)
+
+  useEffect(() => {
+    loadPublicAgents()
+  }, [])
+
+  const loadPublicAgents = async () => {
+    try {
+      setLoadingAgents(true)
+      const response = await api.get('/agents/public/list')
+      setPublicAgents(response.data)
+    } catch (error) {
+      console.error('Error loading public agents:', error)
+    } finally {
+      setLoadingAgents(false)
+    }
+  }
 
   const handleLogout = () => {
     logout()
@@ -305,6 +333,100 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* Public Agents Section */}
+      {publicAgents.length > 0 && (
+        <section className="py-20 px-6">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-16">
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-500/10 to-purple-600/10 rounded-full mb-4">
+                <SparklesIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">
+                  Essayez Maintenant
+                </span>
+              </div>
+              <h2 className="text-4xl sm:text-5xl font-bold text-gray-900 dark:text-white mb-4">
+                Agents Publics Disponibles
+              </h2>
+              <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
+                Testez nos agents vocaux intelligents - aucune inscription requise
+              </p>
+            </div>
+
+            {loadingAgents ? (
+              <div className="flex justify-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {publicAgents.map((agent) => (
+                  <div
+                    key={agent.id}
+                    className="group relative bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 hover:border-indigo-500 dark:hover:border-indigo-400 hover:shadow-xl transition-all duration-200"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-600/5 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
+                    <div className="relative">
+                      {/* Agent Icon */}
+                      <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center mb-4 shadow-md">
+                        <MicrophoneIcon className="w-7 h-7 text-white" />
+                      </div>
+
+                      {/* Agent Info */}
+                      <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                        {agent.name}
+                      </h3>
+                      <p className="text-gray-600 dark:text-gray-300 text-sm mb-4 line-clamp-2">
+                        {agent.description || 'Agent vocal intelligent prêt à vous aider'}
+                      </p>
+
+                      {/* Agent Features */}
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-medium rounded-full">
+                          <GlobeAltIcon className="w-3 h-3" />
+                          {agent.language === 'fr-FR' ? 'Français' : agent.language === 'en-US' ? 'English' : agent.language}
+                        </span>
+                        {agent.rag_enabled && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-medium rounded-full">
+                            <SparklesIcon className="w-3 h-3" />
+                            Knowledge Base
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Try Button */}
+                      <Link
+                        to={`/agent/${agent.id}`}
+                        className="inline-flex items-center justify-center w-full gap-2 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
+                      >
+                        <PhoneIcon className="w-5 h-5" />
+                        Essayer Maintenant
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Call to action if no agents */}
+            {!loadingAgents && publicAgents.length === 0 && (
+              <div className="text-center py-12">
+                <MicrophoneIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400 mb-6">
+                  Aucun agent public disponible pour le moment
+                </p>
+                {!isAuthenticated && (
+                  <Link
+                    to="/register"
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200"
+                  >
+                    Créer Votre Premier Agent
+                  </Link>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Benefits Section */}
       <section className="py-20 px-6">

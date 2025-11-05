@@ -20,6 +20,7 @@ yarn-error.log*
 dist/
 .vite/
 
+*.pdf
 # Environment
 .env
 .env.local
@@ -55,3 +56,4 @@ htmlcov/
 # Docker
 docker-compose.override.yml
 
+ZADARMA_CREDENTIALS.txt

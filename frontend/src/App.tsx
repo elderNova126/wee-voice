@@ -8,9 +8,11 @@ import RegisterPage from './pages/RegisterPage'
 import DashboardPage from './pages/DashboardPage'
 import AgentsPage from './pages/AgentsPage'
 import AgentFormPage from './pages/AgentFormPage'
+import AgentDocumentsPage from './pages/AgentDocumentsPage'
 import CallsPage from './pages/CallsPage'
 import APIKeysPage from './pages/ApiKeysPage'
 import DemoPage from './pages/DemoPage'
+import PublicAgentPage from './pages/PublicAgentPage'
 import BillingPage from './pages/BillingPage'
 import UsagePage from './pages/UsagePage'
 import SecurityPage from './pages/SecurityPage'
@@ -18,12 +20,30 @@ import ProfilePage from './pages/ProfilePage'
 import SupportPage from './pages/SupportPage'
 import IntegrationsPage from './pages/IntegrationsPage'
 import IntegrationFormPage from './pages/IntegrationFormPage'
+import { PhoneNumbersPage } from './pages/PhoneNumbersPage'
+import { CallbacksPage } from './pages/CallbacksPage'
+import { AgentEmbedPage } from './pages/AgentEmbedPage'
+import AdminUsersPage from './pages/AdminUsersPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
   
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+  
+  return <>{children}</>
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, user } = useAuthStore()
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+  
+  if (!user?.is_superuser) {
+    return <Navigate to="/dashboard" replace />
   }
   
   return <>{children}</>
@@ -36,6 +56,7 @@ function App() {
         {/* Public routes */}
         <Route path="/" element={<LandingPage />} />
         <Route path="/demo" element={<DemoPage />} />
+        <Route path="/agent/:agentId" element={<PublicAgentPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         
@@ -58,6 +79,11 @@ function App() {
         <Route path="/dashboard/agents/:id/edit" element={
           <ProtectedRoute>
             <AgentFormPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/agents/:agentId/documents" element={
+          <ProtectedRoute>
+            <AgentDocumentsPage />
           </ProtectedRoute>
         } />
         <Route path="/dashboard/calls" element={
@@ -109,6 +135,26 @@ function App() {
           <ProtectedRoute>
             <IntegrationFormPage />
           </ProtectedRoute>
+        } />
+        <Route path="/dashboard/phone-numbers" element={
+          <ProtectedRoute>
+            <PhoneNumbersPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/callbacks" element={
+          <ProtectedRoute>
+            <CallbacksPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/agents/:agentId/embed" element={
+          <ProtectedRoute>
+            <AgentEmbedPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/admin/users" element={
+          <AdminRoute>
+            <AdminUsersPage />
+          </AdminRoute>
         } />
         <Route path="/support" element={<SupportPage />} />
       </Routes>

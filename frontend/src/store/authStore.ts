@@ -6,6 +6,8 @@ interface User {
   email: string
   full_name: string
   subscription_tier: string
+  is_superuser?: boolean
+  is_approved?: boolean
 }
 
 interface AuthState {

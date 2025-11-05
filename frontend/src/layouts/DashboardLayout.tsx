@@ -22,6 +22,7 @@ import {
   ChevronDownIcon,
   Cog6ToothIcon,
   PuzzlePieceIcon,
+  UserGroupIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
 import { useThemeStore } from '@/store/themeStore'
@@ -35,6 +36,8 @@ const navigation = [
   { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
   { name: 'Appels', href: '/dashboard/calls', icon: PhoneIcon },
   { name: 'Intégrations', href: '/dashboard/integrations', icon: PuzzlePieceIcon },
+  { name: 'Numéros de téléphone', href: '/dashboard/phone-numbers', icon: PhoneIcon },
+  { name: 'Rappels', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
   { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
   { name: 'Support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
 ]
@@ -55,6 +58,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     // Auto-expand Settings if user is on a settings page
     return settingsNavigation.some(item => location.pathname === item.href)
   })
+
+  // Admin navigation - only show if user is admin
+  const adminNavigation = user?.is_superuser
+    ? [{ name: 'Admin - Users', href: '/dashboard/admin/users', icon: UserGroupIcon }]
+    : []
 
   const handleLogout = () => {
     logout()
@@ -108,6 +116,40 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 </Link>
               )
             })}
+            
+            {/* Admin Navigation */}
+            {adminNavigation.length > 0 && (
+              <div className="pt-4 mt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="px-4 mb-2">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Administration
+                  </p>
+                </div>
+                {adminNavigation.map((item) => {
+                  const isActive = location.pathname === item.href
+                  return (
+                    <Link
+                      key={item.name}
+                      to={item.href}
+                      onClick={() => setSidebarOpen(false)}
+                      className={`
+                        group flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
+                        ${isActive
+                          ? 'bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 shadow-sm'
+                          : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
+                        }
+                      `}
+                    >
+                      {isActive && (
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-purple-600 dark:bg-purple-400 rounded-r-full" />
+                      )}
+                      <item.icon className={`mr-3 h-5 w-5 flex-shrink-0 ${isActive ? 'text-purple-600 dark:text-purple-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
+                      <span className="truncate">{item.name}</span>
+                    </Link>
+                  )
+                })}
+              </div>
+            )}
             
             {/* Settings Section */}
             <div>
@@ -283,6 +325,39 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 </Link>
               )
             })}
+            
+            {/* Admin Navigation */}
+            {adminNavigation.length > 0 && (
+              <div className="pt-4 mt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="px-4 mb-2">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Administration
+                  </p>
+                </div>
+                {adminNavigation.map((item) => {
+                  const isActive = location.pathname === item.href
+                  return (
+                    <Link
+                      key={item.name}
+                      to={item.href}
+                      className={`
+                        group flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
+                        ${isActive
+                          ? 'bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 shadow-sm'
+                          : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
+                        }
+                      `}
+                    >
+                      {isActive && (
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-purple-600 dark:bg-purple-400 rounded-r-full" />
+                      )}
+                      <item.icon className={`mr-3 h-5 w-5 flex-shrink-0 ${isActive ? 'text-purple-600 dark:text-purple-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
+                      <span className="truncate">{item.name}</span>
+                    </Link>
+                  )
+                })}
+              </div>
+            )}
             
             {/* Settings Section */}
             <div>

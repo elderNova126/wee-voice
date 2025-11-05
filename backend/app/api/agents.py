@@ -13,8 +13,10 @@ class AgentCreate(BaseModel):
     name: str
     description: Optional[str] = None
     language: str = "fr-FR"
-    voice_id: str = "fr-FR-Neural2-A"
+    voice_id: str = "Charon"  # Gemini 2.5 voice (Charon/Kore/Fenrir/Aoede/Puck only)
+    voice_gender: str = "male"  # Voice gender: male, female, neutral
     system_prompt: str
+    greeting: Optional[str] = None
     tools_enabled: List[str] = []
     crm_webhook_url: Optional[str] = None
     crm_enabled: bool = False
@@ -26,7 +28,9 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = None
     language: Optional[str] = None
     voice_id: Optional[str] = None
+    voice_gender: Optional[str] = None
     system_prompt: Optional[str] = None
+    greeting: Optional[str] = None
     tools_enabled: Optional[List[str]] = None
     crm_webhook_url: Optional[str] = None
     crm_enabled: Optional[bool] = None
@@ -40,10 +44,13 @@ class AgentResponse(BaseModel):
     description: Optional[str]
     language: str
     voice_id: str
+    voice_gender: str
     system_prompt: str
+    greeting: Optional[str] = None
     tools_enabled: List[str]
     is_active: bool
     is_public: bool
+    rag_enabled: bool = False  # RAG/Knowledge Base enabled status
     created_at: Any
     
     class Config:
@@ -78,6 +85,17 @@ def list_agents(
     agents = db.query(VoiceAgent).filter(
         VoiceAgent.user_id == current_user.id
     ).all()
+    return agents
+
+
+@router.get("/public/list", response_model=List[AgentResponse])
+def list_public_agents(db: Session = Depends(get_db)):
+    """Get all public agents (no authentication required)"""
+    agents = db.query(VoiceAgent).filter(
+        VoiceAgent.is_public == True,
+        VoiceAgent.is_active == True
+    ).order_by(VoiceAgent.created_at.desc()).all()
+    
     return agents
 
 

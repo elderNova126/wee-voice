@@ -21,10 +21,16 @@ class Call(Base):
     agent_id = Column(Integer, ForeignKey("voice_agents.id"), nullable=False)
     
     # Call metadata
-    session_id = Column(String, unique=True, index=True, nullable=False)
+    session_id = Column(String, unique=True, index=True, nullable=True)  # Made nullable for phone calls
     status = Column(Enum(CallStatus, values_callable=lambda x: [e.value for e in x]), default=CallStatus.INITIATED)
     
+    # Zadarma integration
+    zadarma_call_id = Column(String, nullable=True, index=True)  # Zadarma's unique call ID
+    direction = Column(String, nullable=True)  # "inbound" or "outbound"
+    disposition = Column(String, nullable=True)  # Call disposition from Zadarma
+    
     # Duration and cost
+    duration = Column(Integer, default=0)  # Duration in seconds (for Zadarma compatibility)
     duration_seconds = Column(Float, default=0.0)
     duration_minutes = Column(Float, default=0.0)
     cost = Column(Float, default=0.0)
@@ -56,11 +62,20 @@ class Call(Base):
     ended_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
+    # Callback request flag
+    callback_requested = Column(Boolean, default=False)
+    callback_reason = Column(Text, nullable=True)
+    
+    # Email notification status
+    summary_email_sent = Column(Boolean, default=False)
+    summary_email_sent_at = Column(DateTime, nullable=True)
+    
     # Relationships
     user = relationship("User", back_populates="calls")
     agent = relationship("VoiceAgent", back_populates="calls")
     messages = relationship("CallMessage", back_populates="call", cascade="all, delete-orphan")
     usage_record = relationship("UsageRecord", back_populates="call", uselist=False, cascade="all, delete-orphan")
+    callback_request = relationship("CallbackRequest", back_populates="call", uselist=False, cascade="all, delete-orphan")
     
     def calculate_duration_and_cost(self, cost_per_minute: float = 0.05):
         """Calculate duration and cost based on started_at and ended_at timestamps"""

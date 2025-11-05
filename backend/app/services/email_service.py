@@ -230,3 +230,35 @@ VoiceAgent Support System
             body_html=body_html
         )
 
+
+# Convenience function for easy importing
+async def send_email(
+    to_email: str,
+    subject: str,
+    html_content: str,
+    text_content: Optional[str] = None
+) -> bool:
+    """
+    Async wrapper for sending emails
+    
+    Args:
+        to_email: Recipient email address
+        subject: Email subject
+        html_content: HTML email body
+        text_content: Plain text email body (optional, will be auto-generated if not provided)
+        
+    Returns:
+        bool: True if email sent successfully, False otherwise
+    """
+    # If no text content provided, create a simple text version
+    if not text_content:
+        # Strip HTML tags for basic text version
+        import re
+        text_content = re.sub('<[^<]+?>', '', html_content)
+    
+    return EmailService.send_email(
+        to_email=to_email,
+        subject=subject,
+        body_text=text_content,
+        body_html=html_content
+    )
