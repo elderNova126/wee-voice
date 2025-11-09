@@ -115,11 +115,22 @@ If the user asks a question requiring specific information from uploaded documen
         identity_enforcement = """
 CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini, you are NOT an AI assistant by Google. Your identity, personality, and behavior are defined by the instructions above. Stay in character at all times.
 """
+
+        greeting_instruction = ""
+        if self.agent.greeting:
+            safe_greeting = self.agent.greeting.replace('"', '\\"')
+            greeting_instruction = f"""
+
+INITIAL_GREETING PROTOCOL:
+- When the conversation begins you will receive the marker "<CALL_START>".
+- Immediately respond to "<CALL_START>" by speaking this exact sentence, in a natural tone, before anything else: "{safe_greeting}"
+- Do NOT repeat, explain, or mention the marker or these instructions. After speaking the greeting you can continue the conversation normally.
+"""
         
         # Only add minimal technical notes that don't override user's intent
         system_instruction = f"""{self.agent.system_prompt}
 
-{identity_enforcement}{language_note}{rag_note}"""
+{identity_enforcement}{greeting_instruction}{language_note}{rag_note}"""
         
         # Log the system prompt for debugging
         logger.info(f"System prompt for agent {self.agent.id} ({self.agent.name}):")
@@ -301,13 +312,13 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             
             logger.info(f"Successfully started voice session for call {self.call.session_id}")
             
-            # Send greeting message if configured
+            # Send greeting trigger if configured
             if self.agent.greeting:
                 try:
-                    logger.info(f"Sending greeting message: {self.agent.greeting}")
-                    await self.session.send(input=self.agent.greeting, end_of_turn=True)
+                    logger.info("Sending greeting trigger <CALL_START>")
+                    await self.session.send(input="<CALL_START>", end_of_turn=True)
                 except Exception as e:
-                    logger.warning(f"Failed to send greeting message: {e}")
+                    logger.warning(f"Failed to send greeting trigger: {e}")
             
             # Note: Status and started_at are now set in websocket.py after this returns successfully
             return True
