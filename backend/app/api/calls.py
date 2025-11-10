@@ -15,7 +15,7 @@ router = APIRouter()
 
 class CallResponse(BaseModel):
     id: int
-    session_id: str
+    session_id: Optional[str] = None
     agent_id: int
     status: str
     duration_seconds: float
