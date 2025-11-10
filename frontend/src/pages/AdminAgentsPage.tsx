@@ -221,7 +221,10 @@ export default function AdminAgentsPage() {
                           {agent.name}
                         </span>
                         {agent.description && (
-                          <span className="text-sm text-gray-500 dark:text-gray-400 line-clamp-1">
+                          <span
+                            className="text-sm text-gray-500 dark:text-gray-400 max-w-xs break-words line-clamp-2"
+                            title={agent.description}
+                          >
                             {agent.description}
                           </span>
                         )}
