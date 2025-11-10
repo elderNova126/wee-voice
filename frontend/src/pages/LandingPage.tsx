@@ -336,9 +336,8 @@ export default function LandingPage() {
       </section>
 
       {/* Public Agents Section */}
-      {publicAgents.length > 0 && (
-        <section className="py-20 px-6">
-          <div className="max-w-7xl mx-auto">
+      <section className="py-20 px-6">
+        <div className="max-w-7xl mx-auto">
             <div className="text-center mb-16">
               <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-500/10 to-purple-600/10 rounded-full mb-4">
                 <SparklesIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
@@ -355,8 +354,30 @@ export default function LandingPage() {
             </div>
 
             {loadingAgents ? (
-              <div className="flex justify-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {[...Array(3)].map((_, index) => (
+                  <div
+                    key={`agent-skeleton-${index}`}
+                    className="relative bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 overflow-hidden animate-pulse"
+                  >
+                    <div className="relative space-y-4">
+                      <div className="w-14 h-14 rounded-xl bg-gray-200 dark:bg-gray-700"></div>
+                      <div className="h-5 w-3/4 rounded bg-gray-200 dark:bg-gray-700"></div>
+                      <div className="space-y-2">
+                        <div className="h-3 w-full rounded bg-gray-200 dark:bg-gray-700"></div>
+                        <div className="h-3 w-5/6 rounded bg-gray-200 dark:bg-gray-700"></div>
+                      </div>
+                      <div className="flex gap-2">
+                        <div className="h-6 w-20 rounded-full bg-gray-200 dark:bg-gray-700"></div>
+                        <div className="h-6 w-24 rounded-full bg-gray-200 dark:bg-gray-700"></div>
+                      </div>
+                      <div className="space-y-2 pt-4">
+                        <div className="h-11 w-full rounded-lg bg-gray-200 dark:bg-gray-700"></div>
+                        <div className="h-11 w-full rounded-lg bg-gray-200 dark:bg-gray-700"></div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -436,9 +457,8 @@ export default function LandingPage() {
                 )}
               </div>
             )}
-          </div>
-        </section>
-      )}
+        </div>
+      </section>
 
       {/* Benefits Section */}
       <section className="py-20 px-6">
