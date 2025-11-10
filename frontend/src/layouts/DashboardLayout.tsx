@@ -61,7 +61,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   // Admin navigation - only show if user is admin
   const adminNavigation = user?.is_superuser
-    ? [{ name: 'Admin - Users', href: '/dashboard/admin/users', icon: UserGroupIcon }]
+    ? [
+        { name: 'Admin - Overview', href: '/dashboard/admin/overview', icon: HomeIcon },
+        { name: 'Admin - Users', href: '/dashboard/admin/users', icon: UserGroupIcon },
+        { name: 'Admin - Agents', href: '/dashboard/admin/agents', icon: MicrophoneIcon },
+        { name: 'Admin - Support', href: '/dashboard/admin/support', icon: ChatBubbleLeftRightIcon },
+      ]
     : []
 
   const handleLogout = () => {

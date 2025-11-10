@@ -24,6 +24,9 @@ import { PhoneNumbersPage } from './pages/PhoneNumbersPage'
 import { CallbacksPage } from './pages/CallbacksPage'
 import { AgentEmbedPage } from './pages/AgentEmbedPage'
 import AdminUsersPage from './pages/AdminUsersPage'
+import AdminOverviewPage from './pages/AdminOverviewPage'
+import AdminAgentsPage from './pages/AdminAgentsPage'
+import AdminSupportPage from './pages/AdminSupportPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -154,6 +157,21 @@ function App() {
         <Route path="/dashboard/admin/users" element={
           <AdminRoute>
             <AdminUsersPage />
+          </AdminRoute>
+        } />
+        <Route path="/dashboard/admin/overview" element={
+          <AdminRoute>
+            <AdminOverviewPage />
+          </AdminRoute>
+        } />
+        <Route path="/dashboard/admin/agents" element={
+          <AdminRoute>
+            <AdminAgentsPage />
+          </AdminRoute>
+        } />
+        <Route path="/dashboard/admin/support" element={
+          <AdminRoute>
+            <AdminSupportPage />
           </AdminRoute>
         } />
         <Route path="/support" element={<SupportPage />} />

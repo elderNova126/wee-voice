@@ -391,6 +391,45 @@ export const adminAPI = {
   // Stats
   getUserStats: () =>
     api.get('/admin/users/stats/summary'),
+
+  // Overview
+  getOverview: () =>
+    api.get('/admin/overview'),
+
+  // Agents
+  listAgents: (params?: {
+    skip?: number
+    limit?: number
+    search?: string
+    is_active?: boolean
+    is_public?: boolean
+    owner_id?: number
+  }) =>
+    api.get('/admin/agents', { params }),
+
+  updateAgent: (agentId: number, data: {
+    is_active?: boolean
+    is_public?: boolean
+    rag_enabled?: boolean
+  }) =>
+    api.patch(`/admin/agents/${agentId}`, data),
+
+  // Support
+  listSupportTickets: (params?: {
+    skip?: number
+    limit?: number
+    status?: string
+    priority?: string
+    search?: string
+  }) =>
+    api.get('/admin/support/tickets', { params }),
+
+  updateSupportTicket: (ticketId: number, data: {
+    status?: string
+    priority?: string
+    response_message?: string
+  }) =>
+    api.patch(`/admin/support/tickets/${ticketId}`, data),
 }
 
 // Default export for backward compatibility
