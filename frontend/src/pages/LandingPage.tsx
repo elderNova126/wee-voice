@@ -76,6 +76,7 @@ interface PublicAgent {
   description: string | null
   language: string
   rag_enabled: boolean
+  phone_number?: string | null
 }
 
 export default function LandingPage() {
@@ -394,13 +395,24 @@ export default function LandingPage() {
                       </div>
 
                       {/* Try Button */}
-                      <Link
-                        to={`/agent/${agent.id}`}
-                        className="inline-flex items-center justify-center w-full gap-2 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
-                      >
-                        <PhoneIcon className="w-5 h-5" />
-                        Essayer Maintenant
-                      </Link>
+                      <div className="flex flex-col gap-2">
+                        <Link
+                          to={`/agent/${agent.id}`}
+                          className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
+                        >
+                          <MicrophoneIcon className="w-5 h-5" />
+                          Essayer Maintenant
+                        </Link>
+                        {agent.phone_number && (
+                          <a
+                            href={`tel:${agent.phone_number}`}
+                            className="inline-flex items-center justify-center gap-2 px-4 py-3 border border-indigo-200 dark:border-indigo-500/40 text-indigo-600 dark:text-indigo-300 font-semibold rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-all duration-200"
+                          >
+                            <PhoneIcon className="w-5 h-5" />
+                            {agent.language?.startsWith('fr') ? 'Appeler' : 'Call'} {agent.phone_number}
+                          </a>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

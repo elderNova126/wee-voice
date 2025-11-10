@@ -119,6 +119,8 @@ Visit `/demo` to test the public demo agent with voice interaction.
 
 > 💡 Need sample agents? Run `python backend/scripts/seed_public_agents.py` to create the bundled French concierge and the **French-language** Dubai real estate discovery demos (marked as public automatically).
 
+> ☎️ When a public agent has an assigned phone number, the landing page, demo, and dedicated agent page now surface a direct call button so you can dial the AI instantly.
+
 ### 3. Integrate via API
 
 Generate an API key and connect via WebSocket:

@@ -47,12 +47,14 @@ def list_public_agents(db: Session = Depends(get_db)):
 - Displays cards for each public agent
 - Shows agent name, description, language, and RAG status
 - "Essayer Maintenant" button links to demo with specific agent
+- Shows phone call button when an agent has an assigned public number
 
 **Features:**
 - ✅ Auto-loads public agents on page load
 - ✅ Beautiful card design with hover effects
 - ✅ Shows language badge (Français/English)
 - ✅ Shows "Knowledge Base" badge if RAG is enabled
+- ✅ Displays `tel:` call CTA when a phone number is configured
 - ✅ Loading spinner while fetching agents
 - ✅ Graceful handling when no agents are available
 
@@ -69,6 +71,7 @@ def list_public_agents(db: Session = Depends(get_db)):
 - ✅ Shows agent name, description, and features
 - ✅ Language and RAG status badges
 - ✅ Direct "Start Conversation" button
+- ✅ "Call via Phone" button when a public phone number is available
 - ✅ No agent selector (focused experience)
 - ✅ Validates agent is public and active
 - ✅ Redirects to homepage if agent not found

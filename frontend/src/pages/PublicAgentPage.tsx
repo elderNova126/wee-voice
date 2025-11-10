@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon } from '@heroicons/react/24/outline'
+import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon, PhoneIcon } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { VoiceWebSocket, api } from '@/lib/api'
 
@@ -12,6 +12,8 @@ interface Agent {
   rag_enabled: boolean
   is_public: boolean
   is_active: boolean
+  phone_number?: string | null
+  phone_number_status?: string | null
 }
 
 export default function PublicAgentPage() {
@@ -34,6 +36,7 @@ export default function PublicAgentPage() {
   const audioQueueRef = useRef<Float32Array[]>([])
   const isPlayingRef = useRef<boolean>(false)
   const nextPlayTimeRef = useRef<number>(0)
+  const isFrench = agent?.language?.startsWith('fr') ?? true
 
   useEffect(() => {
     loadAgent()
@@ -131,7 +134,7 @@ export default function PublicAgentPage() {
       return true
     } catch (error) {
       console.error('Error initializing audio:', error)
-      toast.error('Could not access microphone')
+      toast.error(isFrench ? 'Impossible d\'accéder au microphone' : 'Could not access microphone')
       return false
     }
   }
@@ -170,7 +173,7 @@ export default function PublicAgentPage() {
               setIsConnecting(false)
               setIsRecording(true)
               isRecordingRef.current = true
-              toast.success('Connected! Start speaking...')
+              toast.success(isFrench ? 'Connecté ! Vous pouvez commencer à parler...' : 'Connected! Start speaking...')
             } else if (data.type === 'transcript') {
               setTranscript(prev => [...prev, { role: data.role, text: data.text }])
             } else if (data.type === 'error') {
@@ -182,7 +185,7 @@ export default function PublicAgentPage() {
         // onError callback
         (error) => {
           console.error('WebSocket error:', error)
-          toast.error('Connection error')
+          toast.error(isFrench ? 'Erreur de connexion' : 'Connection error')
           setIsConnecting(false)
           stopConversation()
         },
@@ -196,7 +199,7 @@ export default function PublicAgentPage() {
       )
     } catch (error) {
       console.error('Error starting conversation:', error)
-      toast.error('Failed to start conversation')
+      toast.error(isFrench ? 'Impossible de démarrer la conversation' : 'Failed to start conversation')
       setIsConnecting(false)
       cleanup()
     }
@@ -272,7 +275,7 @@ export default function PublicAgentPage() {
     nextPlayTimeRef.current = 0
     
     cleanup()
-    toast.success('Conversation ended')
+    toast.success(isFrench ? 'Conversation terminée' : 'Conversation ended')
   }
 
   if (loading) {
@@ -329,7 +332,7 @@ export default function PublicAgentPage() {
               <div className="flex flex-wrap gap-2">
                 <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium rounded-full">
                   <GlobeAltIcon className="w-4 h-4" />
-                  {agent.language === 'fr-FR' ? 'Français' : agent.language === 'en-US' ? 'English' : agent.language}
+                  {isFrench ? 'Français' : agent.language === 'en-US' ? 'English' : agent.language}
                 </span>
                 {agent.rag_enabled && (
                   <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-sm font-medium rounded-full">
@@ -338,6 +341,21 @@ export default function PublicAgentPage() {
                   </span>
                 )}
               </div>
+
+              {agent.phone_number && (
+                <div className="flex flex-wrap items-center gap-3 mt-4">
+                  <a
+                    href={`tel:${agent.phone_number}`}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
+                  >
+                    <PhoneIcon className="w-4 h-4" />
+                    {isFrench ? 'Appeler par téléphone' : 'Call by phone'}
+                  </a>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {agent.phone_number}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -348,17 +366,19 @@ export default function PublicAgentPage() {
             {!isConnected && !isConnecting && (
               <>
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-                  Ready to Start?
+                  {isFrench ? 'Prêt à démarrer ?' : 'Ready to Start?'}
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 mb-8">
-                  Click the button below to start talking with {agent.name}
+                  {isFrench
+                    ? `Cliquez sur le bouton ci-dessous pour parler avec ${agent.name}`
+                    : `Click the button below to start talking with ${agent.name}`}
                 </p>
                 <button
                   onClick={startConversation}
                   className="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                 >
                   <MicrophoneIcon className="w-6 h-6" />
-                  Start Conversation
+                  {isFrench ? 'Démarrer la conversation' : 'Start Conversation'}
                 </button>
               </>
             )}
@@ -367,7 +387,9 @@ export default function PublicAgentPage() {
               <>
                 <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600 mx-auto mb-4"></div>
                 <p className="text-lg text-gray-600 dark:text-gray-400">
-                  Connecting to {agent.name}...
+                  {isFrench
+                    ? `Connexion en cours avec ${agent.name}...`
+                    : `Connecting to ${agent.name}...`}
                 </p>
               </>
             )}
@@ -388,10 +410,14 @@ export default function PublicAgentPage() {
                 </div>
                 
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                  {isRecording ? 'Listening...' : 'Connected'}
+                  {isRecording
+                    ? (isFrench ? 'En écoute...' : 'Listening...')
+                    : (isFrench ? 'Connecté' : 'Connected')}
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 mb-8">
-                  {isRecording ? 'Speak naturally - the agent is listening' : 'Processing...'}
+                  {isRecording
+                    ? (isFrench ? 'Parlez naturellement – l’agent vous écoute' : 'Speak naturally – the agent is listening')
+                    : (isFrench ? 'Traitement en cours...' : 'Processing...')}
                 </p>
 
                 <button
@@ -399,7 +425,7 @@ export default function PublicAgentPage() {
                   className="inline-flex items-center gap-3 px-8 py-4 bg-red-600 hover:bg-red-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                 >
                   <StopIcon className="w-6 h-6" />
-                  End Conversation
+                  {isFrench ? 'Terminer la conversation' : 'End Conversation'}
                 </button>
               </>
             )}
@@ -409,24 +435,24 @@ export default function PublicAgentPage() {
           {!isConnected && !isConnecting && (
             <div className="mt-8 pt-8 border-t border-gray-200 dark:border-gray-700">
               <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                Tips for best experience:
+                {isFrench ? 'Conseils pour une meilleure expérience :' : 'Tips for best experience:'}
               </h3>
               <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  Use a quiet environment
+                  {isFrench ? 'Choisissez un environnement calme' : 'Use a quiet environment'}
                 </li>
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  Speak clearly and naturally
+                  {isFrench ? 'Parlez clairement et naturellement' : 'Speak clearly and naturally'}
                 </li>
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  Allow microphone access when prompted
+                  {isFrench ? 'Autorisez l’accès au micro lorsqu’on vous le demande' : 'Allow microphone access when prompted'}
                 </li>
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  Works best with Chrome or Edge browser
+                  {isFrench ? 'Fonctionne mieux avec les navigateurs Chrome ou Edge' : 'Works best with Chrome or Edge browsers'}
                 </li>
               </ul>
             </div>
@@ -437,7 +463,7 @@ export default function PublicAgentPage() {
         {transcript.length > 0 && (
           <div className="mt-8 bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-200 dark:border-gray-700">
             <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-              Conversation
+              {isFrench ? 'Conversation' : 'Conversation'}
             </h3>
             <div className="space-y-4">
               {transcript.map((msg, idx) => (
@@ -453,7 +479,7 @@ export default function PublicAgentPage() {
                     }`}
                   >
                     <p className="text-sm font-medium mb-1 opacity-75">
-                      {msg.role === 'user' ? 'You' : agent.name}
+                      {msg.role === 'user' ? (isFrench ? 'Vous' : 'You') : agent.name}
                     </p>
                     <p>{msg.text}</p>
                   </div>
