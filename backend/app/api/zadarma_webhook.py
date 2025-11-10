@@ -224,7 +224,7 @@ async def handle_call_start(
         "agent": {
             "id": agent.id,
             "name": agent.name,
-            "greeting": agent.greeting
+            "greeting": agent.greeting_message
         }
     }
 
