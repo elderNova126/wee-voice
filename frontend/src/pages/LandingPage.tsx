@@ -129,6 +129,12 @@ export default function LandingPage() {
             </span>
           </Link>
           <div className="flex items-center gap-3">
+            <a
+              href="#public-agents"
+              className="hidden sm:inline-flex text-gray-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors font-medium"
+            >
+              Agents publics
+            </a>
             <Link
               to="/demo"
               className="hidden sm:inline-flex text-gray-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors font-medium"
@@ -336,7 +342,7 @@ export default function LandingPage() {
       </section>
 
       {/* Public Agents Section */}
-      <section className="py-20 px-6">
+      <section id="public-agents" className="py-20 px-6 scroll-mt-40">
         <div className="max-w-7xl mx-auto">
             <div className="text-center mb-16">
               <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-500/10 to-purple-600/10 rounded-full mb-4">
