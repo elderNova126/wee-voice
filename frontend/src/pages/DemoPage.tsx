@@ -289,8 +289,8 @@ export default function DemoPage() {
           </h1>
           <p className="text-xl text-gray-600 dark:text-gray-400 mb-6">
             {selectedLanguage.startsWith('fr') 
-              ? 'Testez notre agent vocal intelligent propulsé par Gemini 2.5' 
-              : 'Test our intelligent voice agent powered by Gemini 2.5'}
+              ? 'Agent de démonstration en français pour présenter WeeVoice.' 
+              : 'Demonstration agent in French to present WeeVoice.'}
           </p>
           
           {/* Language Selector */}
