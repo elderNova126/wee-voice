@@ -4,6 +4,18 @@
 
 Public agents are now displayed on the landing page (homepage), allowing visitors to interact with agents without signing up. This feature enables admins and users to showcase their agents to the public.
 
+## Default Public Agents
+
+Run the helper script below to create or refresh the bundled demo agents:
+
+```
+python backend/scripts/seed_public_agents.py
+```
+
+The script ensures the following public agents are available:
+- **Assistant Démo Français** – French concierge that explains the WeeVoice platform.
+- **Dubai Real Estate Discovery** – Agent francophone qui réalise des appels de découverte immobilière à Dubaï, gère les objections initiales et collecte les informations de qualification sans proposer d’offres.
+
 ## What Was Implemented
 
 ### 1. Backend API Endpoint
