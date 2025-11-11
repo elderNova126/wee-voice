@@ -10,6 +10,7 @@ from datetime import datetime
 from app.models import get_db, User, Call, VoiceAgent, CallbackRequest
 from app.core.security import get_current_user
 from app.services.notification_service import get_notification_service
+from app.services.call_followup_service import update_call_follow_up_data
 
 router = APIRouter()
 
@@ -93,6 +94,7 @@ async def create_callback_request(
     # Update call record
     call.callback_requested = True
     call.callback_reason = request.reason
+    update_call_follow_up_data(call)
     
     db.commit()
     db.refresh(callback_request)

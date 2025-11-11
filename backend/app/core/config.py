@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     GEMINI_MODEL: str = "gemini-2.5-flash-native-audio-preview-09-2025"
     
+    # OpenAI
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_SUMMARY_MODEL: str = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-4o")
+    
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
@@ -48,12 +52,13 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     
     # Email (SMTP)
-    SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "mail.weedoo.be")
     SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
-    SMTP_USER: str = os.getenv("SMTP_USER", "")
-    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
-    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "noreply@weevoice.com")
-    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "WeeVoice")
+    SMTP_USER: str = os.getenv("SMTP_USER", "voice@weedoo.be")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "123=Huy@-456-")
+    SMTP_USE_TLS: bool = bool(int(os.getenv("SMTP_USE_TLS", "1")))
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "voice@weedoo.be")
+    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Weedoo Voice Agent")
     
     # Frontend URL (for email links)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")

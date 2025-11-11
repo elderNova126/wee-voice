@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { callsAPI } from '@/lib/api'
 import { format } from 'date-fns'
 import { fr } from 'date-fns/locale'
@@ -16,6 +16,7 @@ import {
 export default function CallDetailPage() {
   const { callId } = useParams<{ callId: string }>()
   const [activeTab, setActiveTab] = useState<'overview' | 'transcript'>('overview')
+  const queryClient = useQueryClient()
   
   const { data: call, isLoading } = useQuery({
     queryKey: ['call', callId],
@@ -29,7 +30,7 @@ export default function CallDetailPage() {
     mutationFn: () => callsAPI.generateSummary(Number(callId)),
     onSuccess: (response) => {
       toast.success('Résumé généré avec succès')
-      // Optionally refresh the call data
+      queryClient.invalidateQueries({ queryKey: ['call', callId] })
     },
     onError: () => {
       toast.error('Erreur lors de la génération du résumé')
@@ -74,14 +75,18 @@ export default function CallDetailPage() {
             </p>
           </div>
           
-          {!call.summary && call.transcript && (
+          {call.transcript && (
             <button
               onClick={() => generateSummaryMutation.mutate()}
               disabled={generateSummaryMutation.isPending}
               className="btn-primary flex items-center"
             >
               <SparklesIcon className="w-5 h-5 mr-2" />
-              {generateSummaryMutation.isPending ? 'Génération...' : 'Générer un résumé'}
+              {generateSummaryMutation.isPending
+                ? 'Génération...'
+                : call.summary
+                  ? 'Régénérer le résumé'
+                  : 'Générer un résumé'}
             </button>
           )}
         </div>
@@ -174,6 +179,24 @@ export default function CallDetailPage() {
                 </div>
               )}
               
+              {call.action_tags && call.action_tags.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">
+                    Actions détectées
+                  </h4>
+                  <div className="flex flex-wrap gap-2">
+                    {call.action_tags.map((tag: string, index: number) => (
+                      <span
+                        key={`detail-tag-${index}`}
+                        className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
               {call.key_points && call.key_points.length > 0 && (
                 <div>
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">
@@ -182,6 +205,19 @@ export default function CallDetailPage() {
                   <ul className="list-disc list-inside space-y-1 text-gray-700 dark:text-gray-300">
                     {call.key_points.map((point: string, index: number) => (
                       <li key={index}>{point}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {call.action_items && call.action_items.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">
+                    Actions à entreprendre
+                  </h4>
+                  <ul className="list-disc list-inside space-y-1 text-gray-700 dark:text-gray-300">
+                    {call.action_items.map((item: string, index: number) => (
+                      <li key={`action-item-${index}`}>{item}</li>
                     ))}
                   </ul>
                 </div>

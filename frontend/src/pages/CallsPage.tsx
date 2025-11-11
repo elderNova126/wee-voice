@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react'
 import { PhoneIcon, ClockIcon, CurrencyDollarIcon } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { callsAPI } from '@/lib/api'
@@ -13,8 +13,68 @@ interface Call {
   cost: number
   started_at: string | null  // Nullable - set when session actually starts
   ended_at: string | null
-  summary: string
-  sentiment: string
+  summary?: string | null
+  sentiment?: string | null
+  transcript?: string | null
+  callback_requested?: boolean
+  callback_reason?: string | null
+  action_items?: string[]
+  action_tags?: string[]
+}
+
+interface CallMessage {
+  role: string
+  content: string
+  timestamp: string
+}
+
+interface CallWithDetails extends Call {
+  key_points?: string[]
+  messages?: CallMessage[]
+}
+
+const partitionFollowUpTags = (tags: string[] = []) => {
+  return tags.reduce(
+    (acc, tag) => {
+      const normalized = tag.toLowerCase()
+      if (normalized.includes('request')) {
+        acc.actionRequests.push(tag)
+      } else {
+        acc.others.push(tag)
+      }
+      return acc
+    },
+    { actionRequests: [] as string[], others: [] as string[] }
+  )
+}
+
+const getTagColor = (tag: string) => {
+  const normalized = tag.toLowerCase()
+  if (normalized.includes('request')) {
+    return 'bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100 border border-amber-400 dark:border-amber-600'
+  }
+  if (normalized.includes('email')) {
+    return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100'
+  }
+  if (normalized.includes('message')) {
+    return 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100'
+  }
+  if (normalized.includes('callback')) {
+    return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100'
+  }
+  if (normalized.includes('meeting') || normalized.includes('rdv') || normalized.includes('rendez')) {
+    return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100'
+  }
+  if (normalized.includes('quote') || normalized.includes('devis')) {
+    return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100'
+  }
+  if (normalized.includes('share document')) {
+    return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100'
+  }
+  if (normalized.includes('book demo')) {
+    return 'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-100'
+  }
+  return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
 }
 
 export default function CallsPage() {
@@ -96,7 +156,7 @@ export default function CallsPage() {
           </button>
         </div>
       </div>
-
+      
       {loading ? (
         <div className="space-y-4">
           {[1, 2, 3].map((i) => (
@@ -115,56 +175,88 @@ export default function CallsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {calls.map((call) => (
-            <div
-              key={call.id}
-              className="card hover:shadow-lg transition-shadow cursor-pointer"
-              onClick={() => setSelectedCall(call)}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-start space-x-4 flex-1">
-                  <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
-                    <PhoneIcon className="h-6 w-6 text-blue-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                        Call #{call.id}
-                      </h3>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(call.status)}`}>
-                        {call.status}
-                      </span>
-                      {call.sentiment && (
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getSentimentColor(call.sentiment)}`}>
-                          {call.sentiment}
+          {calls.map((call) => {
+            const { actionRequests, others } = partitionFollowUpTags(call.action_tags ?? [])
+            return (
+              <div
+                key={call.id}
+                className="card hover:shadow-lg transition-shadow cursor-pointer"
+                onClick={() => setSelectedCall(call)}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start space-x-4 flex-1">
+                    <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
+                      <PhoneIcon className="h-6 w-6 text-blue-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                          Call #{call.id}
+                        </h3>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(call.status)}`}>
+                          {call.status}
                         </span>
+                        {call.sentiment && (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getSentimentColor(call.sentiment)}`}>
+                            {call.sentiment}
+                          </span>
+                        )}
+                        {actionRequests.length > 0 && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 uppercase tracking-wide">
+                            Action Required
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                        {call.started_at ? formatDate(call.started_at) : 'Initializing...'}
+                      </p>
+                      {call.summary && (
+                        <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
+                          {call.summary}
+                        </p>
+                      )}
+                      {actionRequests.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {actionRequests.map((tag, index) => (
+                            <span
+                              key={`request-${tag}-${index}`}
+                              className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getTagColor(tag)}`}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {others.length > 0 && (
+                        <div className={`flex flex-wrap gap-2 ${actionRequests.length > 0 ? 'mt-2' : 'mt-3'}`}>
+                          {others.map((tag, index) => (
+                            <span
+                              key={`other-${tag}-${index}`}
+                              className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getTagColor(tag)}`}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                      {call.started_at ? formatDate(call.started_at) : 'Initializing...'}
-                    </p>
-                    {call.summary && (
-                      <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
-                        {call.summary}
-                      </p>
-                    )}
                   </div>
-                </div>
-                <div className="flex items-center gap-6 ml-4">
-                  <div className="text-right">
-                    <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
-                      <ClockIcon className="h-4 w-4 mr-1" />
-                      {call.duration_minutes?.toFixed(1) || '0.0'} min
-                    </div>
-                    <div className="flex items-center text-sm text-gray-500 dark:text-gray-400 mt-1">
-                      <CurrencyDollarIcon className="h-4 w-4 mr-1" />
-                      ${call.cost?.toFixed(2) || '0.00'}
+                  <div className="flex items-center gap-6 ml-4">
+                    <div className="text-right">
+                      <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
+                        <ClockIcon className="h-4 w-4 mr-1" />
+                        {call.duration_minutes?.toFixed(1) || '0.0'} min
+                      </div>
+                      <div className="flex items-center text-sm text-gray-500 dark:text-gray-400 mt-1">
+                        <CurrencyDollarIcon className="h-4 w-4 mr-1" />
+                        ${call.cost?.toFixed(2) || '0.00'}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -187,25 +279,132 @@ interface CallDetailsModalProps {
 
 function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const [transcript, setTranscript] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
+  const [loadingTranscript, setLoadingTranscript] = useState(true)
+  const [callDetails, setCallDetails] = useState<CallWithDetails | null>(null)
+  const [loadingDetails, setLoadingDetails] = useState(true)
+  const [generatingSummary, setGeneratingSummary] = useState(false)
+  const [showEmailComposer, setShowEmailComposer] = useState(false)
+  const [sendingEmail, setSendingEmail] = useState(false)
+  const [emailForm, setEmailForm] = useState({
+    to_email: '',
+    subject: `Follow-up for call #${call.id}`,
+    body: ''
+  })
 
-  useEffect(() => {
-    loadTranscript()
+  const loadCallDetails = useCallback(async () => {
+    setLoadingDetails(true)
+    try {
+      const response = await callsAPI.get(call.id)
+      setCallDetails(response.data)
+    } catch (error) {
+      console.error('Failed to load call details:', error)
+      toast.error('Failed to load call details')
+    } finally {
+      setLoadingDetails(false)
+    }
   }, [call.id])
 
-  const loadTranscript = async () => {
+  const loadTranscript = useCallback(async () => {
+    setLoadingTranscript(true)
     try {
       const response = await callsAPI.getTranscript(call.id)
-      setTranscript(response.data)
-    } catch (error) {
-      console.error('Failed to load transcript:', error)
-    } finally {
-      setLoading(false)
+      const { transcript: rawTranscript, transcript_json: structuredTranscript } = response.data ?? {}
+      setTranscript(structuredTranscript ?? rawTranscript ?? null)
+    } catch (error: any) {
+      const status = error?.response?.status
+      if (status === 404) {
+        // No transcript stored for this call; fall back to any cached value
+        setTranscript(call.transcript ?? null)
+      } else {
+        console.error('Failed to load transcript:', error)
+        toast.error('Failed to load transcript')
       }
+    } finally {
+      setLoadingTranscript(false)
+    }
+  }, [call.id, call.transcript])
+
+  useEffect(() => {
+    loadCallDetails()
+    loadTranscript()
+  }, [loadCallDetails, loadTranscript])
+
+  const handleGenerateSummary = async () => {
+    setGeneratingSummary(true)
+    try {
+      await callsAPI.generateSummary(call.id)
+      toast.success('Résumé régénéré')
+      await Promise.all([loadCallDetails(), loadTranscript()])
+    } catch (error) {
+      console.error('Failed to regenerate summary:', error)
+      toast.error('Erreur lors de la régénération du résumé')
+    } finally {
+      setGeneratingSummary(false)
+    }
+  }
+
+  const displayCall = callDetails ?? call
+  const { actionRequests: modalActionRequests, others: modalOtherTags } = partitionFollowUpTags(displayCall.action_tags ?? [])
+  const transcriptSource: any = transcript ?? displayCall.transcript
+  const transcriptAvailable = Boolean(transcriptSource)
+  const hasEmailRequest = modalActionRequests.some((tag) => tag.toLowerCase().includes('email'))
+
+  useEffect(() => {
+    setEmailForm((prev) => ({
+      ...prev,
+      subject: `Follow-up for call #${call.id}`
+    }))
+  }, [call.id])
+
+  const handleEmailFieldChange = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = event.target
+    setEmailForm((prev) => ({
+      ...prev,
+      [name]: value
+    }))
+  }
+
+  const handleSendEmail = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!emailForm.to_email.trim()) {
+      toast.error('Recipient email is required')
+      return
+    }
+    if (!emailForm.subject.trim()) {
+      toast.error('Subject is required')
+      return
+    }
+    if (!emailForm.body.trim()) {
+      toast.error('Email body cannot be empty')
+      return
     }
 
-    return (
-      <div className="fixed inset-0 z-50 overflow-y-auto">
+    try {
+      setSendingEmail(true)
+      await callsAPI.sendEmail(displayCall.id, {
+        to_email: emailForm.to_email.trim(),
+        subject: emailForm.subject.trim(),
+        body: emailForm.body.trim(),
+      })
+      toast.success('Email sent successfully')
+      setShowEmailComposer(false)
+      setEmailForm({
+        to_email: '',
+        subject: `Follow-up for call #${call.id}`,
+        body: ''
+      })
+      await loadCallDetails()
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to send email'
+      toast.error(message)
+      console.error('Failed to send follow-up email:', error)
+    } finally {
+      setSendingEmail(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex min-h-screen items-center justify-center p-4">
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={onClose} />
 
@@ -215,8 +414,22 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
               Call Details
             </h3>
             <p className="text-gray-600 dark:text-gray-400 mt-1">
-              Session ID: {call.session_id}
+              Session ID: {displayCall.session_id}
             </p>
+            {transcriptAvailable && (
+              <button
+                onClick={handleGenerateSummary}
+                disabled={generatingSummary || loadingDetails}
+                className="btn-primary mt-4 flex items-center"
+              >
+                <ClockIcon className="h-4 w-4 mr-2" />
+                {generatingSummary
+                  ? 'Régénération...'
+                  : displayCall.summary
+                    ? 'Régénérer le résumé'
+                    : 'Générer un résumé'}
+              </button>
+            )}
           </div>
 
           <div className="space-y-6">
@@ -225,60 +438,203 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Status</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white capitalize">
-                  {call.status}
+                  {displayCall.status}
                 </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Duration</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white">
-                  {call.duration_minutes?.toFixed(1) || '0.0'} minutes
+                  {displayCall.duration_minutes?.toFixed(1) || '0.0'} minutes
                 </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Cost</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white">
-                  ${call.cost?.toFixed(2) || '0.00'}
+                  ${displayCall.cost?.toFixed(2) || '0.00'}
                 </p>
               </div>
-              {call.sentiment && (
+              {displayCall.sentiment && (
                 <div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">Sentiment</p>
                   <p className="text-lg font-medium text-gray-900 dark:text-white capitalize">
-                    {call.sentiment}
+                    {displayCall.sentiment}
                   </p>
                 </div>
               )}
             </div>
 
+            {/* Follow-up tags */}
+            {displayCall.action_tags && displayCall.action_tags.length > 0 && (
+              <div>
+                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                  Actions de suivi détectées
+                </h4>
+                {modalActionRequests.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 uppercase tracking-wide">
+                      Action Required
+                    </span>
+                    {modalActionRequests.map((tag, index) => (
+                      <span
+                        key={`modal-request-tag-${tag}-${index}`}
+                        className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${getTagColor(tag)}`}
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {modalOtherTags.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {modalOtherTags.map((tag, index) => (
+                      <span
+                        key={`modal-tag-${tag}-${index}`}
+                        className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${getTagColor(tag)}`}
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {hasEmailRequest && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h5 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                      Send follow-up email
+                    </h5>
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Complete the action request by emailing the customer directly.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowEmailComposer((prev) => !prev)}
+                    className="btn-secondary btn-xs"
+                  >
+                    {showEmailComposer ? 'Close' : 'Compose'}
+                  </button>
+                </div>
+
+                {showEmailComposer && (
+                  <form onSubmit={handleSendEmail} className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        To
+                      </label>
+                      <input
+                        type="email"
+                        name="to_email"
+                        value={emailForm.to_email}
+                        onChange={handleEmailFieldChange}
+                        placeholder="customer@example.com"
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Subject
+                      </label>
+                      <input
+                        type="text"
+                        name="subject"
+                        value={emailForm.subject}
+                        onChange={handleEmailFieldChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Message
+                      </label>
+                      <textarea
+                        name="body"
+                        rows={6}
+                        value={emailForm.body}
+                        onChange={handleEmailFieldChange}
+                        className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        placeholder="Draft your follow-up email..."
+                        required
+                      />
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={() => setShowEmailComposer(false)}
+                        disabled={sendingEmail}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="btn-primary btn-sm"
+                        disabled={sendingEmail}
+                      >
+                        {sendingEmail ? 'Sending...' : 'Send email'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+
+            {/* Action items */}
+            {displayCall.action_items && displayCall.action_items.length > 0 && (
+              <div>
+                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                  Détails des actions à entreprendre
+                </h4>
+                <ul className="list-disc list-inside space-y-1 text-gray-700 dark:text-gray-300">
+                  {displayCall.action_items.map((item, index) => (
+                    <li key={`modal-action-${index}`}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Summary */}
-            {call.summary && (
+            {displayCall.summary && (
               <div>
                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
                   Summary
                 </h4>
                 <p className="text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
-                  {call.summary}
+                  {displayCall.summary}
                 </p>
               </div>
             )}
 
             {/* Transcript */}
             <div>
-              <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                Transcript
-              </h4>
-              {loading ? (
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Transcript
+                </h4>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  {transcriptSource ? 'Transcript chargé' : 'Transcript indisponible'}
+                </span>
+              </div>
+              {loadingTranscript ? (
                 <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg animate-pulse">
                   <div className="h-20 bg-gray-200 dark:bg-gray-700 rounded"></div>
                 </div>
-              ) : transcript ? (
+              ) : transcriptSource ? (
                 <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3 max-h-96 overflow-y-auto">
-                  {Array.isArray(transcript) ? (
-                    transcript.map((message: any, index: number) => (
+                  {Array.isArray(transcriptSource) ? (
+                    transcriptSource.map((message: any, index: number) => (
                       <div key={index} className="text-sm">
-                        <span className={`font-medium ${
-                          message.role === 'user' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'
-                        }`}>
+                        <span
+                          className={`font-medium ${
+                            message.role === 'user'
+                              ? 'text-blue-600 dark:text-blue-400'
+                              : 'text-green-600 dark:text-green-400'
+                          }`}
+                        >
                           {message.role === 'user' ? 'User' : 'Agent'}:
                         </span>
                         <span className="ml-2 text-gray-700 dark:text-gray-300">
@@ -287,7 +643,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                       </div>
                     ))
                   ) : (
-                    <p className="text-gray-700 dark:text-gray-300">{transcript}</p>
+                    <p className="text-gray-700 dark:text-gray-300">{transcriptSource}</p>
                   )}
                 </div>
               ) : (
@@ -297,10 +653,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
           </div>
 
           <div className="mt-6 flex justify-end">
-            <button
-              onClick={onClose}
-              className="btn-secondary"
-            >
+            <button onClick={onClose} className="btn-secondary">
               Close
             </button>
           </div>

@@ -46,6 +46,8 @@ class Call(Base):
     summary = Column(Text, nullable=True)
     sentiment = Column(String, nullable=True)
     key_points = Column(JSON, nullable=True)
+    action_items = Column(JSON, default=list)
+    action_tags = Column(JSON, default=list)
     
     # Caller information
     caller_phone = Column(String, nullable=True)

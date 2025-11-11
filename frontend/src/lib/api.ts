@@ -76,6 +76,9 @@ export const callsAPI = {
   
   generateSummary: (id: number) => api.post(`/calls/${id}/generate-summary`),
   
+  sendEmail: (id: number, data: { to_email: string; subject: string; body: string; from_email?: string; from_name?: string }) =>
+    api.post(`/calls/${id}/send-email`, data),
+  
   getStats: (days: number = 30) => api.get('/calls/stats/overview', { params: { days } }),
   
   delete: (id: number) => api.delete(`/calls/${id}`),

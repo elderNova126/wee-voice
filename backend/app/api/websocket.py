@@ -17,6 +17,8 @@ from app.services.crm_service import CRMIntegrationService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.propagate = True
 
 
 class ConnectionManager:
@@ -64,10 +66,11 @@ async def voice_websocket(
     call: Optional[Call] = None
     agent_service: Optional[FrenchVoiceAgentService] = None
     
-    logger.info(f"New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
-    
+    logger.info(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
+    print(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
     try:
         # Verify authentication (API key or JWT token)
+        logger.info(f"🔐 Checking authentication...")
         if api_key:
             logger.info(f"API key provided: {api_key[:20]}...")
             user = await verify_api_key(api_key, db)
@@ -114,9 +117,12 @@ async def voice_websocket(
             return
         
         # Accept connection
+        logger.info(f"✅ Authentication successful, accepting WebSocket connection")
+        print(f"✅ Authentication successful, accepting WebSocket connection")
         await manager.connect(session_id, websocket)
         
         # Create call record (without started_at yet)
+        logger.info(f"📞 Creating call record...")
         call = Call(
             user_id=user.id if user else agent.user_id,
             agent_id=agent_id,
@@ -126,14 +132,18 @@ async def voice_websocket(
         db.add(call)
         db.commit()
         db.refresh(call)
+        logger.info(f"✅ Call record created: ID={call.id}")
         
         # Initialize agent service
+        logger.info(f"🤖 Initializing agent service...")
         agent_service = FrenchVoiceAgentService(agent, call)
         manager.agent_services[session_id] = agent_service
         
         # Start agent session
+        logger.info(f"🚀 Starting Gemini session...")
         success = await agent_service.start_session()
         if not success:
+            logger.error(f"❌ Failed to start agent session")
             await websocket.send_json({
                 "type": "error",
                 "message": "Failed to start agent session"
@@ -146,14 +156,17 @@ async def voice_websocket(
         call.status = CallStatus.IN_PROGRESS
         db.commit()
         db.refresh(call)
+        logger.info(f"✅ Session started successfully, call status: IN_PROGRESS")
         
         # Send session started message
+        logger.info(f"📤 Sending session_started message to client")
         await websocket.send_json({
             "type": "session_started",
             "session_id": session_id,
             "agent_name": agent.name,
             "language": agent.language
         })
+        logger.info(f"🎧 Starting audio processing tasks...")
         
         # Create tasks for bidirectional communication
         # Flag to signal all tasks to stop
@@ -289,6 +302,25 @@ async def voice_websocket(
                     # Set end time if not already set
                     if not fresh_call.ended_at:
                         fresh_call.ended_at = datetime.utcnow()
+                    
+                    # Ensure transcript is complete from messages if not already set
+                    if not fresh_call.transcript:
+                        messages = cleanup_db.query(CallMessage).filter(
+                            CallMessage.call_id == fresh_call.id
+                        ).order_by(CallMessage.timestamp).all()
+                        
+                        if messages:
+                            transcript_lines = []
+                            for msg in messages:
+                                transcript_lines.append(f"{msg.role.upper()}: {msg.content}")
+                            fresh_call.transcript = "\n\n".join(transcript_lines)
+                            logger.info(f"Built transcript from {len(messages)} messages for call {fresh_call.id}")
+                    
+                    # Log transcript status
+                    if fresh_call.transcript:
+                        logger.info(f"Call {fresh_call.id} transcript saved: {len(fresh_call.transcript)} characters")
+                    else:
+                        logger.warning(f"Call {fresh_call.id} has no transcript")
                     
                     # Calculate duration
                     if not fresh_call.calculate_duration_and_cost():

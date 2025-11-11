@@ -3,11 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from datetime import datetime, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 from app.core.security import get_current_active_user
 from app.models import get_db, User, Call, CallMessage, CallStatus
 from app.services.agent_service import CallSummaryService
+from app.services.call_followup_service import update_call_follow_up_data
+from app.services.email_service import EmailService
 from app.services.notification_service import get_notification_service
 
 router = APIRouter()
@@ -26,6 +28,10 @@ class CallResponse(BaseModel):
     sentiment: Optional[str]
     started_at: Optional[datetime]  # Nullable - set when session actually starts
     ended_at: Optional[datetime]
+    callback_requested: bool = False
+    callback_reason: Optional[str] = None
+    action_items: Optional[List[str]] = None
+    action_tags: Optional[List[str]] = None
     
     class Config:
         from_attributes = True
@@ -43,6 +49,14 @@ class CallListFilters(BaseModel):
     status: Optional[CallStatus] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
+
+
+class CallEmailRequest(BaseModel):
+    to_email: EmailStr
+    subject: str
+    body: str
+    from_email: Optional[EmailStr] = None
+    from_name: Optional[str] = None
 
 
 @router.get("/", response_model=List[CallResponse])
@@ -64,6 +78,12 @@ def list_calls(
         query = query.filter(Call.status == status)
     
     calls = query.order_by(desc(Call.created_at)).offset(offset).limit(limit).all()
+
+    # Ensure follow-up tags are refreshed using the latest action items data
+    for call in calls:
+        if call.action_items:
+            update_call_follow_up_data(call, call.action_items)
+
     return calls
 
 
@@ -115,12 +135,24 @@ def get_transcript(
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
     
+    # If no transcript but has messages, build transcript from messages
     if not call.transcript:
-        raise HTTPException(status_code=404, detail="Transcript not available")
+        messages = db.query(CallMessage).filter(
+            CallMessage.call_id == call_id
+        ).order_by(CallMessage.timestamp).all()
+        
+        if messages:
+            # Build transcript from messages
+            transcript_lines = []
+            for msg in messages:
+                transcript_lines.append(f"{msg.role.upper()}: {msg.content}")
+            call.transcript = "\n\n".join(transcript_lines)
+            db.commit()
     
+    # Return transcript or empty if still not available
     return {
         "call_id": call.id,
-        "transcript": call.transcript,
+        "transcript": call.transcript or "",
         "transcript_json": call.transcript_json
     }
 
@@ -148,6 +180,14 @@ async def generate_summary(
     result = await summary_service.generate_summary(call)
     
     db.commit()
+    db.refresh(call)
+    
+    # Enrich response with persisted values
+    result["summary"] = call.summary
+    result["sentiment"] = call.sentiment
+    result["key_points"] = call.key_points
+    result["action_items"] = call.action_items
+    result["action_tags"] = call.action_tags
     
     # Send email notification with summary
     if result.get("summary"):
@@ -155,6 +195,48 @@ async def generate_summary(
         await notification_service.send_call_summary_email(db, call, result)
     
     return result
+
+
+@router.post("/{call_id}/send-email")
+def send_call_followup_email(
+    call_id: int,
+    payload: CallEmailRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Send a follow-up email related to a call."""
+    call = db.query(Call).filter(
+        Call.id == call_id,
+        Call.user_id == current_user.id
+    ).first()
+
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    email_sent = EmailService.send_email(
+        to_email=payload.to_email,
+        subject=payload.subject,
+        body_text=payload.body,
+        from_email=payload.from_email,
+        from_name=payload.from_name,
+    )
+
+    if not email_sent:
+        raise HTTPException(status_code=500, detail="Failed to send email")
+
+    # Record email activity as a system message on the call
+    activity_message = CallMessage(
+        call_id=call.id,
+        role="system",
+        content=(
+            f"Follow-up email sent to {payload.to_email}\n"
+            f"Subject: {payload.subject}\n\n{payload.body}"
+        )
+    )
+    db.add(activity_message)
+    db.commit()
+
+    return {"message": "Email sent successfully"}
 
 
 @router.get("/stats/overview")

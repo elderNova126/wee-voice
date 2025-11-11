@@ -324,8 +324,15 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
     wsRef.current?.disconnect()
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop())
     processorRef.current?.disconnect()
-    audioContextRef.current?.close()
-    audioPlayerRef.current?.close()
+    
+    // Close audio contexts only if they're not already closed
+    if (audioContextRef.current?.state !== 'closed') {
+      audioContextRef.current?.close()
+    }
+    if (audioPlayerRef.current?.state !== 'closed') {
+      audioPlayerRef.current?.close()
+    }
+    
     setIsConnected(false)
   }
 

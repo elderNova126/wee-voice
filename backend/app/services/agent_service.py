@@ -1,10 +1,11 @@
 import asyncio
-from typing import Dict, Any, AsyncGenerator
+from typing import Dict, Any, AsyncGenerator, List, Optional
 import logging
 import json
 
 from google import genai
 from google.genai import types
+import httpx
 
 # Suppress warnings from google_genai.types about non-text/non-data parts
 # These warnings occur when the model returns structured responses with multiple parts
@@ -33,8 +34,11 @@ except Exception as e:
 from app.core.config import settings
 from app.models import Call, CallStatus, VoiceAgent
 from app.services.rag_service import get_rag_service
+from app.services.call_followup_service import update_call_follow_up_data
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.propagate = True
 
 
 class FrenchVoiceAgentService:
@@ -59,6 +63,8 @@ class FrenchVoiceAgentService:
         self._rag_service = None
         self._rag_service_initialized = False
         self.conversation_buffer = []  # Store recent conversation for context
+        self._agent_transcript_buffer: List[str] = []
+        self._user_transcript_buffer: List[str] = []
         
         # LangChain components (optional, only for summarization)
         if LANGCHAIN_AVAILABLE:
@@ -348,33 +354,89 @@ INITIAL_GREETING PROTOCOL:
                     turn = self.session.receive()
                     async for response in turn:
                         response_count += 1
-                        logger.debug(f"Received response #{response_count}: {type(response).__name__}")
+                        logger.info(f"📥 Received response #{response_count}: {type(response).__name__}")
+                        
+                        # Debug: Log all attributes of the response
+                        logger.info(f"🔍 Response attributes: {[attr for attr in dir(response) if not attr.startswith('_')]}")
+                        
+                        # Log the actual response object for debugging
+                        try:
+                            logger.info(f"🔍 Response content: {response}")
+                        except:
+                            pass
                         
                         # Handle audio data (inline_data) - check for 'data' attribute
                         if hasattr(response, 'data') and response.data:
-                            logger.debug(f"Yielding audio data: {len(response.data)} bytes")
+                            logger.debug(f"🔊 Yielding audio data: {len(response.data)} bytes")
                             yield response.data
                         
-                        # Handle text (for transcript) - check for 'text' attribute
+                        # Handle server content (contains transcripts)
+                        if hasattr(response, 'server_content'):
+                            server_content = response.server_content
+                            logger.info(f"📋 Server content received: {type(server_content)}")
+                            
+                            # Capture output transcripts (agent speech) - accumulate until generation complete
+                            if hasattr(server_content, "output_transcription") and server_content.output_transcription:
+                                text = getattr(server_content.output_transcription, "text", None)
+                                if text:
+                                    logger.info(f"🗣️ Agent transcript fragment: {text}")
+                                    self._agent_transcript_buffer.append(text.strip())
+                            
+                            # Check for model turn (contains text and audio)
+                            if hasattr(server_content, 'model_turn') and server_content.model_turn:
+                                model_turn = server_content.model_turn
+                                logger.info(f"🤖 Model turn: {model_turn}")
+                                
+                                # Extract text from parts
+                                if hasattr(model_turn, 'parts'):
+                                    for part in model_turn.parts:
+                                        if hasattr(part, 'text') and part.text:
+                                            logger.info(f"💬 Agent text: {part.text}")
+                                            await self._save_message("agent", part.text)
+                                            self.conversation_buffer.append({"role": "agent", "text": part.text})
+                            # Check for input transcript (user speech)
+                            if hasattr(server_content, "input_transcription") and server_content.input_transcription:
+                                user_text = getattr(server_content.input_transcription, "text", None)
+                                if user_text:
+                                    logger.info(f"🎙️ User transcript fragment: {user_text}")
+                                    self._user_transcript_buffer.append(user_text.strip())
+                            
+                            # If generation is complete, persist accumulated agent transcript
+                            if getattr(server_content, "generation_complete", False):
+                                if self._agent_transcript_buffer:
+                                    agent_text = " ".join(self._agent_transcript_buffer).strip()
+                                    if agent_text:
+                                        await self._save_message("agent", agent_text)
+                                    self._agent_transcript_buffer.clear()
+                            
+                            # When turn completes, persist any buffered user transcript
+                            if getattr(server_content, 'turn_complete', False):
+                                logger.info(f"✅ Turn complete")
+                                if self._user_transcript_buffer:
+                                    user_text = " ".join(self._user_transcript_buffer).strip()
+                                    if user_text:
+                                        await self._save_message("user", user_text)
+                                    self._user_transcript_buffer.clear()
+                        
+                        # Handle text (for transcript) - check for 'text' attribute (legacy)
                         if hasattr(response, 'text') and response.text:
-                            logger.info(f"Gemini response: {response.text}")
+                            logger.info(f"💬 Gemini response (legacy): {response.text}")
                             await self._save_message("agent", response.text)
-                            # Add to conversation buffer for RAG
                             self.conversation_buffer.append({"role": "agent", "text": response.text})
                         
                         # Handle thought (model's reasoning process) - log but don't save
                         if hasattr(response, 'thought') and response.thought:
-                            logger.debug(f"Gemini thought: {response.thought}")
+                            logger.debug(f"💭 Gemini thought: {response.thought}")
                         
                         # Handle input transcript
                         if hasattr(response, "input_transcript") and response.input_transcript:
-                            logger.info(f"User said: {response.input_transcript}")
+                            logger.info(f"🎤 User said: {response.input_transcript}")
                             await self._save_message("user", response.input_transcript)
                             self.conversation_buffer.append({"role": "user", "text": response.input_transcript})
                         
                         # Handle tool calls
                         if hasattr(response, 'tool_call') and response.tool_call:
-                            logger.info(f"Gemini tool call: {response.tool_call}")
+                            logger.info(f"🔧 Gemini tool call: {response.tool_call}")
                             await self._handle_tool_calls(response.tool_call)
                 
                 except StopAsyncIteration:
@@ -408,11 +470,19 @@ INITIAL_GREETING PROTOCOL:
         """Save message to database and build transcript"""
         from app.models.database import SessionLocal
         
-        logger.info(f"Message [{role}]: {content}")
+        logger.info(f"💬 Saving message [{role}]: {content[:100]}...")
         
         # Save to call_messages table and build transcript
+        db = None
         try:
             db = SessionLocal()
+            
+            # Verify call exists
+            from app.models.call import Call as CallModel
+            call = db.query(CallModel).filter(CallModel.id == self.call.id).first()
+            if not call:
+                logger.error(f"❌ Call {self.call.id} not found in database!")
+                return
             
             # Save message
             from app.models.call import CallMessage
@@ -424,20 +494,33 @@ INITIAL_GREETING PROTOCOL:
                 timestamp=dt.utcnow()
             )
             db.add(message)
+            logger.info(f"✅ Added message to session for call {self.call.id}")
             
             # Also append to call.transcript as plain text
-            from app.models.call import Call as CallModel
-            call = db.query(CallModel).filter(CallModel.id == self.call.id).first()
-            if call:
-                if call.transcript:
-                    call.transcript += f"\n\n{role.upper()}: {content}"
-                else:
-                    call.transcript = f"{role.upper()}: {content}"
+            if call.transcript:
+                call.transcript += f"\n\n{role.upper()}: {content}"
+            else:
+                call.transcript = f"{role.upper()}: {content}"
             
+            logger.info(f"📝 Updated transcript, now {len(call.transcript)} chars")
+            
+            # Commit changes
             db.commit()
-            db.close()
+            logger.info(f"✅ Message saved successfully to database")
+            
         except Exception as e:
-            logger.error(f"Error saving message: {e}")
+            logger.error(f"❌ Error saving message: {e}", exc_info=True)
+            if db:
+                try:
+                    db.rollback()
+                except:
+                    pass
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
     
     async def _handle_tool_calls(self, function_call):
         """Handle tool/function calls from the agent"""
@@ -559,13 +642,31 @@ class CallSummaryService:
     """Service for generating call summaries and analysis"""
     
     def __init__(self):
-        # Use native Google Genai client instead of LangChain
-        self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        self.gemini_client = None  # Force OpenAI usage unless explicitly re-enabled
+        self.openai_model = settings.OPENAI_SUMMARY_MODEL
+        self.openai_api_key = settings.OPENAI_API_KEY or ""
+        if not self.openai_api_key:
+            logger.warning("OPENAI_API_KEY not configured; call summaries will fall back to Gemini (if configured).")
     
     async def generate_summary(self, call: Call) -> Dict[str, Any]:
         """Generate a comprehensive summary of the call"""
         if not call.transcript:
             return {"error": "No transcript available"}
+        
+        def _ensure_list(value: Any) -> List[str]:
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return [str(item) for item in value if item]
+            if isinstance(value, (str, bytes)):
+                return [str(value)]
+            if isinstance(value, dict):
+                # Flatten dict values while keeping readability
+                return [
+                    f"{key}: {val}" if val is not None else str(key)
+                    for key, val in value.items()
+                ]
+            return [str(value)]
         
         prompt = f"""Analyse cette conversation téléphonique en français et fournis:
 
@@ -581,22 +682,62 @@ Réponds en JSON avec les clés: summary, key_points (liste), sentiment, action_
 """
         
         try:
-            # Use native Gemini API for summarization
-            response = await self.client.aio.models.generate_content(
-                model="gemini-2.5-flash-native-audio-preview-09-2025",
-                contents=prompt,
-                config={
+            result: Dict[str, Any]
+            if self.openai_api_key:
+                logger.info(f"🧠 Generating summary with OpenAI model {self.openai_model}")
+                payload = {
+                    "model": self.openai_model,
                     "temperature": 0.3,
-                    "response_mime_type": "application/json"
+                    "response_format": {"type": "json_object"},
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an assistant that extracts structured follow-up insights from phone calls. "
+                                "Return STRICT JSON with keys: summary (string), sentiment (string), "
+                                "key_points (array of strings), action_items (array of strings). "
+                                "Do not include any additional keys or prose."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
                 }
-            )
-            
-            result = json.loads(response.text)
+                async with httpx.AsyncClient(timeout=60) as client:
+                    response = await client.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.openai_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+                result = json.loads(content)
+                logger.info("📄 Summary generated using OpenAI")
+            elif self.gemini_client:
+                logger.info("🧠 Generating summary with Gemini fallback")
+                response = await self.gemini_client.aio.models.generate_content(
+                    model=getattr(settings, "GEMINI_SUMMARY_MODEL", "gemini-1.5-flash"),
+                    contents=prompt,
+                    config={
+                        "temperature": 0.3,
+                        "response_mime_type": "application/json"
+                    }
+                )
+                result = json.loads(response.text)
+                logger.info(f"📄 Summary generation raw result: {result}")
+            else:
+                raise RuntimeError("No summarization provider configured. Set OPENAI_API_KEY or GOOGLE_API_KEY.")
             
             # Update call record
             call.summary = result.get("summary")
             call.sentiment = result.get("sentiment")
-            call.key_points = result.get("key_points", [])
+            call.key_points = _ensure_list(result.get("key_points"))
+            action_items = _ensure_list(result.get("action_items"))
+            update_call_follow_up_data(call, action_items)
+            result["key_points"] = call.key_points
+            result["action_items"] = call.action_items
             
             return result
         except Exception as e:

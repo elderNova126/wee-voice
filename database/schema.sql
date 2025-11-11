@@ -344,6 +344,8 @@ CREATE TABLE calls (
     summary TEXT,
     sentiment VARCHAR(50),
     key_points JSONB,
+    action_items JSONB DEFAULT '[]'::jsonb,
+    action_tags JSONB DEFAULT '[]'::jsonb,
     
     -- Caller information
     caller_phone VARCHAR(50),
