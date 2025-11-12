@@ -13,6 +13,7 @@ A comprehensive SaaS platform for creating realistic French-speaking voice agent
 - **Security Features**: Domain/IP allowlists, security logs, and audit trails
 - **Support System**: Complete ticketing system with email notifications
 - **Real-Time Analytics**: Detailed charts, call statistics, and export capabilities
+- **Zadarma PBX Integration**: Configure business-hours menus and after-hours routing that connect callers directly with AI agents or human teams
 
 ## 📚 Complete Documentation
 

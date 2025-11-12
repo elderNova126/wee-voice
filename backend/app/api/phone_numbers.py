@@ -3,11 +3,19 @@ Phone Numbers and Zadarma Integration API
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from typing import List, Optional
-from pydantic import BaseModel
+from typing import List, Optional, Literal, Dict, Any
+from pydantic import BaseModel, Field
 from datetime import datetime
 
-from app.models import get_db, User, PhoneNumber, PhoneNumberStatus, VerificationDocument, DocumentType, VerificationStatus
+from app.models import (
+    get_db,
+    User,
+    PhoneNumber,
+    PhoneNumberStatus,
+    VerificationDocument,
+    DocumentType,
+    VerificationStatus,
+)
 from app.core.security import get_current_user
 from app.services.zadarma_service import get_zadarma_service
 from app.services.storage_service import get_storage_service
@@ -41,6 +49,12 @@ class PhoneNumberResponse(BaseModel):
     agent_id: Optional[int]
     created_at: datetime
     activated_at: Optional[datetime]
+    pbx_enabled: bool = False
+    pbx_extension: Optional[str] = None
+    pbx_scenario_id: Optional[str] = None
+    business_hours: Optional[Dict[str, Any]] = None
+    menu_options: Optional[List[Dict[str, Any]]] = None
+    after_hours_routing: Optional[Dict[str, Any]] = None
     
     class Config:
         from_attributes = True
@@ -72,6 +86,34 @@ class DocumentReviewRequest(BaseModel):
     status: str  # "accepted" or "rejected"
     rejection_reason: Optional[str] = None
     notes: Optional[str] = None
+
+
+class PBXBusinessHours(BaseModel):
+    timezone: str = Field(default="Europe/Paris", description="IANA timezone identifier")
+    open_time: str = Field(default="09:00", description="Opening time in HH:MM format")
+    close_time: str = Field(default="18:00", description="Closing time in HH:MM format")
+    days: List[str] = Field(default_factory=lambda: ["mon", "tue", "wed", "thu", "fri"])
+
+
+class PBXMenuOption(BaseModel):
+    key: str
+    label: Optional[str] = None
+    destination_type: Literal["agent", "forward", "voicemail", "external"] = "agent"
+    destination_value: Optional[str] = None
+
+
+class AfterHoursRouting(BaseModel):
+    destination_type: Literal["agent", "forward", "voicemail", "external"] = "agent"
+    destination_value: Optional[str] = None
+    message: Optional[str] = Field(
+        default="Our offices are currently closed. Connecting you to our virtual agent."
+    )
+
+
+class PBXConfigurationRequest(BaseModel):
+    business_hours: Optional[PBXBusinessHours] = None
+    menu_options: Optional[List[PBXMenuOption]] = None
+    after_hours_routing: Optional[AfterHoursRouting] = None
 
 
 @router.get("/available", response_model=List[AvailableNumber])
@@ -381,6 +423,56 @@ async def activate_phone_number_for_agent(
         )
     
     return {"message": "Phone number activated successfully"}
+
+
+@router.post("/{phone_number_id}/configure-pbx")
+async def configure_pbx_for_phone_number(
+    phone_number_id: int,
+    payload: PBXConfigurationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Configure PBX call flow for a Zadarma number"""
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Phone number not found"
+        )
+    
+    if not phone_number.agent:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assign the phone number to an agent before configuring PBX routing"
+        )
+    
+    zadarma_service = get_zadarma_service()
+    pbx_config = payload.model_dump(exclude_none=True)
+    
+    success = await zadarma_service.configure_pbx_for_number(
+        db=db,
+        phone_number=phone_number,
+        pbx_config=pbx_config
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to configure PBX routing with Zadarma"
+        )
+    
+    return {
+        "message": "PBX configuration updated successfully",
+        "pbx_extension": phone_number.pbx_extension,
+        "pbx_scenario_id": phone_number.pbx_scenario_id,
+        "business_hours": phone_number.business_hours,
+        "menu_options": phone_number.menu_options,
+        "after_hours_routing": phone_number.after_hours_routing,
+    }
 
 
 @router.get("/{phone_number_id}/status")

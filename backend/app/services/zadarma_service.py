@@ -2,16 +2,25 @@
 Zadarma Integration Service
 Handles phone number provisioning and management via Zadarma API
 """
+import json
 import logging
 import hashlib
 import hmac
-import requests
-from typing import Dict, Any, List, Optional
+import random
 from datetime import datetime
+from typing import Dict, Any, List, Optional, Sequence
+
+import requests
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.zadarma import PhoneNumber, PhoneNumberStatus, VerificationDocument, VerificationStatus
+from app.models.agent import VoiceAgent
+from app.models.zadarma import (
+    PhoneNumber,
+    PhoneNumberStatus,
+    VerificationDocument,
+    VerificationStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +32,10 @@ class ZadarmaService:
         self.api_key = getattr(settings, 'ZADARMA_API_KEY', None)
         self.api_secret = getattr(settings, 'ZADARMA_API_SECRET', None)
         self.base_url = "https://api.zadarma.com/v1"
-        
+    
+    # -------------------------------------------------------------------------
+    # Low-level helpers
+    # -------------------------------------------------------------------------
     def _generate_signature(self, method: str, params: str) -> str:
         """Generate HMAC signature for Zadarma API request"""
         if not self.api_secret:
@@ -45,7 +57,8 @@ class ZadarmaService:
             return self._mock_response(endpoint, method, params)
         
         url = f"{self.base_url}{endpoint}"
-        params_str = "&".join([f"{k}={v}" for k, v in (params or {}).items()])
+        params = params or {}
+        params_str = "&".join([f"{k}={v}" for k, v in params.items()])
         signature = self._generate_signature(endpoint, params_str)
         
         headers = {
@@ -67,6 +80,7 @@ class ZadarmaService:
     
     def _mock_response(self, endpoint: str, method: str, params: Dict) -> Dict[str, Any]:
         """Mock responses for development without Zadarma credentials"""
+        params = params or {}
         if "available_numbers" in endpoint:
             return {
                 "status": "success",
@@ -87,21 +101,246 @@ class ZadarmaService:
                     }
                 ]
             }
-        elif "request_number" in endpoint:
+        if "request/number" in endpoint:
             return {
                 "status": "success",
                 "number_id": f"MOCK_{datetime.utcnow().timestamp()}",
                 "message": "Number request submitted. Awaiting document verification."
             }
-        elif "number_status" in endpoint:
+        if "info/number_status" in endpoint:
             return {
                 "status": "success",
                 "number_status": "pending_documents",
                 "message": "Waiting for verification documents"
             }
+        if "pbx/internal" in endpoint:
+            return {
+                "status": "success",
+                "extension": params.get("extension", "2001")
+            }
+        if "pbx/set_scenario" in endpoint:
+            return {
+                "status": "success",
+                "scenario_id": f"SCN-MOCK-{datetime.utcnow().timestamp()}",
+                "message": "PBX scenario configured (mock)"
+            }
+        if "settings/pbx" in endpoint:
+            return {
+                "status": "success",
+                "message": "PBX settings updated (mock)"
+            }
         
         return {"status": "success", "message": "Mock response"}
     
+    # -------------------------------------------------------------------------
+    # Extension helpers
+    # -------------------------------------------------------------------------
+    def _generate_extension_number(self, db: Session) -> str:
+        """Generate a unique PBX extension number"""
+        existing_exts = {
+            pn.pbx_extension
+            for pn in db.query(PhoneNumber)
+            .filter(PhoneNumber.pbx_extension.isnot(None))
+            .all()
+        }
+        
+        # Use the range 2000-2999 for virtual agents
+        for _ in range(1000):
+            candidate = str(random.randint(2000, 2999))
+            if candidate not in existing_exts:
+                return candidate
+        
+        raise RuntimeError("Failed to generate unique PBX extension number")
+    
+    async def ensure_agent_extension(
+        self,
+        db: Session,
+        phone_record: PhoneNumber,
+        agent: VoiceAgent
+    ) -> str:
+        """
+        Ensure a PBX extension exists for the agent so the call flow can reach it.
+        Creates a virtual extension in Zadarma if necessary and stores it locally.
+        """
+        if phone_record.pbx_extension:
+            return phone_record.pbx_extension
+        
+        extension = self._generate_extension_number(db)
+        extension_label = agent.name or f"Agent {agent.id}"
+        
+        params = {
+            "extension": extension,
+            "display_name": extension_label,
+            "forwarding": "webhook",
+            "webhook_url": f"{settings.BACKEND_URL}{settings.API_V1_STR}/zadarma/webhook",
+            "caller_id": phone_record.phone_number,
+        }
+        
+        try:
+            response = self._make_request(
+                "/pbx/internal/set",
+                method="POST",
+                params=params
+            )
+            if response.get("status") != "success":
+                logger.warning(
+                    "Failed to provision PBX extension in Zadarma",
+                    extra={"extension": extension, "response": response}
+                )
+        except Exception as exc:
+            logger.error(
+                "Error provisioning PBX extension with Zadarma",
+                exc_info=True,
+                extra={"extension": extension}
+            )
+            # In case of failure we still store extension locally so the rest of the
+            # configuration can proceed. Operators can reconcile later in Zadarma UI.
+        
+        phone_record.pbx_extension = extension
+        db.commit()
+        db.refresh(phone_record)
+        
+        logger.info(
+            "Assigned PBX extension %s to agent %s for number %s",
+            extension,
+            agent.id,
+            phone_record.phone_number,
+        )
+        return extension
+    
+    # -------------------------------------------------------------------------
+    # PBX scenario builders
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def _normalize_business_hours(config: Dict[str, Any]) -> Dict[str, Any]:
+        if not config:
+            return {
+                "timezone": "Europe/Paris",
+                "open_time": "09:00",
+                "close_time": "18:00",
+                "days": ["mon", "tue", "wed", "thu", "fri"],
+            }
+        
+        days = config.get("days") or ["mon", "tue", "wed", "thu", "fri"]
+        open_time = config.get("open_time", "09:00")
+        close_time = config.get("close_time", "18:00")
+        timezone = config.get("timezone", "Europe/Paris")
+        
+        return {
+            "timezone": timezone,
+            "open_time": open_time,
+            "close_time": close_time,
+            "days": days,
+        }
+    
+    @staticmethod
+    def _normalize_menu_options(
+        menu_options: Sequence[Dict[str, Any]],
+        agent_extension: str
+    ) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        seen_keys = set()
+        
+        for option in menu_options or []:
+            key = str(option.get("key", "")).strip()
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            
+            destination_type = option.get("destination_type", "agent")
+            entry: Dict[str, Any] = {
+                "key": key,
+                "label": option.get("label") or f"Option {key}",
+                "destination_type": destination_type,
+            }
+            
+            if destination_type == "agent":
+                entry["destination"] = {
+                    "type": "extension",
+                    "value": agent_extension,
+                }
+            elif destination_type == "forward":
+                entry["destination"] = {
+                    "type": "external",
+                    "value": option.get("destination_value"),
+                }
+            elif destination_type == "voicemail":
+                entry["destination"] = {
+                    "type": "voicemail",
+                    "value": option.get("destination_value", "default"),
+                }
+            else:
+                entry["destination"] = {
+                    "type": option.get("destination_type"),
+                    "value": option.get("destination_value"),
+                }
+            
+            normalized.append(entry)
+        
+        if not normalized:
+            normalized.append(
+                {
+                    "key": "1",
+                    "label": "Speak with our AI agent",
+                    "destination_type": "agent",
+                    "destination": {
+                        "type": "extension",
+                        "value": agent_extension,
+                    },
+                }
+            )
+        
+        return normalized
+    
+    @staticmethod
+    def _normalize_after_hours(
+        config: Dict[str, Any],
+        agent_extension: str
+    ) -> Dict[str, Any]:
+        config = config or {}
+        destination_type = config.get("destination_type", "agent")
+        
+        if destination_type == "agent":
+            return {
+                "destination_type": "agent",
+                "destination": {
+                    "type": "extension",
+                    "value": agent_extension,
+                },
+                "message": config.get(
+                    "message",
+                    "Our offices are closed. Connecting you to our virtual agent.",
+                ),
+            }
+        
+        return {
+            "destination_type": destination_type,
+            "destination": {
+                "type": config.get("destination_type"),
+                "value": config.get("destination_value"),
+            },
+            "message": config.get("message"),
+        }
+    
+    def _build_pbx_scenario_payload(
+        self,
+        phone_number: PhoneNumber,
+        business_hours: Dict[str, Any],
+        menu_options: List[Dict[str, Any]],
+        after_hours: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Compose Zadarma PBX scenario payload"""
+        return {
+            "name": f"WeeVoice-{phone_number.phone_number}",
+            "number": phone_number.phone_number,
+            "business_hours": business_hours,
+            "day_menu": menu_options,
+            "after_hours": after_hours,
+        }
+    
+    # -------------------------------------------------------------------------
+    # Public API
+    # -------------------------------------------------------------------------
     async def get_available_numbers(self, country_code: str = "FR") -> List[Dict[str, Any]]:
         """Get list of available phone numbers for purchase"""
         try:
@@ -112,9 +351,8 @@ class ZadarmaService:
             
             if response.get("status") == "success":
                 return response.get("numbers", [])
-            else:
-                logger.error(f"Failed to get available numbers: {response}")
-                return []
+            logger.error(f"Failed to get available numbers: {response}")
+            return []
         except Exception as e:
             logger.error(f"Error getting available numbers: {e}")
             return []
@@ -165,9 +403,9 @@ class ZadarmaService:
                 
                 logger.info(f"Phone number {phone_number} requested successfully for user {user_id}")
                 return phone_record
-            else:
-                logger.error(f"Failed to request phone number: {response}")
-                return None
+            
+            logger.error(f"Failed to request phone number: {response}")
+            return None
                 
         except Exception as e:
             logger.error(f"Error requesting phone number: {e}")
@@ -260,6 +498,90 @@ class ZadarmaService:
         except Exception as e:
             logger.error(f"Error configuring call forwarding: {e}")
             return False
+    
+    async def configure_pbx_for_number(
+        self,
+        db: Session,
+        phone_number: PhoneNumber,
+        pbx_config: Dict[str, Any]
+    ) -> bool:
+        """
+        Configure PBX schedule and IVR for the provided phone number.
+        Ensures the voice agent is reachable via PBX extension during the day
+        while after-hours callers are connected directly to the agent.
+        """
+        if not phone_number.agent:
+            logger.error(
+                "Cannot configure PBX routing because phone number has no agent assigned",
+                extra={"phone_number_id": phone_number.id},
+            )
+            return False
+        
+        agent = phone_number.agent
+        extension = await self.ensure_agent_extension(db, phone_number, agent)
+        
+        business_hours = self._normalize_business_hours(
+            pbx_config.get("business_hours") if pbx_config else None
+        )
+        menu_options = self._normalize_menu_options(
+            pbx_config.get("menu_options") if pbx_config else [],
+            extension,
+        )
+        after_hours = self._normalize_after_hours(
+            pbx_config.get("after_hours_routing") if pbx_config else {},
+            extension,
+        )
+        
+        payload = self._build_pbx_scenario_payload(
+            phone_number,
+            business_hours,
+            menu_options,
+            after_hours,
+        )
+        
+        params = {
+            "number": phone_number.phone_number,
+            "scenario": json.dumps(payload),
+        }
+        
+        try:
+            response = self._make_request(
+                "/pbx/set_scenario",
+                method="POST",
+                params=params
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to configure PBX scenario via Zadarma",
+                exc_info=True,
+                extra={"phone_number": phone_number.phone_number, "payload": payload},
+            )
+            return False
+        
+        if response.get("status") != "success":
+            logger.error(
+                "Zadarma PBX configuration was not accepted",
+                extra={"response": response, "phone_number": phone_number.phone_number},
+            )
+            return False
+        
+        scenario_id = response.get("scenario_id")
+        phone_number.pbx_enabled = True
+        phone_number.pbx_scenario_id = scenario_id
+        phone_number.pbx_extension = extension
+        phone_number.business_hours = business_hours
+        phone_number.menu_options = menu_options
+        phone_number.after_hours_routing = after_hours
+        phone_number.zadarma_config = payload
+        db.commit()
+        db.refresh(phone_number)
+        
+        logger.info(
+            "Configured Zadarma PBX scenario for number %s. Scenario ID: %s",
+            phone_number.phone_number,
+            scenario_id,
+        )
+        return True
 
 
 def get_zadarma_service() -> ZadarmaService:

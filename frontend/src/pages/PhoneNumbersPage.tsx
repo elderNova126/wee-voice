@@ -4,7 +4,17 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import DashboardLayout from '../layouts/DashboardLayout';
 import api from '../lib/api';
-import { PhoneIcon, CloudArrowUpIcon, CheckCircleIcon, XCircleIcon, ClockIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline'
+import {
+  PhoneIcon,
+  CloudArrowUpIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ClockIcon,
+  ExclamationTriangleIcon,
+  Cog6ToothIcon,
+  PlusCircleIcon,
+  TrashIcon,
+} from '@heroicons/react/24/outline'
 
 interface PhoneNumber {
   id: number;
@@ -17,6 +27,12 @@ interface PhoneNumber {
   agent_id: number | null;
   created_at: string;
   activated_at: string | null;
+  pbx_enabled?: boolean;
+  pbx_extension?: string | null;
+  pbx_scenario_id?: string | null;
+  business_hours?: PBXBusinessHours | null;
+  menu_options?: StoredPBXMenuOption[] | null;
+  after_hours_routing?: StoredAfterHoursRouting | null;
 }
 
 interface Agent {
@@ -35,6 +51,48 @@ interface VerificationDocument {
   created_at: string;
 }
 
+type DayCode = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+interface PBXBusinessHours {
+  timezone: string;
+  open_time: string;
+  close_time: string;
+  days: DayCode[];
+}
+
+interface PBXMenuOption {
+  key: string;
+  label?: string;
+  destination_type: 'agent' | 'forward' | 'voicemail' | 'external';
+  destination_value?: string;
+}
+
+interface StoredPBXMenuOption extends PBXMenuOption {
+  destination?: {
+    type?: string;
+    value?: string;
+  };
+}
+
+interface AfterHoursRouting {
+  destination_type: 'agent' | 'forward' | 'voicemail' | 'external';
+  destination_value?: string;
+  message?: string;
+}
+
+interface StoredAfterHoursRouting extends AfterHoursRouting {
+  destination?: {
+    type?: string;
+    value?: string;
+  };
+}
+
+interface PBXFormState {
+  business_hours: PBXBusinessHours;
+  menu_options: PBXMenuOption[];
+  after_hours_routing: AfterHoursRouting;
+}
+
 export const PhoneNumbersPage: React.FC = () => {
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -49,6 +107,8 @@ export const PhoneNumbersPage: React.FC = () => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showAssignAgentModal, setShowAssignAgentModal] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
+  const [showPBXModal, setShowPBXModal] = useState(false);
+  const [pbxTargetNumber, setPbxTargetNumber] = useState<PhoneNumber | null>(null);
 
   // Form states
   const [formData, setFormData] = useState({
@@ -69,6 +129,322 @@ export const PhoneNumbersPage: React.FC = () => {
     document_type: 'company_registration',
     file: null as File | null
   });
+
+  const defaultBusinessHours: PBXBusinessHours = {
+    timezone: 'Europe/Paris',
+    open_time: '09:00',
+    close_time: '18:00',
+    days: ['mon', 'tue', 'wed', 'thu', 'fri'],
+  };
+
+  const getDefaultPBXForm = (): PBXFormState => ({
+    business_hours: { ...defaultBusinessHours },
+    menu_options: [
+      {
+        key: '1',
+        label: 'Speak with our AI agent',
+        destination_type: 'agent',
+        destination_value: '',
+      },
+    ],
+    after_hours_routing: {
+      destination_type: 'agent',
+      message: 'Our offices are currently closed. Connecting you to our virtual agent.',
+      destination_value: '',
+    },
+  });
+
+  const [pbxForm, setPbxForm] = useState<PBXFormState>(getDefaultPBXForm());
+  const [pbxSaving, setPbxSaving] = useState(false);
+
+  const dayOptions: { value: DayCode; label: string }[] = [
+    { value: 'mon', label: 'Mon' },
+    { value: 'tue', label: 'Tue' },
+    { value: 'wed', label: 'Wed' },
+    { value: 'thu', label: 'Thu' },
+    { value: 'fri', label: 'Fri' },
+    { value: 'sat', label: 'Sat' },
+    { value: 'sun', label: 'Sun' },
+  ];
+
+  const timezoneOptions = [
+    'Europe/Paris',
+    'Europe/Brussels',
+    'Europe/London',
+    'America/New_York',
+    'America/Los_Angeles',
+    'UTC',
+  ];
+
+  const formatBusinessHoursSummary = (hours?: PBXBusinessHours | null) => {
+    if (!hours) return 'Not configured';
+    const activeDays = Array.isArray(hours.days)
+      ? dayOptions.filter((d) => (hours.days as DayCode[]).includes(d.value))
+      : [];
+    const orderedDays = activeDays
+      .map((d) => d.label)
+      .join(', ');
+
+    const openTime = hours.open_time || defaultBusinessHours.open_time;
+    const closeTime = hours.close_time || defaultBusinessHours.close_time;
+    const timezone = hours.timezone || defaultBusinessHours.timezone;
+    return `${orderedDays || 'No days selected'} • ${openTime} - ${closeTime} (${timezone})`;
+  };
+
+  const describeAfterHoursDestination = (afterHours?: StoredAfterHoursRouting | null) => {
+    if (!afterHours) {
+      return 'Default: connect to AI agent';
+    }
+
+    const destinationType = afterHours.destination_type || afterHours.destination?.type || 'agent';
+    if (destinationType === 'agent') {
+      return 'Connect to AI agent';
+    }
+    if (destinationType === 'voicemail') {
+      return 'Send to voicemail';
+    }
+    if (destinationType === 'forward') {
+      return `Forward to ${afterHours.destination_value || afterHours.destination?.value || 'external number'}`;
+    }
+    if (destinationType === 'external') {
+      return `External destination: ${afterHours.destination_value || afterHours.destination?.value || 'N/A'}`;
+    }
+    return 'Custom routing';
+  };
+
+  const initializePBXFormFromNumber = (number: PhoneNumber): PBXFormState => {
+    const form = getDefaultPBXForm();
+
+    if (number.business_hours) {
+      const incomingDays = Array.isArray(number.business_hours.days)
+        ? number.business_hours.days.filter((day: any): day is DayCode =>
+            dayOptions.some((opt) => opt.value === day)
+          )
+        : form.business_hours.days;
+
+      form.business_hours = {
+        timezone: number.business_hours.timezone || form.business_hours.timezone,
+        open_time: number.business_hours.open_time || form.business_hours.open_time,
+        close_time: number.business_hours.close_time || form.business_hours.close_time,
+        days: incomingDays.length ? incomingDays : form.business_hours.days,
+      };
+    }
+
+    if (number.menu_options && number.menu_options.length > 0) {
+      form.menu_options = number.menu_options.map((option) => {
+        const destinationType =
+          (option.destination_type ||
+            option.destination?.type ||
+            'agent') as PBXMenuOption['destination_type'];
+        return {
+          key: option.key ?? '',
+          label: option.label ?? '',
+          destination_type: destinationType,
+          destination_value:
+            destinationType === 'agent'
+              ? ''
+              : option.destination_value ?? option.destination?.value ?? '',
+        };
+      });
+    }
+
+    if (number.after_hours_routing) {
+      const destinationType =
+        (number.after_hours_routing.destination_type ||
+          number.after_hours_routing.destination?.type ||
+          'agent') as AfterHoursRouting['destination_type'];
+
+      form.after_hours_routing = {
+        destination_type: destinationType,
+        destination_value:
+          destinationType === 'agent'
+            ? ''
+            : number.after_hours_routing.destination_value ??
+              number.after_hours_routing.destination?.value ??
+              '',
+        message:
+          number.after_hours_routing.message ??
+          form.after_hours_routing.message,
+      };
+    }
+
+    return form;
+  };
+
+  const openPBXModal = (number: PhoneNumber) => {
+    if (!number.agent_id) {
+      alert('Assign this phone number to an agent before configuring PBX routing.');
+      return;
+    }
+    const preparedForm = initializePBXFormFromNumber(number);
+    setPbxForm(preparedForm);
+    setPbxTargetNumber(number);
+    setShowPBXModal(true);
+  };
+
+  const closePBXModal = () => {
+    setShowPBXModal(false);
+    setPbxTargetNumber(null);
+    setPbxForm(getDefaultPBXForm());
+    setPbxSaving(false);
+  };
+
+  const toggleBusinessDay = (day: DayCode) => {
+    setPbxForm((prev) => {
+      const days = prev.business_hours.days.includes(day)
+        ? prev.business_hours.days.filter((d) => d !== day)
+        : [...prev.business_hours.days, day];
+      return {
+        ...prev,
+        business_hours: {
+          ...prev.business_hours,
+          days,
+        },
+      };
+    });
+  };
+
+  const updateBusinessHours = (field: 'timezone' | 'open_time' | 'close_time', value: string) => {
+    setPbxForm((prev) => ({
+      ...prev,
+      business_hours: {
+        ...prev.business_hours,
+        [field]: value,
+      },
+    }));
+  };
+
+  const updateMenuOption = (index: number, field: keyof PBXMenuOption, value: string) => {
+    setPbxForm((prev) => {
+      const next = [...prev.menu_options];
+      const updated: PBXMenuOption = {
+        ...next[index],
+        [field]: value,
+      } as PBXMenuOption;
+
+      if (field === 'destination_type' && value === 'agent') {
+        updated.destination_value = '';
+      }
+      next[index] = updated;
+      return {
+        ...prev,
+        menu_options: next,
+      };
+    });
+  };
+
+  const addMenuOption = () => {
+    setPbxForm((prev) => ({
+      ...prev,
+      menu_options: [
+        ...prev.menu_options,
+        {
+          key: '',
+          label: '',
+          destination_type: 'agent',
+          destination_value: '',
+        },
+      ],
+    }));
+  };
+
+  const removeMenuOption = (index: number) => {
+    setPbxForm((prev) => {
+      if (prev.menu_options.length <= 1) {
+        return prev;
+      }
+      const next = prev.menu_options.filter((_, i) => i !== index);
+      return {
+        ...prev,
+        menu_options: next,
+      };
+    });
+  };
+
+  const updateAfterHours = (field: keyof AfterHoursRouting, value: string) => {
+    setPbxForm((prev) => {
+      const next: AfterHoursRouting = {
+        ...prev.after_hours_routing,
+        [field]: value,
+      };
+      if (field === 'destination_type' && value === 'agent') {
+        next.destination_value = '';
+      }
+      return {
+        ...prev,
+        after_hours_routing: next,
+      };
+    });
+  };
+
+  const handleSavePBX = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!pbxTargetNumber) return;
+
+    setPbxSaving(true);
+
+    const selectedDays = pbxForm.business_hours.days.filter((day): day is DayCode =>
+      dayOptions.some((opt) => opt.value === day)
+    );
+
+    if (selectedDays.length === 0) {
+      alert('Select at least one business day for the PBX menu.');
+      setPbxSaving(false);
+      return;
+    }
+
+    const menuOptionsPayload = pbxForm.menu_options
+      .filter((option) => option.key.trim().length > 0)
+      .map((option) => {
+        const destinationType = option.destination_type;
+        const payloadOption: Record<string, string> = {
+          key: option.key.trim(),
+          destination_type: destinationType,
+        };
+        if (option.label && option.label.trim()) {
+          payloadOption.label = option.label.trim();
+        }
+        if (destinationType !== 'agent') {
+          payloadOption.destination_value = (option.destination_value || '').trim();
+        }
+        return payloadOption;
+      });
+
+    const afterHoursType = pbxForm.after_hours_routing.destination_type;
+    const afterHoursPayload: Record<string, string> = {
+      destination_type: afterHoursType,
+    };
+    if (pbxForm.after_hours_routing.message) {
+      afterHoursPayload.message = pbxForm.after_hours_routing.message;
+    }
+    if (afterHoursType !== 'agent') {
+      afterHoursPayload.destination_value = (pbxForm.after_hours_routing.destination_value || '').trim();
+    }
+
+    const payload: Record<string, any> = {
+      business_hours: {
+        ...pbxForm.business_hours,
+        days: selectedDays,
+      },
+      after_hours_routing: afterHoursPayload,
+    };
+
+    if (menuOptionsPayload.length > 0) {
+      payload.menu_options = menuOptionsPayload;
+    }
+
+    try {
+      await api.post(`/phone-numbers/${pbxTargetNumber.id}/configure-pbx`, payload);
+      await loadPhoneNumbers();
+      alert('PBX configuration saved successfully!');
+      closePBXModal();
+    } catch (error: any) {
+      console.error('Error saving PBX configuration:', error);
+      alert('Failed to save PBX configuration: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setPbxSaving(false);
+    }
+  };
 
   useEffect(() => {
     loadPhoneNumbers();
@@ -348,6 +724,31 @@ export const PhoneNumbersPage: React.FC = () => {
                         {getAgentName(number.agent_id)}
                       </span>
                     </div>
+                    <div className="mt-3 text-sm">
+                      <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
+                        PBX Routing
+                      </div>
+                      {number.pbx_enabled ? (
+                        <div className="space-y-1 text-gray-700 dark:text-gray-300">
+                          <div>
+                            <span className="font-medium">Extension:</span>{' '}
+                            {number.pbx_extension || 'Auto'}
+                          </div>
+                          <div>
+                            <span className="font-medium">Business hours:</span>{' '}
+                            {formatBusinessHoursSummary(number.business_hours || null)}
+                          </div>
+                          <div>
+                            <span className="font-medium">After hours:</span>{' '}
+                            {describeAfterHoursDestination(number.after_hours_routing || null)}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-gray-500 dark:text-gray-400">
+                          PBX menu not configured yet. Calls route directly to the assigned agent.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="text-right space-y-2">
@@ -377,6 +778,16 @@ export const PhoneNumbersPage: React.FC = () => {
                         }}
                       >
                         {number.agent_id ? 'Change Agent' : 'Assign Agent'}
+                      </Button>
+                    )}
+                    {number.agent_id && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => openPBXModal(number)}
+                      >
+                        <Cog6ToothIcon className="mr-2 h-3.5 w-3.5" />
+                        Configure PBX
                       </Button>
                     )}
                   </div>
@@ -763,6 +1174,254 @@ export const PhoneNumbersPage: React.FC = () => {
                   className="flex-1"
                 >
                   Cancel
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* PBX Configuration Modal */}
+      {showPBXModal && pbxTargetNumber && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
+          <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold mb-2">Configure PBX Routing</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+              Define business hours and IVR options for <strong>{pbxTargetNumber.phone_number}</strong>. During office hours, callers can navigate the menu; outside office hours they will follow the after-hours rule.
+            </p>
+            <form onSubmit={handleSavePBX} className="space-y-6">
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Business Hours</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                  Select the timezone, opening hours, and days when callers should hear the IVR menu.
+                </p>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Timezone</label>
+                    <select
+                      value={pbxForm.business_hours.timezone}
+                      onChange={(e) => updateBusinessHours('timezone', e.target.value)}
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                    >
+                      {timezoneOptions.map((tz) => (
+                        <option key={tz} value={tz}>
+                          {tz}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Open Time</label>
+                      <input
+                        type="time"
+                        value={pbxForm.business_hours.open_time}
+                        onChange={(e) => updateBusinessHours('open_time', e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Close Time</label>
+                      <input
+                        type="time"
+                        value={pbxForm.business_hours.close_time}
+                        onChange={(e) => updateBusinessHours('close_time', e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-2">Active Days</label>
+                  <div className="flex flex-wrap gap-2">
+                    {dayOptions.map((day) => {
+                      const isActive = pbxForm.business_hours.days.includes(day.value);
+                      return (
+                        <button
+                          type="button"
+                          key={day.value}
+                          onClick={() => toggleBusinessDay(day.value)}
+                          className={`px-3 py-1.5 rounded-full text-sm border transition ${
+                            isActive
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-indigo-400'
+                          }`}
+                        >
+                          {day.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Daytime Menu Options</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                  Define the keypad options callers can press during business hours.
+                </p>
+                <div className="space-y-4">
+                  {pbxForm.menu_options.map((option, index) => (
+                    <div
+                      key={`menu-option-${index}`}
+                      className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-800/40 space-y-3"
+                    >
+                      <div className="flex justify-between items-center">
+                        <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+                          Option #{index + 1}
+                        </h4>
+                        {pbxForm.menu_options.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeMenuOption(index)}
+                            className="text-red-600 hover:text-red-700 flex items-center gap-1 text-sm"
+                          >
+                            <TrashIcon className="h-4 w-4" />
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid md:grid-cols-6 gap-3">
+                        <div className="md:col-span-1">
+                          <label className="block text-sm font-medium mb-1">Key</label>
+                          <input
+                            type="text"
+                            maxLength={1}
+                            value={option.key}
+                            onChange={(e) => updateMenuOption(index, 'key', e.target.value.replace(/\D/g, ''))}
+                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                            placeholder="1"
+                            required
+                          />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-sm font-medium mb-1">Label</label>
+                          <input
+                            type="text"
+                            value={option.label || ''}
+                            onChange={(e) => updateMenuOption(index, 'label', e.target.value)}
+                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                            placeholder="Speak to sales"
+                          />
+                        </div>
+                        <div className="md:col-span-3">
+                          <label className="block text-sm font-medium mb-1">Destination</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <select
+                              value={option.destination_type}
+                              onChange={(e) =>
+                                updateMenuOption(
+                                  index,
+                                  'destination_type',
+                                  e.target.value as PBXMenuOption['destination_type']
+                                )
+                              }
+                              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                            >
+                              <option value="agent">AI Agent (extension)</option>
+                              <option value="forward">Forward to phone</option>
+                              <option value="voicemail">Voicemail</option>
+                              <option value="external">External action</option>
+                            </select>
+                            {option.destination_type !== 'agent' && (
+                              <input
+                                type="text"
+                                value={option.destination_value || ''}
+                                onChange={(e) => updateMenuOption(index, 'destination_value', e.target.value)}
+                                className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                                placeholder={
+                                  option.destination_type === 'voicemail'
+                                    ? 'Mailbox ID'
+                                    : 'Destination (e.g., +33123456789)'
+                                }
+                                required
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={addMenuOption}
+                    className="text-indigo-600 hover:text-indigo-700"
+                  >
+                    <PlusCircleIcon className="h-5 w-5" />
+                    Add Menu Option
+                  </Button>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">After-Hours Routing</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                  Choose what happens when customers call outside of business hours.
+                </p>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Destination</label>
+                    <select
+                      value={pbxForm.after_hours_routing.destination_type}
+                      onChange={(e) =>
+                        updateAfterHours(
+                          'destination_type',
+                          e.target.value as AfterHoursRouting['destination_type']
+                        )
+                      }
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                    >
+                      <option value="agent">Connect to AI agent</option>
+                      <option value="forward">Forward to human phone</option>
+                      <option value="voicemail">Send to voicemail</option>
+                      <option value="external">External destination</option>
+                    </select>
+                  </div>
+                  {pbxForm.after_hours_routing.destination_type !== 'agent' && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        Destination Value
+                      </label>
+                      <input
+                        type="text"
+                        value={pbxForm.after_hours_routing.destination_value || ''}
+                        onChange={(e) => updateAfterHours('destination_value', e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                        placeholder="e.g., +33123456789 or mailbox id"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3">
+                  <label className="block text-sm font-medium mb-1">Message (optional)</label>
+                  <textarea
+                    value={pbxForm.after_hours_routing.message || ''}
+                    onChange={(e) => updateAfterHours('message', e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                    rows={3}
+                    placeholder="Our offices are currently closed..."
+                  />
+                </div>
+              </section>
+
+              <div className="flex flex-col md:flex-row md:justify-end gap-3 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closePBXModal}
+                  className="md:w-auto w-full"
+                  disabled={pbxSaving}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" className="md:w-auto w-full" loading={pbxSaving}>
+                  Save PBX Configuration
                 </Button>
               </div>
             </form>

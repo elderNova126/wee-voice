@@ -52,6 +52,12 @@ class PhoneNumber(Base):
     zadarma_number_id = Column(String, nullable=True)  # Zadarma's internal ID
     zadarma_status = Column(String, nullable=True)
     zadarma_config = Column(JSON, nullable=True)  # Zadarma-specific settings
+    pbx_enabled = Column(Boolean, default=False)
+    pbx_scenario_id = Column(String, nullable=True)
+    pbx_extension = Column(String, nullable=True)
+    business_hours = Column(JSON, nullable=True)
+    menu_options = Column(JSON, nullable=True)
+    after_hours_routing = Column(JSON, nullable=True)
     
     # Status
     status = Column(Enum(PhoneNumberStatus, values_callable=lambda x: [e.value for e in x]), default=PhoneNumberStatus.PENDING)
