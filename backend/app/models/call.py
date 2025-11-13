@@ -8,6 +8,7 @@ from app.models.database import Base
 class CallStatus(str, enum.Enum):
     INITIATED = "initiated"
     IN_PROGRESS = "in_progress"
+    SUMMARIZING = "summarizing"
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"

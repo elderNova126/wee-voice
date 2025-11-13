@@ -240,7 +240,7 @@ async def voice_websocket(
                 # Monitor stop_flag while task runs
                 while not task.done() and not stop_flag.is_set():
                     await asyncio.sleep(0.1)
-                
+                print(f"stop_flag.is_set(): {stop_flag.is_set()}, task.done(): {task.done()}")
                 if stop_flag.is_set() and not task.done():
                     task.cancel()
                     try:
@@ -280,16 +280,38 @@ async def voice_websocket(
     
     finally:
         # Cleanup - ensure call end is recorded even if there are errors
+        logger.info(f"🧹 Starting cleanup for session: {session_id}")
+        print(f"🧹 Starting cleanup for session: {session_id}")
+        
+        # Update status immediately when connection closes (before full cleanup)
+        call_id = None
+        if call:
+            call_id = call.id
+            # Quick status update in the original session
+            try:
+                if call.status != CallStatus.COMPLETED and call.status != CallStatus.SUMMARIZING:
+                    call.status = CallStatus.SUMMARIZING
+                    if not call.ended_at:
+                        call.ended_at = datetime.utcnow()
+                    db.commit()
+                    logger.info(f"⚡ Quick status update: Call {call_id} → SUMMARIZING")
+            except Exception as e:
+                logger.error(f"Error in quick status update: {e}")
+        
         if agent_service:
             try:
                 await agent_service.end_session()
+                logger.info(f"✅ Agent session ended for: {session_id}")
             except Exception as e:
                 logger.error(f"Error ending agent session: {e}")
         
-        # Handle call cleanup - use a fresh DB session to ensure it's valid
-        if call:
-            call_id = call.id  # Store ID before any potential detachment
-            
+        # Handle full call cleanup - use a fresh DB session to ensure it's valid
+        if call_id:
+            logger.info(f"📞 Starting full call cleanup for call ID: {call_id}")
+        else:
+            logger.warning(f"⚠️ No call ID available for cleanup (session: {session_id})")
+        
+        if call_id:
             # Create a new database session for cleanup to ensure it's valid
             from app.models.database import SessionLocal
             cleanup_db = SessionLocal()
@@ -298,10 +320,39 @@ async def voice_websocket(
                 # Get a fresh call object from DB
                 fresh_call = cleanup_db.query(Call).filter(Call.id == call_id).first()
                 
+                if not fresh_call:
+                    logger.warning(f"⚠️ Call {call_id} not found in database during cleanup")
+                
                 if fresh_call:
-                    # Set end time if not already set
+                    # Set end time and status FIRST - commit immediately so it's visible
+                    status_changed = False
                     if not fresh_call.ended_at:
                         fresh_call.ended_at = datetime.utcnow()
+                        status_changed = True
+                    
+                    # Update status to SUMMARIZING first (will change to COMPLETED after summary)
+                    current_status = fresh_call.status.value if hasattr(fresh_call.status, 'value') else str(fresh_call.status)
+                    logger.info(f"🔍 Call {fresh_call.id} current status: '{current_status}' (type: {type(fresh_call.status)})")
+                    
+                    # Always update to SUMMARIZING unless already completed or summarizing
+                    if current_status not in ["completed", "summarizing"]:
+                        fresh_call.status = CallStatus.SUMMARIZING
+                        status_changed = True
+                        logger.info(f"📞 Updating call {fresh_call.id} status from '{current_status}' to SUMMARIZING")
+                    else:
+                        logger.info(f"ℹ️ Call {fresh_call.id} already has status '{current_status}', skipping status update")
+                    
+                    # Commit status change immediately so it's visible in UI
+                    if status_changed:
+                        try:
+                            cleanup_db.flush()  # Ensure changes are written to DB
+                            cleanup_db.commit()
+                            cleanup_db.refresh(fresh_call)
+                            final_status = fresh_call.status.value if hasattr(fresh_call.status, 'value') else str(fresh_call.status)
+                            logger.info(f"✅ Call {fresh_call.id} status updated to: {final_status} (committed to DB)")
+                        except Exception as e:
+                            logger.error(f"❌ Error committing status update: {e}", exc_info=True)
+                            cleanup_db.rollback()
                     
                     # Ensure transcript is complete from messages if not already set
                     if not fresh_call.transcript:
@@ -344,8 +395,61 @@ async def voice_websocket(
                         except Exception as e:
                             logger.error(f"CRM sync failed: {e}")
                     
-                    # Commit all changes
+                    # Commit transcript and status changes first
                     cleanup_db.commit()
+                    cleanup_db.refresh(fresh_call)
+                    
+                    # Auto-generate summary if transcript exists and no summary yet
+                    summary_success = False
+                    if fresh_call.transcript and len(fresh_call.transcript.strip()) > 50 and not fresh_call.summary:
+                        try:
+                            logger.info(f"🤖 Auto-generating summary for call {fresh_call.id} (transcript: {len(fresh_call.transcript)} chars)")
+                            from app.services.agent_service import CallSummaryService
+                            summary_service = CallSummaryService()
+                            # Pass fresh call object to ensure it's attached to the session
+                            result = await summary_service.generate_summary(fresh_call)
+                            if result.get("error"):
+                                logger.warning(f"Summary generation failed: {result.get('error')}")
+                                summary_success = False
+                            else:
+                                # Ensure summary is saved
+                                cleanup_db.commit()
+                                cleanup_db.refresh(fresh_call)
+                                summary_success = True
+                                logger.info(f"✅ Auto-generated summary for call {fresh_call.id}: {fresh_call.summary[:100] if fresh_call.summary else 'None'}...")
+                        except Exception as e:
+                            logger.error(f"Error auto-generating summary: {e}", exc_info=True)
+                            cleanup_db.rollback()
+                            summary_success = False
+                    elif not fresh_call.transcript or len(fresh_call.transcript.strip()) <= 50:
+                        # No transcript or transcript too short
+                        summary_success = False
+                        logger.info(f"⚠️ No transcript available for call {fresh_call.id}, skipping summary")
+                    
+                    # Update status to COMPLETED and add summary tags
+                    current_tags = fresh_call.action_tags or []
+                    
+                    if summary_success:
+                        # Summary generated successfully
+                        fresh_call.status = CallStatus.COMPLETED
+                        if "Summarized" not in current_tags:
+                            current_tags.append("Summarized")
+                        if "No summarized" in current_tags:
+                            current_tags.remove("No summarized")
+                    else:
+                        # Summary failed or no transcript
+                        fresh_call.status = CallStatus.COMPLETED
+                        if "No summarized" not in current_tags:
+                            current_tags.append("No summarized")
+                        if "Summarized" in current_tags:
+                            current_tags.remove("Summarized")
+                    
+                    fresh_call.action_tags = current_tags
+                    logger.info(f"📊 Call {fresh_call.id} status: {fresh_call.status.value}, tags: {fresh_call.action_tags}")
+                    
+                    # Final commit for status and tags
+                    cleanup_db.commit()
+                    cleanup_db.refresh(fresh_call)
                 else:
                     logger.error(f"Could not find call {call_id} for cleanup")
                     

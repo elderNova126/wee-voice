@@ -1,5 +1,5 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react'
-import { PhoneIcon, ClockIcon, CurrencyDollarIcon } from '@heroicons/react/24/outline'
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState, useRef, useMemo } from 'react'
+import { PhoneIcon, ClockIcon, CurrencyDollarIcon, FunnelIcon } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { callsAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
@@ -53,6 +53,12 @@ const getTagColor = (tag: string) => {
   if (normalized.includes('request')) {
     return 'bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100 border border-amber-400 dark:border-amber-600'
   }
+  if (normalized.includes('summarized') && !normalized.includes('no')) {
+    return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
+  }
+  if (normalized.includes('no summarized')) {
+    return 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-100'
+  }
   if (normalized.includes('email')) {
     return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100'
   }
@@ -81,13 +87,11 @@ export default function CallsPage() {
   const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
+  const [filterActionRequired, setFilterActionRequired] = useState(false)
 
-  useEffect(() => {
-    loadCalls()
-  }, [])
-
-  const loadCalls = async () => {
+  const loadCalls = useCallback(async () => {
     try {
+      // Backend sends no-cache headers, so no need for cache-busting parameter
       const response = await callsAPI.list()
       setCalls(response.data)
     } catch (error) {
@@ -96,7 +100,61 @@ export default function CallsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const isPageVisibleRef = useRef(true)
+  
+  // Track if there are in-progress or summarizing calls (memoized to prevent unnecessary re-renders)
+  const hasInProgress = useMemo(() => 
+    calls.some(call => call.status === 'in_progress' || call.status === 'summarizing'),
+    [calls]
+  )
+
+  useEffect(() => {
+    loadCalls()
+  }, [loadCalls])
+  
+  // Handle page visibility - only poll when tab is visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      isPageVisibleRef.current = !document.hidden
+      if (!document.hidden) {
+        // Page became visible - refresh immediately
+        loadCalls()
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [loadCalls])
+  
+  // Smart polling: only poll frequently when there are in-progress calls
+  useEffect(() => {
+    // Clear any existing interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    
+    // Poll every 3 seconds if there are in-progress calls, otherwise every 30 seconds
+    // Only poll when page is visible
+    const pollInterval = hasInProgress ? 3000 : 30000
+    
+    intervalRef.current = setInterval(() => {
+      // Only poll if page is visible
+      if (isPageVisibleRef.current) {
+        loadCalls()
+      }
+    }, pollInterval)
+    
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+  }, [hasInProgress, loadCalls]) // Only recreate when in-progress status changes
 
   const recalculateAllCalls = async () => {
     try {
@@ -132,6 +190,8 @@ export default function CallsPage() {
         return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
       case 'in_progress':
         return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+      case 'summarizing':
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200 animate-pulse'
       default:
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
     }
@@ -147,13 +207,26 @@ export default function CallsPage() {
               View and analyze all voice agent calls
             </p>
           </div>
-          <button
-            onClick={recalculateAllCalls}
-            className="btn-secondary flex items-center"
-          >
-            <ClockIcon className="h-4 w-4 mr-2" />
-            Recalculate All
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setFilterActionRequired(!filterActionRequired)}
+              className={`btn-secondary flex items-center ${
+                filterActionRequired 
+                  ? 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 border-orange-400' 
+                  : ''
+              }`}
+            >
+              <FunnelIcon className="h-4 w-4 mr-2" />
+              {filterActionRequired ? 'Show All' : 'Action Required Only'}
+            </button>
+            <button
+              onClick={recalculateAllCalls}
+              className="btn-secondary flex items-center"
+            >
+              <ClockIcon className="h-4 w-4 mr-2" />
+              Recalculate All
+            </button>
+          </div>
         </div>
       </div>
       
@@ -165,17 +238,32 @@ export default function CallsPage() {
             </div>
           ))}
         </div>
-      ) : calls.length === 0 ? (
-        <div className="card text-center py-12">
-          <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
-          <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-white">No calls yet</h3>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Start testing your agents to see call history here.
-          </p>
-        </div>
-      ) : (
+      ) : (() => {
+        const filteredCalls = calls.filter((call) => {
+          if (!filterActionRequired) return true
+          const { actionRequests } = partitionFollowUpTags(call.action_tags ?? [])
+          return actionRequests.length > 0
+        })
+        
+        if (filteredCalls.length === 0) {
+          return (
+            <div className="card text-center py-12">
+              <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
+              <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-white">
+                {filterActionRequired ? 'No calls requiring action' : 'No calls yet'}
+              </h3>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {filterActionRequired 
+                  ? 'All calls have been handled or no action is required.'
+                  : 'Start testing your agents to see call history here.'}
+              </p>
+            </div>
+          )
+        }
+        
+        return (
         <div className="space-y-4">
-          {calls.map((call) => {
+          {filteredCalls.map((call) => {
             const { actionRequests, others } = partitionFollowUpTags(call.action_tags ?? [])
             return (
               <div
@@ -258,7 +346,8 @@ export default function CallsPage() {
             )
           })}
         </div>
-      )}
+        )
+      })()}
 
       {/* Call Details Modal */}
       {selectedCall && (
@@ -293,48 +382,49 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
 
   const loadCallDetails = useCallback(async () => {
     setLoadingDetails(true)
+    setLoadingTranscript(true) // Start loading transcript indicator
     try {
       const response = await callsAPI.get(call.id)
       setCallDetails(response.data)
+      
+      // Use transcript from call details immediately - no separate API call needed
+      const transcript = response.data?.transcript || response.data?.transcript_json
+      if (transcript) {
+        setTranscript(transcript)
+        setLoadingTranscript(false)
+      } else {
+        // If no transcript in call details, try separate endpoint as fallback
+        try {
+          const transcriptResponse = await callsAPI.getTranscript(call.id)
+          const { transcript: rawTranscript, transcript_json: structuredTranscript } = transcriptResponse.data ?? {}
+          setTranscript(structuredTranscript ?? rawTranscript ?? null)
+        } catch (error: any) {
+          // Transcript is optional, don't show error
+          setTranscript(null)
+        } finally {
+          setLoadingTranscript(false)
+        }
+      }
     } catch (error) {
       console.error('Failed to load call details:', error)
       toast.error('Failed to load call details')
+      setLoadingTranscript(false)
     } finally {
       setLoadingDetails(false)
     }
   }, [call.id])
 
-  const loadTranscript = useCallback(async () => {
-    setLoadingTranscript(true)
-    try {
-      const response = await callsAPI.getTranscript(call.id)
-      const { transcript: rawTranscript, transcript_json: structuredTranscript } = response.data ?? {}
-      setTranscript(structuredTranscript ?? rawTranscript ?? null)
-    } catch (error: any) {
-      const status = error?.response?.status
-      if (status === 404) {
-        // No transcript stored for this call; fall back to any cached value
-        setTranscript(call.transcript ?? null)
-      } else {
-        console.error('Failed to load transcript:', error)
-        toast.error('Failed to load transcript')
-      }
-    } finally {
-      setLoadingTranscript(false)
-    }
-  }, [call.id, call.transcript])
-
   useEffect(() => {
     loadCallDetails()
-    loadTranscript()
-  }, [loadCallDetails, loadTranscript])
+  }, [loadCallDetails])
 
   const handleGenerateSummary = async () => {
     setGeneratingSummary(true)
     try {
       await callsAPI.generateSummary(call.id)
       toast.success('Résumé régénéré')
-      await Promise.all([loadCallDetails(), loadTranscript()])
+      // loadCallDetails now includes transcript, so no need for separate call
+      await loadCallDetails()
     } catch (error) {
       console.error('Failed to regenerate summary:', error)
       toast.error('Erreur lors de la régénération du résumé')

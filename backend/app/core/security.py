@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta
-from typing import Optional, Any
+from typing import Optional, Any, Dict, Tuple
 from jose import jwt, JWTError
 import bcrypt
+import logging
+import time
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -11,6 +13,37 @@ from app.core.config import settings
 from app.models import get_db, User, APIKey
 
 security = HTTPBearer()
+logger = logging.getLogger(__name__)
+
+# Simple in-memory cache for user objects to optimize frequent requests
+# Format: {user_id: (user_object, timestamp)}
+_user_cache: Dict[int, Tuple[User, float]] = {}
+_CACHE_TTL = 30  # Cache user for 30 seconds
+
+
+def _get_cached_user(user_id: int) -> Optional[User]:
+    """Get user from cache if available and not expired"""
+    if user_id not in _user_cache:
+        return None
+    
+    user, timestamp = _user_cache[user_id]
+    if time.time() - timestamp > _CACHE_TTL:
+        # Cache expired
+        del _user_cache[user_id]
+        return None
+    
+    return user
+
+
+def _cache_user(user: User):
+    """Cache user object"""
+    _user_cache[user.id] = (user, time.time())
+
+
+def _invalidate_user_cache(user_id: int):
+    """Invalidate cache for a specific user (e.g., when user is deactivated)"""
+    if user_id in _user_cache:
+        del _user_cache[user_id]
 
 
 def truncate_password(password: str) -> bytes:
@@ -67,10 +100,14 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
-    """Get current user from JWT token"""
+    """
+    Get current user from JWT token.
+    Uses caching to optimize frequent requests while maintaining security.
+    Token signature is always validated, but user lookup is cached.
+    """
     try:
         token = credentials.credentials
-        print(f"DEBUG: Received token: {token[:20]}...")  # Log first 20 chars
+        logger.debug(f"Received token: {token[:20]}...")  # Log first 20 chars for debugging
         
         credentials_exception = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -78,36 +115,56 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
         
+        # Always validate token signature (security requirement)
         payload = decode_token(token)
-        print(f"DEBUG: Decoded payload: {payload}")
+        logger.debug(f"Decoded payload: {payload}")
         
         if payload is None:
-            print("DEBUG: Payload is None")
+            logger.debug("Payload is None - invalid token")
             raise credentials_exception
         
         user_id: str = payload.get("sub")
-        print(f"DEBUG: User ID from token: {user_id}")
+        logger.debug(f"User ID from token: {user_id}")
         
         if user_id is None:
-            print("DEBUG: User ID is None")
+            logger.debug("User ID is None in payload")
             raise credentials_exception
         
-        user = db.query(User).filter(User.id == int(user_id)).first()
-        print(f"DEBUG: User found: {user is not None}")
+        user_id_int = int(user_id)
+        
+        # Try to get user from cache first (optimization for frequent requests)
+        user = _get_cached_user(user_id_int)
         
         if user is None:
-            print("DEBUG: User not found in database")
-            raise credentials_exception
+            # Cache miss - query database
+            user = db.query(User).filter(User.id == user_id_int).first()
+            logger.debug(f"User found in DB: {user is not None}")
+            
+            if user is None:
+                logger.warning(f"User not found in database for ID: {user_id}")
+                raise credentials_exception
+            
+            # Cache the user for future requests
+            _cache_user(user)
+        else:
+            logger.debug(f"User found in cache: {user.email}")
         
+        # Always check if user is active (even from cache)
         if not user.is_active:
-            print("DEBUG: User is not active")
+            # Invalidate cache if user is inactive
+            _invalidate_user_cache(user_id_int)
+            logger.warning(f"Inactive user attempted authentication: {user.email}")
             raise HTTPException(status_code=400, detail="Inactive user")
         
-        print(f"DEBUG: Authentication successful for user {user.email}")
+        logger.debug(f"Authentication successful for user {user.email}")
         return user
-    except Exception as e:
-        print(f"DEBUG: Exception in get_current_user: {type(e).__name__}: {e}")
+    except HTTPException:
+        # Re-raise HTTP exceptions (authentication failures)
         raise
+    except Exception as e:
+        # Log unexpected errors
+        logger.error(f"Unexpected error in get_current_user: {type(e).__name__}: {e}", exc_info=True)
+        raise credentials_exception
 
 
 def get_current_active_user(
