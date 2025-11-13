@@ -32,6 +32,7 @@ class CallResponse(BaseModel):
     callback_reason: Optional[str] = None
     action_items: Optional[List[str]] = None
     action_tags: Optional[List[str]] = None
+    summarization_status: Optional[str] = None
     
     class Config:
         from_attributes = True

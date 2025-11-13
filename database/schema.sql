@@ -36,7 +36,7 @@ DROP TYPE IF EXISTS integration_status CASCADE;
 CREATE TYPE subscription_tier AS ENUM ('free', 'basic', 'pro', 'enterprise');
 
 -- Call status
-CREATE TYPE call_status AS ENUM ('initiated', 'in_progress', 'completed', 'failed', 'interrupted');
+CREATE TYPE call_status AS ENUM ('initiated', 'in_progress', 'summarizing', 'completed', 'failed', 'interrupted');
 
 -- Support ticket types
 CREATE TYPE ticket_status AS ENUM ('open', 'in_progress', 'resolved', 'closed');
@@ -368,6 +368,9 @@ CREATE TABLE calls (
     summary_email_sent BOOLEAN DEFAULT FALSE,
     summary_email_sent_at TIMESTAMP,
     
+    -- Summarization status
+    summarization_status VARCHAR(50),
+    
     -- Timestamps
     started_at TIMESTAMP,
     ended_at TIMESTAMP,
@@ -388,6 +391,7 @@ CREATE INDEX idx_calls_key_points ON calls USING GIN (key_points);
 CREATE INDEX idx_calls_transcript ON calls USING GIN (to_tsvector('french', transcript));
 CREATE INDEX idx_calls_zadarma_call_id ON calls(zadarma_call_id);
 CREATE INDEX idx_calls_callback_requested ON calls(callback_requested);
+CREATE INDEX idx_calls_summarization_status ON calls(summarization_status);
 
 -- ===================================================================
 -- CALL MESSAGES TABLE

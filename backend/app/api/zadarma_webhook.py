@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from app.models import get_db, Call, VoiceAgent, PhoneNumber, User
+from app.models import get_db, Call, VoiceAgent, PhoneNumber, User, CallStatus
 from app.core.config import settings
 from app.services.notification_service import get_notification_service
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +269,7 @@ async def handle_call_end(
         return {"status": "ok", "message": "Call not found"}
     
     # Update call record
-    call.status = "completed"
+    call.status = CallStatus.SUMMARIZING  # Set to summarizing immediately
     call.ended_at = datetime.utcnow()
     
     # Extract call details from webhook data
@@ -292,7 +293,12 @@ async def handle_call_end(
     
     db.commit()
     
-    logger.info(f"Call {call.id} ended. Duration: {call.duration}s, Cost: ${call.cost}")
+    logger.info(f"Call {call.id} ended. Duration: {call.duration}s, Cost: ${call.cost}, Status set to summarizing")
+    
+    # Start background summarization task
+    from app.api.websocket import auto_summarize_call
+    asyncio.create_task(auto_summarize_call(call.id))
+    logger.info(f"Started background summarization task for call {call.id}")
     
     # Send completion notification
     notification_service = get_notification_service()

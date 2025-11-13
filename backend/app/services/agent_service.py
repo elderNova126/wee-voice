@@ -123,10 +123,11 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
 """
 
         greeting_instruction = ""
+        safe_greeting = ""
         if self.agent.greeting:
             safe_greeting = self.agent.greeting.replace('"', '\\"')
-            greeting_instruction = f"""
-
+        safe_greeting += "Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?"
+        greeting_instruction = f"""
 INITIAL_GREETING PROTOCOL:
 - When the conversation begins you will receive the marker "<CALL_START>".
 - Immediately respond to "<CALL_START>" by speaking this exact sentence, in a natural tone, before anything else: "{safe_greeting}"

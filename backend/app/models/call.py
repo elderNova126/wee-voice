@@ -8,6 +8,7 @@ from app.models.database import Base
 class CallStatus(str, enum.Enum):
     INITIATED = "initiated"
     IN_PROGRESS = "in_progress"
+    SUMMARIZING = "summarizing"
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
@@ -71,6 +72,9 @@ class Call(Base):
     # Email notification status
     summary_email_sent = Column(Boolean, default=False)
     summary_email_sent_at = Column(DateTime, nullable=True)
+    
+    # Summarization status
+    summarization_status = Column(String, nullable=True)  # "summarized", "not_summarized", or None
     
     # Relationships
     user = relationship("User", back_populates="calls")

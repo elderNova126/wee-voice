@@ -1,7 +1,8 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react'
-import { PhoneIcon, ClockIcon, CurrencyDollarIcon } from '@heroicons/react/24/outline'
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState, useRef } from 'react'
+import { PhoneIcon, ClockIcon, CurrencyDollarIcon, FunnelIcon } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { callsAPI } from '@/lib/api'
+import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
 
 interface Call {
@@ -20,6 +21,7 @@ interface Call {
   callback_reason?: string | null
   action_items?: string[]
   action_tags?: string[]
+  summarization_status?: string | null  // "summarized", "not_summarized", or null
 }
 
 interface CallMessage {
@@ -81,10 +83,69 @@ export default function CallsPage() {
   const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [actionRequiredFilter, setActionRequiredFilter] = useState<boolean | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const token = useAuthStore(state => state.token)
 
   useEffect(() => {
     loadCalls()
-  }, [])
+    
+    // Connect to WebSocket for real-time updates
+    if (token) {
+      const wsUrl = `${import.meta.env.VITE_API_URL?.replace('http', 'ws') || 'ws://localhost:8000'}/api/v1/ws/calls/monitor?token=${token}`
+      const ws = new WebSocket(wsUrl)
+      
+      ws.onopen = () => {
+        console.log('Connected to call monitor WebSocket')
+      }
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'call_update') {
+            // Update the call in the list, or add it if it doesn't exist
+            setCalls(prevCalls => {
+              const existingIndex = prevCalls.findIndex(call => call.id === data.call.id)
+              if (existingIndex >= 0) {
+                // Update existing call
+                return prevCalls.map(call => 
+                  call.id === data.call.id 
+                    ? { ...call, ...data.call }
+                    : call
+                )
+              } else {
+                // Add new call at the beginning (most recent first)
+                return [data.call, ...prevCalls]
+              }
+            })
+          }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error)
+        }
+      }
+      
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+      
+      ws.onclose = () => {
+        console.log('Disconnected from call monitor WebSocket')
+        // Attempt to reconnect after 5 seconds
+        setTimeout(() => {
+          if (token) {
+            // Reconnect logic would go here if needed
+          }
+        }, 5000)
+      }
+      
+      wsRef.current = ws
+      
+      return () => {
+        ws.close()
+      }
+    }
+  }, [token])
 
   const loadCalls = async () => {
     try {
@@ -132,6 +193,8 @@ export default function CallsPage() {
         return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
       case 'in_progress':
         return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+      case 'summarizing':
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
       default:
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
     }
@@ -155,6 +218,41 @@ export default function CallsPage() {
             Recalculate All
           </button>
         </div>
+        
+        {/* Filters */}
+        <div className="mt-6 flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <FunnelIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Filters:</span>
+          </div>
+          
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          >
+            <option value="all">All Status</option>
+            <option value="initiated">Initiated</option>
+            <option value="in_progress">In Progress</option>
+            <option value="summarizing">Summarizing</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="interrupted">Interrupted</option>
+          </select>
+          
+          <select
+            value={actionRequiredFilter === null ? 'all' : actionRequiredFilter ? 'yes' : 'no'}
+            onChange={(e) => {
+              const value = e.target.value
+              setActionRequiredFilter(value === 'all' ? null : value === 'yes')
+            }}
+            className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          >
+            <option value="all">All Calls</option>
+            <option value="yes">Action Required</option>
+            <option value="no">No Action Required</option>
+          </select>
+        </div>
       </div>
       
       {loading ? (
@@ -175,7 +273,20 @@ export default function CallsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {calls.map((call) => {
+          {calls
+            .filter(call => {
+              if (statusFilter !== 'all' && call.status !== statusFilter) {
+                return false
+              }
+              if (actionRequiredFilter !== null) {
+                const { actionRequests } = partitionFollowUpTags(call.action_tags ?? [])
+                const hasActionRequired = actionRequests.length > 0
+                if (actionRequiredFilter && !hasActionRequired) return false
+                if (!actionRequiredFilter && hasActionRequired) return false
+              }
+              return true
+            })
+            .map((call) => {
             const { actionRequests, others } = partitionFollowUpTags(call.action_tags ?? [])
             return (
               <div
@@ -204,6 +315,15 @@ export default function CallsPage() {
                         {actionRequests.length > 0 && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 uppercase tracking-wide">
                             Action Required
+                          </span>
+                        )}
+                        {call.summarization_status && (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                            call.summarization_status === 'summarized'
+                              ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                              : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                          }`}>
+                            {call.summarization_status === 'summarized' ? 'Summarized' : 'No Summarized'}
                           </span>
                         )}
                       </div>
