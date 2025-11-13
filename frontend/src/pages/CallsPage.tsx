@@ -22,6 +22,7 @@ interface Call {
   action_items?: string[]
   action_tags?: string[]
   summarization_status?: string | null  // "summarized", "not_summarized", or null
+  messages?: CallMessage[]  // Messages for the call
 }
 
 interface CallMessage {
@@ -109,9 +110,27 @@ export default function CallsPage() {
               const existingIndex = prevCalls.findIndex(call => call.id === data.call.id)
               if (existingIndex >= 0) {
                 // Update existing call
+                const updatedCall = { ...prevCalls[existingIndex], ...data.call }
+                
+                // If there's a new message, we need to reload the call to get full details
+                if (data.call.new_message) {
+                  // Reload call details to get updated messages
+                  callsAPI.get(data.call.id).then(response => {
+                    setCalls(prevCalls => 
+                      prevCalls.map(call => 
+                        call.id === data.call.id 
+                          ? { ...call, ...response.data }
+                          : call
+                      )
+                    )
+                  }).catch(err => {
+                    console.error('Error reloading call:', err)
+                  })
+                }
+                
                 return prevCalls.map(call => 
                   call.id === data.call.id 
-                    ? { ...call, ...data.call }
+                    ? updatedCall
                     : call
                 )
               } else {
@@ -410,6 +429,8 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
     subject: `Follow-up for call #${call.id}`,
     body: ''
   })
+  const token = useAuthStore(state => state.token)
+  const wsRef = useRef<WebSocket | null>(null)
 
   const loadCallDetails = useCallback(async () => {
     setLoadingDetails(true)
@@ -447,7 +468,36 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   useEffect(() => {
     loadCallDetails()
     loadTranscript()
-  }, [loadCallDetails, loadTranscript])
+    
+    // Connect to WebSocket for real-time message updates
+    if (token) {
+      const wsUrl = `${import.meta.env.VITE_API_URL?.replace('http', 'ws') || 'ws://localhost:8000'}/api/v1/ws/calls/monitor?token=${token}`
+      const ws = new WebSocket(wsUrl)
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'call_update' && data.call.id === call.id) {
+            // If there's a new message, reload call details
+            if (data.call.new_message) {
+              loadCallDetails()
+            } else {
+              // Update call details with other updates
+              setCallDetails(prev => prev ? { ...prev, ...data.call } : prev)
+            }
+          }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error)
+        }
+      }
+      
+      wsRef.current = ws
+      
+      return () => {
+        ws.close()
+      }
+    }
+  }, [loadCallDetails, loadTranscript, call.id, token])
 
   const handleGenerateSummary = async () => {
     setGeneratingSummary(true)
@@ -726,6 +776,42 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                 <p className="text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
                   {displayCall.summary}
                 </p>
+              </div>
+            )}
+
+            {/* Messages - Real-time conversation */}
+            {displayCall.messages && displayCall.messages.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    Messages {displayCall.status === 'in_progress' || displayCall.status === 'summarizing' ? (
+                      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                        Live
+                      </span>
+                    ) : null}
+                  </h4>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3 max-h-96 overflow-y-auto">
+                  {displayCall.messages.map((message: any, index: number) => (
+                    <div
+                      key={index}
+                      className={`p-3 rounded-lg ${
+                        message.role === 'user'
+                          ? 'bg-blue-50 dark:bg-blue-900/30 ml-8'
+                          : message.role === 'system'
+                          ? 'bg-gray-100 dark:bg-gray-800 mr-8'
+                          : 'bg-gray-50 dark:bg-gray-800 mr-8'
+                      }`}
+                    >
+                      <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        {message.role === 'user' ? 'Visitor' : message.role === 'system' ? 'System' : 'Agent'} • {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
+                      </div>
+                      <div className="text-sm text-gray-900 dark:text-white">
+                        {message.content}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

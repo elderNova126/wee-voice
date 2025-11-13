@@ -86,6 +86,8 @@ export const callsAPI = {
   recalculate: (id: number) => api.post(`/calls/${id}/recalculate`),
   
   recalculateAll: () => api.post('/calls/recalculate-all'),
+  
+  sendMessage: (id: number, content: string) => api.post(`/calls/${id}/messages`, { content }),
 }
 
 // API Keys API

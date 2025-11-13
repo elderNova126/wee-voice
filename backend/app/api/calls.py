@@ -1,9 +1,10 @@
 from typing import List, Optional, Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from datetime import datetime, timedelta
 from pydantic import BaseModel, EmailStr
+import logging
 
 from app.core.security import get_current_active_user
 from app.models import get_db, User, Call, CallMessage, CallStatus
@@ -13,6 +14,7 @@ from app.services.email_service import EmailService
 from app.services.notification_service import get_notification_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class CallResponse(BaseModel):
@@ -58,6 +60,10 @@ class CallEmailRequest(BaseModel):
     body: str
     from_email: Optional[EmailStr] = None
     from_name: Optional[str] = None
+
+
+class CallMessageRequest(BaseModel):
+    content: str
 
 
 @router.get("/", response_model=List[CallResponse])
@@ -333,6 +339,67 @@ def recalculate_all_calls(
     return {
         "message": f"Recalculated duration and cost for {updated_count} calls",
         "updated_count": updated_count
+    }
+
+
+@router.post("/{call_id}/messages")
+async def send_message(
+    call_id: int,
+    message: CallMessageRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    """Send a message for a call (public endpoint for visitors)"""
+    # Get call - no auth required for public agents
+    call = db.query(Call).filter(Call.id == call_id).first()
+    
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    
+    # Verify call is still active (not completed)
+    if call.status in [CallStatus.COMPLETED, CallStatus.FAILED, CallStatus.INTERRUPTED]:
+        raise HTTPException(status_code=400, detail="Cannot send message to completed call")
+    
+    content = message.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message content is required")
+    
+    # Create message
+    call_message = CallMessage(
+        call_id=call_id,
+        role="user",
+        content=content
+    )
+    db.add(call_message)
+    
+    # Update transcript if it exists
+    if call.transcript:
+        call.transcript += f"\n\nUSER: {content}"
+    else:
+        call.transcript = f"USER: {content}"
+    
+    db.commit()
+    db.refresh(call_message)
+    
+    # Broadcast message to call owner via WebSocket
+    try:
+        from app.api.websocket import call_monitor_manager
+        await call_monitor_manager.broadcast_call_update(call.user_id, {
+            "id": call.id,
+            "new_message": {
+                "id": call_message.id,
+                "role": call_message.role,
+                "content": call_message.content,
+                "timestamp": call_message.timestamp.isoformat() if call_message.timestamp else None
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error broadcasting message: {e}")
+    
+    return {
+        "id": call_message.id,
+        "role": call_message.role,
+        "content": call_message.content,
+        "timestamp": call_message.timestamp
     }
 
 

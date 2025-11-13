@@ -63,13 +63,25 @@ async def auto_summarize_call(call_id: int):
             logger.error(f"Call {call_id} not found for summarization")
             return
         
-        # Check if transcript exists
+        # Build transcript from messages if transcript doesn't exist
         if not call.transcript:
-            logger.warning(f"Call {call_id} has no transcript, marking as not_summarized")
-            call.summarization_status = "not_summarized"
-            call.status = CallStatus.COMPLETED
-            db.commit()
-            return
+            messages = db.query(CallMessage).filter(
+                CallMessage.call_id == call_id
+            ).order_by(CallMessage.timestamp).all()
+            
+            if messages:
+                # Build transcript from messages
+                transcript_lines = []
+                for msg in messages:
+                    transcript_lines.append(f"{msg.role.upper()}: {msg.content}")
+                call.transcript = "\n\n".join(transcript_lines)
+                logger.info(f"Built transcript from {len(messages)} messages for call {call_id}")
+            else:
+                logger.warning(f"Call {call_id} has no transcript or messages, marking as not_summarized")
+                call.summarization_status = "not_summarized"
+                call.status = CallStatus.COMPLETED
+                db.commit()
+                return
         
         # Generate summary
         try:
@@ -250,6 +262,7 @@ async def voice_websocket(
         await websocket.send_json({
             "type": "session_started",
             "session_id": session_id,
+            "call_id": call.id,
             "agent_name": agent.name,
             "language": agent.language
         })

@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon, PhoneIcon } from '@heroicons/react/24/outline'
+import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon, PhoneIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
-import { VoiceWebSocket, api } from '@/lib/api'
+import { VoiceWebSocket, api, callsAPI } from '@/lib/api'
 
 interface Agent {
   id: number
@@ -26,6 +26,9 @@ export default function PublicAgentPage() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [transcript, setTranscript] = useState<{ role: string; text: string }[]>([])
+  const [callId, setCallId] = useState<number | null>(null)
+  const [messageInput, setMessageInput] = useState('')
+  const [sendingMessage, setSendingMessage] = useState(false)
   
   const wsRef = useRef<VoiceWebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -173,6 +176,9 @@ export default function PublicAgentPage() {
               setIsConnecting(false)
               setIsRecording(true)
               isRecordingRef.current = true
+              if (data.call_id) {
+                setCallId(data.call_id)
+              }
               toast.success(isFrench ? 'Connecté ! Vous pouvez commencer à parler...' : 'Connected! Start speaking...')
             } else if (data.type === 'transcript') {
               setTranscript(prev => [...prev, { role: data.role, text: data.text }])
@@ -268,6 +274,8 @@ export default function PublicAgentPage() {
     setIsRecording(false)
     setIsConnected(false)
     setTranscript([])
+    setCallId(null)
+    setMessageInput('')
     
     // Clear audio queue and reset timing
     audioQueueRef.current = []
@@ -276,6 +284,22 @@ export default function PublicAgentPage() {
     
     cleanup()
     toast.success(isFrench ? 'Conversation terminée' : 'Conversation ended')
+  }
+
+  const sendMessage = async () => {
+    if (!callId || !messageInput.trim()) return
+    
+    try {
+      setSendingMessage(true)
+      await callsAPI.sendMessage(callId, messageInput.trim())
+      setMessageInput('')
+      toast.success(isFrench ? 'Message envoyé' : 'Message sent')
+    } catch (error: any) {
+      console.error('Error sending message:', error)
+      toast.error(error?.response?.data?.detail || (isFrench ? 'Erreur lors de l\'envoi du message' : 'Failed to send message'))
+    } finally {
+      setSendingMessage(false)
+    }
   }
 
   if (loading) {
@@ -416,9 +440,39 @@ export default function PublicAgentPage() {
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 mb-8">
                   {isRecording
-                    ? (isFrench ? 'Parlez naturellement – l’agent vous écoute' : 'Speak naturally – the agent is listening')
+                    ? (isFrench ? 'Parlez naturellement – l\'agent vous écoute' : 'Speak naturally – the agent is listening')
                     : (isFrench ? 'Traitement en cours...' : 'Processing...')}
                 </p>
+
+                {/* Message Input */}
+                <div className="mb-6 max-w-md mx-auto">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={messageInput}
+                      onChange={(e) => setMessageInput(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          sendMessage()
+                        }
+                      }}
+                      placeholder={isFrench ? 'Tapez votre message...' : 'Type your message...'}
+                      className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      disabled={sendingMessage}
+                    />
+                    <button
+                      onClick={sendMessage}
+                      disabled={!messageInput.trim() || sendingMessage}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                    >
+                      <PaperAirplaneIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
+                    {isFrench ? 'Vous pouvez aussi envoyer un message texte' : 'You can also send a text message'}
+                  </p>
+                </div>
 
                 <button
                   onClick={stopConversation}
