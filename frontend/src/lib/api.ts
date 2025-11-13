@@ -68,7 +68,8 @@ export const agentsAPI = {
 
 // Calls API
 export const callsAPI = {
-  list: (params?: any) => api.get('/calls/', { params }),
+  list: (params?: { page?: number; per_page?: number; status?: string; action_required?: boolean; favorite?: boolean; search?: string }) => 
+    api.get('/calls/', { params }),
   
   get: (id: number) => api.get(`/calls/${id}`),
   
@@ -83,11 +84,18 @@ export const callsAPI = {
   
   delete: (id: number) => api.delete(`/calls/${id}`),
   
+  bulkDelete: (callIds: number[]) => api.post('/calls/bulk/delete', { call_ids: callIds }),
+  
   recalculate: (id: number) => api.post(`/calls/${id}/recalculate`),
   
   recalculateAll: () => api.post('/calls/recalculate-all'),
   
   sendMessage: (id: number, content: string) => api.post(`/calls/${id}/messages`, { content }),
+  
+  toggleFavorite: (id: number) => api.post(`/calls/${id}/toggle-favorite`),
+  
+  bulkToggleFavorite: (callIds: number[], isFavorite: boolean) => 
+    api.post('/calls/bulk/favorite', { call_ids: callIds, is_favorite: isFavorite }),
 }
 
 // API Keys API

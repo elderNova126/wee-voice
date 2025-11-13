@@ -76,6 +76,9 @@ class Call(Base):
     # Summarization status
     summarization_status = Column(String, nullable=True)  # "summarized", "not_summarized", or None
     
+    # Favorite/Saved flag
+    is_favorite = Column(Boolean, default=False, index=True)
+    
     # Relationships
     user = relationship("User", back_populates="calls")
     agent = relationship("VoiceAgent", back_populates="calls")

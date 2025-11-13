@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState, useRef } from 'react'
-import { PhoneIcon, ClockIcon, CurrencyDollarIcon, FunnelIcon } from '@heroicons/react/24/outline'
+import { PhoneIcon, ClockIcon, CurrencyDollarIcon, FunnelIcon, ExclamationTriangleIcon, TrashIcon, ArrowPathIcon, ChartBarIcon, ChevronLeftIcon, ChevronRightIcon, StarIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { callsAPI } from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
@@ -8,6 +9,7 @@ import toast from 'react-hot-toast'
 interface Call {
   id: number
   agent_id: number
+  is_favorite?: boolean
   session_id: string
   status: string
   duration_minutes: number
@@ -86,12 +88,25 @@ export default function CallsPage() {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [actionRequiredFilter, setActionRequiredFilter] = useState<boolean | null>(null)
+  const [selectedCallIds, setSelectedCallIds] = useState<Set<number>>(new Set())
+  const [deleting, setDeleting] = useState(false)
+  const [deletingCallId, setDeletingCallId] = useState<number | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage, setItemsPerPage] = useState(10)
+  const [totalCalls, setTotalCalls] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+  const [activeTab, setActiveTab] = useState<'all' | 'favorites'>('all')
+  const [togglingFavorite, setTogglingFavorite] = useState<number | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchInput, setSearchInput] = useState('')
   const wsRef = useRef<WebSocket | null>(null)
   const token = useAuthStore(state => state.token)
 
   useEffect(() => {
     loadCalls()
-    
+  }, [currentPage, itemsPerPage, statusFilter, actionRequiredFilter, activeTab, searchQuery])
+  
+  useEffect(() => {
     // Connect to WebSocket for real-time updates
     if (token) {
       const wsUrl = `${import.meta.env.VITE_API_URL?.replace('http', 'ws') || 'ws://localhost:8000'}/api/v1/ws/calls/monitor?token=${token}`
@@ -168,8 +183,35 @@ export default function CallsPage() {
 
   const loadCalls = async () => {
     try {
-      const response = await callsAPI.list()
-      setCalls(response.data)
+      setLoading(true)
+      const params: any = {
+        page: currentPage,
+        per_page: itemsPerPage
+      }
+      
+      if (statusFilter !== 'all') {
+        params.status = statusFilter
+      }
+      
+      if (actionRequiredFilter !== null) {
+        params.action_required = actionRequiredFilter
+      }
+      
+      // Add favorite filter based on active tab
+      if (activeTab === 'favorites') {
+        params.favorite = true
+      }
+      
+      // Add search query if provided
+      if (searchQuery.trim()) {
+        params.search = searchQuery.trim()
+      }
+      
+      const response = await callsAPI.list(params)
+      const data = response.data
+      setCalls(data.items || [])
+      setTotalCalls(data.total || 0)
+      setTotalPages(data.total_pages || 0)
     } catch (error) {
       console.error('Failed to load calls:', error)
       toast.error('Failed to load calls')
@@ -178,14 +220,118 @@ export default function CallsPage() {
     }
   }
 
-  const recalculateAllCalls = async () => {
+
+  const handleSelectCall = (callId: number, event: React.MouseEvent) => {
+    event.stopPropagation()
+    setSelectedCallIds(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(callId)) {
+        newSet.delete(callId)
+      } else {
+        newSet.add(callId)
+      }
+      return newSet
+    })
+  }
+
+  const handleSelectAll = () => {
+    // Select/deselect all calls on current page
+    const pageCallIds = paginatedCalls.map(c => c.id)
+    const allSelected = pageCallIds.every(id => selectedCallIds.has(id))
+    
+    if (allSelected) {
+      // Deselect all calls on current page
+      setSelectedCallIds(prev => {
+        const newSet = new Set(prev)
+        pageCallIds.forEach(id => newSet.delete(id))
+        return newSet
+      })
+    } else {
+      // Select all calls on current page
+      setSelectedCallIds(prev => {
+        const newSet = new Set(prev)
+        pageCallIds.forEach(id => newSet.add(id))
+        return newSet
+      })
+    }
+  }
+
+  const handleDeleteCall = async (callId: number, event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (!confirm('Are you sure you want to delete this call?')) return
+    
     try {
-      const response = await callsAPI.recalculateAll()
-      toast.success(`Recalculated ${response.data.updated_count} calls`)
-      loadCalls() // Reload calls to show updated values
-    } catch (error) {
-      console.error('Failed to recalculate calls:', error)
-      toast.error('Failed to recalculate calls')
+      setDeletingCallId(callId)
+      setDeleting(true)
+      await callsAPI.delete(callId)
+      toast.success('Call deleted successfully')
+      loadCalls()
+      setSelectedCallIds(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(callId)
+        return newSet
+      })
+    } catch (error: any) {
+      console.error('Failed to delete call:', error)
+      toast.error(error?.response?.data?.detail || 'Failed to delete call')
+    } finally {
+      setDeleting(false)
+      setDeletingCallId(null)
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    if (selectedCallIds.size === 0) return
+    if (!confirm(`Are you sure you want to delete ${selectedCallIds.size} call(s)?`)) return
+    
+    try {
+      setDeleting(true)
+      const response = await callsAPI.bulkDelete(Array.from(selectedCallIds))
+      toast.success(response.data.message || `Deleted ${response.data.deleted_count} call(s)`)
+      loadCalls()
+      setSelectedCallIds(new Set())
+    } catch (error: any) {
+      console.error('Failed to delete calls:', error)
+      toast.error(error?.response?.data?.detail || 'Failed to delete calls')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const handleToggleFavorite = async (callId: number, event: React.MouseEvent) => {
+    event.stopPropagation()
+    try {
+      setTogglingFavorite(callId)
+      const response = await callsAPI.toggleFavorite(callId)
+      // Update the call in the list
+      setCalls(prevCalls => 
+        prevCalls.map(call => 
+          call.id === callId ? { ...call, is_favorite: response.data.is_favorite } : call
+        )
+      )
+      toast.success(response.data.message)
+    } catch (error: any) {
+      console.error('Failed to toggle favorite:', error)
+      toast.error(error?.response?.data?.detail || 'Failed to update favorite status')
+    } finally {
+      setTogglingFavorite(null)
+    }
+  }
+
+  const handleBulkToggleFavorite = async (isFavorite: boolean) => {
+    if (selectedCallIds.size === 0) return
+    
+    try {
+      setDeleting(true) // Reuse deleting state for loading
+      const response = await callsAPI.bulkToggleFavorite(Array.from(selectedCallIds), isFavorite)
+      toast.success(response.data.message)
+      loadCalls() // Reload to get updated favorite status
+      setSelectedCallIds(new Set())
+    } catch (error: any) {
+      console.error('Failed to update favorites:', error)
+      toast.error(error?.response?.data?.detail || 'Failed to update favorites')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -219,59 +365,246 @@ export default function CallsPage() {
     }
   }
 
+  // Use calls directly since they're already paginated from the server
+  const paginatedCalls = calls
+  
+  // Calculate display values
+  const startItem = totalCalls > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0
+  const endItem = Math.min(currentPage * itemsPerPage, totalCalls)
+
+  // Reset to page 1 when filters, tab, or search changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [statusFilter, actionRequiredFilter, activeTab, searchQuery])
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(searchInput)
+    }, 500) // 500ms debounce
+    
+    return () => clearTimeout(timer)
+  }, [searchInput])
+
+  const handleSearchClear = () => {
+    setSearchInput('')
+    setSearchQuery('')
+  }
+
+  // Reset to page 1 when items per page changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [itemsPerPage])
+
   return (
     <DashboardLayout>
       <div className="mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Call History</h1>
-            <p className="mt-2 text-gray-600 dark:text-gray-400">
-              View and analyze all voice agent calls
-            </p>
+        {/* Header Section with Title and Tabs */}
+        <div className="mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-1">Call History</h1>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                View and analyze all voice agent calls
+              </p>
+            </div>
+            
+            {/* Stats Card */}
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/50 rounded-lg">
+                  <ChartBarIcon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wide">
+                    Total Calls
+                  </div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {totalCalls}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-          <button
-            onClick={recalculateAllCalls}
-            className="btn-secondary flex items-center"
-          >
-            <ClockIcon className="h-4 w-4 mr-2" />
-            Recalculate All
-          </button>
+
+          {/* Tabs */}
+          <div className="flex gap-2 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg border border-gray-200 dark:border-gray-700 w-fit">
+            <button
+              onClick={() => setActiveTab('all')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'all'
+                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              All Calls
+            </button>
+            <button
+              onClick={() => setActiveTab('favorites')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'favorites'
+                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              <StarIconSolid className={`h-4 w-4 ${activeTab === 'favorites' ? 'text-yellow-500' : ''}`} />
+              Favorites
+            </button>
+          </div>
+        </div>
+
+        {/* Search Bar */}
+        <div className="mb-4">
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search calls by transcript, summary, caller name, or phone..."
+              className="w-full pl-10 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+            />
+            {searchInput && (
+              <button
+                onClick={handleSearchClear}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center"
+              >
+                <XMarkIcon className="h-5 w-5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" />
+              </button>
+            )}
+          </div>
         </div>
         
-        {/* Filters */}
-        <div className="mt-6 flex items-center gap-4 flex-wrap">
-          <div className="flex items-center gap-2">
-            <FunnelIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Filters:</span>
+        {/* Filters Section */}
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 shadow-sm mb-4">
+          <div className="flex flex-col gap-4">
+            {/* Filter Header */}
+            <div className="flex items-center gap-2 pb-2 border-b border-gray-200 dark:border-gray-700">
+              <div className="p-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                <FunnelIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+              </div>
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">Filters</span>
+            </div>
+            
+            {/* Filter Controls */}
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+              {/* Status Filter */}
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
+                  Status
+                </label>
+                <div className="relative">
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all appearance-none cursor-pointer hover:border-gray-400 dark:hover:border-gray-500"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="initiated">Initiated</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="summarizing">Summarizing</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Failed</option>
+                    <option value="interrupted">Interrupted</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Action Required Filter */}
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
+                  Action Required
+                </label>
+                <div className="relative">
+                  {actionRequiredFilter === true && (
+                    <div className="absolute -top-1 -right-1 z-10">
+                      <ExclamationTriangleIcon className="h-4 w-4 text-amber-500 dark:text-amber-400 animate-pulse" />
+                    </div>
+                  )}
+                  <select
+                    value={actionRequiredFilter === null ? 'all' : actionRequiredFilter ? 'yes' : 'no'}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setActionRequiredFilter(value === 'all' ? null : value === 'yes')
+                    }}
+                    className={`w-full px-3 py-2.5 border-2 rounded-lg text-sm focus:outline-none focus:ring-2 transition-all duration-200 appearance-none cursor-pointer ${
+                      actionRequiredFilter === true
+                        ? 'border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-900/30 text-amber-900 dark:text-amber-100 focus:ring-amber-500 font-semibold shadow-sm'
+                        : actionRequiredFilter === false
+                        ? 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 hover:border-gray-400 dark:hover:border-gray-500'
+                        : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 hover:border-gray-400 dark:hover:border-gray-500'
+                    }`}
+                  >
+                    <option value="all">All Calls</option>
+                    <option value="yes">Action Required</option>
+                    <option value="no">No Action Required</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <svg className={`h-4 w-4 ${actionRequiredFilter === true ? 'text-amber-500' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+                {actionRequiredFilter === true && (
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold text-amber-900 dark:text-amber-100 bg-amber-200 dark:bg-amber-800">
+                      ACTIVE FILTER
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-          
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="all">All Status</option>
-            <option value="initiated">Initiated</option>
-            <option value="in_progress">In Progress</option>
-            <option value="summarizing">Summarizing</option>
-            <option value="completed">Completed</option>
-            <option value="failed">Failed</option>
-            <option value="interrupted">Interrupted</option>
-          </select>
-          
-          <select
-            value={actionRequiredFilter === null ? 'all' : actionRequiredFilter ? 'yes' : 'no'}
-            onChange={(e) => {
-              const value = e.target.value
-              setActionRequiredFilter(value === 'all' ? null : value === 'yes')
-            }}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="all">All Calls</option>
-            <option value="yes">Action Required</option>
-            <option value="no">No Action Required</option>
-          </select>
         </div>
+        
+        {/* Bulk Actions */}
+        {selectedCallIds.size > 0 && (
+          <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <span className="text-sm font-medium text-amber-900 dark:text-amber-100">
+              {selectedCallIds.size} call(s) selected
+            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              {activeTab === 'all' ? (
+                <button
+                  onClick={() => handleBulkToggleFavorite(true)}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-400 text-white rounded-md text-sm font-medium transition-colors flex items-center gap-2"
+                >
+                  <StarIconSolid className="h-4 w-4" />
+                  Add to Favorites
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleBulkToggleFavorite(false)}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white rounded-md text-sm font-medium transition-colors flex items-center gap-2"
+                >
+                  <StarIcon className="h-4 w-4" />
+                  Remove from Favorites
+                </button>
+              )}
+              <button
+                onClick={handleBulkDelete}
+                disabled={deleting}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-md text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                {deleting ? (
+                  <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                ) : (
+                  <TrashIcon className="h-4 w-4" />
+                )}
+                {deleting ? 'Deleting...' : 'Delete Selected'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       
       {loading ? (
@@ -292,35 +625,124 @@ export default function CallsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {calls
-            .filter(call => {
-              if (statusFilter !== 'all' && call.status !== statusFilter) {
-                return false
-              }
-              if (actionRequiredFilter !== null) {
-                const { actionRequests } = partitionFollowUpTags(call.action_tags ?? [])
-                const hasActionRequired = actionRequests.length > 0
-                if (actionRequiredFilter && !hasActionRequired) return false
-                if (!actionRequiredFilter && hasActionRequired) return false
-              }
-              return true
-            })
+          {/* Pagination Header - Info and Per Page */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="text-sm text-gray-600 dark:text-gray-400">
+                Showing <span className="font-semibold text-gray-900 dark:text-white">{startItem}</span> to{' '}
+                <span className="font-semibold text-gray-900 dark:text-white">{endItem}</span> of{' '}
+                <span className="font-semibold text-gray-900 dark:text-white">{totalCalls}</span> calls
+                {searchQuery && (
+                  <span className="ml-2 text-blue-600 dark:text-blue-400">
+                    (search: "{searchQuery}")
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Per page:</label>
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                  className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none cursor-pointer"
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+            </div>
+            
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Previous page"
+                >
+                  <ChevronLeftIcon className="h-5 w-5" />
+                </button>
+                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum: number
+                    if (totalPages <= 5) {
+                      pageNum = i + 1
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i
+                    } else {
+                      pageNum = currentPage - 2 + i
+                    }
+                    
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => setCurrentPage(pageNum)}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                          currentPage === pageNum
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    )
+                  })}
+                </div>
+                
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                  className="p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Next page"
+                >
+                  <ChevronRightIcon className="h-5 w-5" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Select All Checkbox */}
+          <div className="flex items-center gap-2 mb-2 px-2">
+            <input
+              type="checkbox"
+              checked={paginatedCalls.length > 0 && paginatedCalls.every(c => selectedCallIds.has(c.id))}
+              onChange={handleSelectAll}
+              className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+            />
+            <label className="text-sm text-gray-700 dark:text-gray-300">Select All (Current Page)</label>
+          </div>
+          
+          {paginatedCalls
             .map((call) => {
             const { actionRequests, others } = partitionFollowUpTags(call.action_tags ?? [])
             return (
               <div
                 key={call.id}
-                className="card hover:shadow-lg transition-shadow cursor-pointer"
+                className={`card hover:shadow-lg transition-shadow cursor-pointer ${selectedCallIds.has(call.id) ? 'ring-2 ring-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : ''}`}
                 onClick={() => setSelectedCall(call)}
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start space-x-4 flex-1">
-                    <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
-                      <PhoneIcon className="h-6 w-6 text-blue-600" />
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-start space-x-3 sm:space-x-4 flex-1 min-w-0">
+                    {/* Checkbox */}
+                    <input
+                      type="checkbox"
+                      checked={selectedCallIds.has(call.id)}
+                      onChange={(e) => handleSelectCall(call.id, e as any)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1 w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 flex-shrink-0"
+                    />
+                    <div className="p-2 sm:p-3 bg-blue-100 dark:bg-blue-900 rounded-lg flex-shrink-0">
+                      <PhoneIcon className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                        <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
                           Call #{call.id}
                         </h3>
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(call.status)}`}>
@@ -380,22 +802,95 @@ export default function CallsPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-6 ml-4">
+                  <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                     <div className="text-right">
-                      <div className="flex items-center text-sm text-gray-500 dark:text-gray-400">
-                        <ClockIcon className="h-4 w-4 mr-1" />
-                        {call.duration_minutes?.toFixed(1) || '0.0'} min
+                      <div className="flex items-center text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+                        <ClockIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
+                        <span className="whitespace-nowrap">{call.duration_minutes?.toFixed(1) || '0.0'} min</span>
                       </div>
-                      <div className="flex items-center text-sm text-gray-500 dark:text-gray-400 mt-1">
-                        <CurrencyDollarIcon className="h-4 w-4 mr-1" />
-                        ${call.cost?.toFixed(2) || '0.00'}
+                      <div className="flex items-center text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">
+                        <CurrencyDollarIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
+                        <span className="whitespace-nowrap">${call.cost?.toFixed(2) || '0.00'}</span>
                       </div>
                     </div>
+                    <button
+                      onClick={(e) => handleToggleFavorite(call.id, e)}
+                      disabled={togglingFavorite === call.id}
+                      className={`p-2 rounded-md transition-colors disabled:opacity-50 flex-shrink-0 ${
+                        call.is_favorite
+                          ? 'text-yellow-500 hover:text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
+                          : 'text-gray-400 hover:text-yellow-500 hover:bg-gray-50 dark:hover:bg-gray-700'
+                      }`}
+                      title={call.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+                    >
+                      {togglingFavorite === call.id ? (
+                        <ArrowPathIcon className="h-5 w-5 animate-spin" />
+                      ) : call.is_favorite ? (
+                        <StarIconSolid className="h-5 w-5" />
+                      ) : (
+                        <StarIcon className="h-5 w-5" />
+                      )}
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteCall(call.id, e)}
+                      disabled={deleting && deletingCallId === call.id}
+                      className="p-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors disabled:opacity-50 flex-shrink-0"
+                      title={deleting && deletingCallId === call.id ? 'Deleting...' : 'Delete call'}
+                    >
+                      {deleting && deletingCallId === call.id ? (
+                        <ArrowPathIcon className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <TrashIcon className="h-5 w-5" />
+                      )}
+                    </button>
                   </div>
                 </div>
               </div>
             )
           })}
+          
+          {/* Pagination Footer */}
+          {totalPages > 1 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="text-sm text-gray-600 dark:text-gray-400">
+                Page <span className="font-semibold text-gray-900 dark:text-white">{currentPage}</span> of{' '}
+                <span className="font-semibold text-gray-900 dark:text-white">{totalPages}</span>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  First
+                </button>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+                >
+                  <ChevronLeftIcon className="h-4 w-4" />
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+                >
+                  Next
+                  <ChevronRightIcon className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Last
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

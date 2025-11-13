@@ -371,6 +371,9 @@ CREATE TABLE calls (
     -- Summarization status
     summarization_status VARCHAR(50),
     
+    -- Favorite/Saved flag
+    is_favorite BOOLEAN DEFAULT FALSE,
+    
     -- Timestamps
     started_at TIMESTAMP,
     ended_at TIMESTAMP,
@@ -392,6 +395,7 @@ CREATE INDEX idx_calls_transcript ON calls USING GIN (to_tsvector('french', tran
 CREATE INDEX idx_calls_zadarma_call_id ON calls(zadarma_call_id);
 CREATE INDEX idx_calls_callback_requested ON calls(callback_requested);
 CREATE INDEX idx_calls_summarization_status ON calls(summarization_status);
+CREATE INDEX idx_calls_is_favorite ON calls(is_favorite);
 
 -- ===================================================================
 -- CALL MESSAGES TABLE
