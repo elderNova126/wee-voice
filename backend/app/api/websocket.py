@@ -81,6 +81,17 @@ async def auto_summarize_call(call_id: int):
                 call.summarization_status = "not_summarized"
                 call.status = CallStatus.COMPLETED
                 db.commit()
+                
+                # Broadcast update to monitoring connections
+                try:
+                    call_data = {
+                        "id": call.id,
+                        "status": call.status.value,
+                        "summarization_status": call.summarization_status
+                    }
+                    await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+                except Exception as e:
+                    logger.error(f"Error broadcasting call update: {e}")
                 return
         
         # Generate summary
@@ -119,6 +130,17 @@ async def auto_summarize_call(call_id: int):
             call.summarization_status = "not_summarized"
             call.status = CallStatus.COMPLETED
             db.commit()
+            
+            # Broadcast update to monitoring connections even on error
+            try:
+                call_data = {
+                    "id": call.id,
+                    "status": call.status.value,
+                    "summarization_status": call.summarization_status
+                }
+                await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+            except Exception as e:
+                logger.error(f"Error broadcasting call update: {e}")
     except Exception as e:
         logger.error(f"Error in auto_summarize_call for call {call_id}: {e}", exc_info=True)
         db.rollback()
@@ -300,9 +322,28 @@ async def voice_websocket(
                             else:
                                 call.ended_at = datetime.utcnow()
                             
-                            # Save ended_at immediately
+                            # Update status to summarizing immediately
+                            if call.status in [CallStatus.IN_PROGRESS, CallStatus.INITIATED]:
+                                call.status = CallStatus.SUMMARIZING
+                                logger.info(f"Call {call.id} status set to summarizing (end_session message)")
+                            
+                            # Save changes immediately
                             try:
                                 db.commit()
+                                db.refresh(call)
+                                
+                                # Broadcast status update immediately
+                                try:
+                                    call_data = {
+                                        "id": call.id,
+                                        "status": call.status.value,
+                                        "ended_at": call.ended_at.isoformat() if call.ended_at else None,
+                                        "summarization_status": call.summarization_status
+                                    }
+                                    await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+                                    logger.info(f"Broadcasted call status update: {call.status.value}")
+                                except Exception as e:
+                                    logger.error(f"Error broadcasting call update: {e}")
                             except Exception as e:
                                 logger.error(f"Error saving ended_at: {e}")
                             
@@ -314,6 +355,29 @@ async def voice_websocket(
             
             except WebSocketDisconnect:
                 logger.info(f"Client disconnected: {session_id}")
+                # Update call status immediately on disconnect
+                try:
+                    if call and call.status in [CallStatus.IN_PROGRESS, CallStatus.INITIATED]:
+                        call.status = CallStatus.SUMMARIZING
+                        if not call.ended_at:
+                            call.ended_at = datetime.utcnow()
+                        db.commit()
+                        db.refresh(call)
+                        
+                        # Broadcast status update immediately
+                        try:
+                            call_data = {
+                                "id": call.id,
+                                "status": call.status.value,
+                                "ended_at": call.ended_at.isoformat() if call.ended_at else None,
+                                "summarization_status": call.summarization_status
+                            }
+                            await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+                            logger.info(f"Broadcasted call status update on disconnect: {call.status.value}")
+                        except Exception as e:
+                            logger.error(f"Error broadcasting call update on disconnect: {e}")
+                except Exception as e:
+                    logger.error(f"Error updating call status on disconnect: {e}")
                 stop_flag.set()
             except Exception as e:
                 logger.error(f"Error receiving from client: {e}", exc_info=True)
@@ -324,10 +388,23 @@ async def voice_websocket(
             try:
                 async for audio_data in agent_service.receive_audio():
                     if stop_flag.is_set():
+                        logger.info(f"Stop flag set in send_audio_to_client, breaking loop")
                         break
-                    await manager.send_audio(session_id, audio_data)
+                    try:
+                        await manager.send_audio(session_id, audio_data)
+                    except Exception as send_error:
+                        logger.error(f"Error sending audio to client: {send_error}")
+                        if stop_flag.is_set():
+                            break
+                        # Continue even on error
+            except asyncio.CancelledError:
+                logger.info("send_audio_to_client cancelled")
+                raise
             except Exception as e:
                 logger.error(f"Error sending to client: {e}", exc_info=True)
+                # Set stop flag on error so other tasks can exit
+                if not stop_flag.is_set():
+                    stop_flag.set()
         
         async def send_realtime_input():
             """Send queued audio to agent"""
@@ -355,15 +432,99 @@ async def voice_websocket(
                 logger.error(f"Error in realtime input: {e}", exc_info=True)
         
         # Run all tasks concurrently (compatible with Python 3.10+)
+        tasks = []
         try:
-            await asyncio.gather(
-                receive_audio_from_client(),
-                send_audio_to_client(),
-                send_realtime_input(),
-                return_exceptions=True
+            logger.info(f"Starting concurrent tasks for session {session_id}")
+            # Create tasks
+            tasks = [
+                asyncio.create_task(receive_audio_from_client(), name="receive_audio"),
+                asyncio.create_task(send_audio_to_client(), name="send_audio"),
+                asyncio.create_task(send_realtime_input(), name="realtime_input")
+            ]
+            
+            logger.info(f"All tasks created for session {session_id}, waiting for completion...")
+            
+            # Wait for any task to complete or raise exception
+            # Use FIRST_COMPLETED so we can handle stop_flag and cancel others
+            done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=None
             )
+            
+            logger.info(f"First task completed for session {session_id}, done: {len(done)}, pending: {len(pending)}")
+            
+            # When any task completes, check if stop_flag is set
+            # If so, cancel all remaining tasks
+            if stop_flag.is_set():
+                logger.info(f"Stop flag set, cancelling all pending tasks for session {session_id}")
+                for task in pending:
+                    task.cancel()
+                # Wait for cancelled tasks to finish
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+            
+            # Check for exceptions in completed tasks
+            for task in done:
+                if task.exception():
+                    logger.error(f"Task {task.get_name()} raised exception: {task.exception()}")
+                    # If a task failed and stop_flag isn't set, set it to stop other tasks
+                    if not stop_flag.is_set():
+                        logger.info(f"Task {task.get_name()} failed, setting stop flag")
+                        stop_flag.set()
+                        for t in pending:
+                            t.cancel()
+                        if pending:
+                            await asyncio.gather(*pending, return_exceptions=True)
+            
+            # Always ensure all tasks are done before proceeding
+            # If stop_flag is set, cancel any remaining tasks
+            if stop_flag.is_set():
+                logger.info(f"Stop flag is set, ensuring all tasks complete for session {session_id}")
+                remaining = [t for t in tasks if not t.done()]
+                if remaining:
+                    logger.info(f"Cancelling {len(remaining)} remaining tasks")
+                    # Cancel remaining tasks
+                    for t in remaining:
+                        t.cancel()
+                    # Wait for them to finish (with timeout)
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(*remaining, return_exceptions=True),
+                            timeout=3.0
+                        )
+                        logger.info(f"All remaining tasks completed for session {session_id}")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Some tasks didn't complete within timeout for session {session_id}")
+            else:
+                # If stop_flag is not set but a task completed, wait for others
+                remaining = [t for t in tasks if not t.done()]
+                if remaining:
+                    logger.info(f"Waiting for {len(remaining)} remaining tasks to complete for session {session_id}")
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(*remaining, return_exceptions=True),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Remaining tasks didn't complete, setting stop flag")
+                        stop_flag.set()
+                        for t in remaining:
+                            if not t.done():
+                                t.cancel()
+                        await asyncio.gather(*remaining, return_exceptions=True)
+            
+            logger.info(f"All tasks finished for session {session_id}, proceeding to finally block")
+                        
         except Exception as e:
-            logger.error(f"Error in concurrent tasks: {e}")
+            logger.error(f"Error in concurrent tasks: {e}", exc_info=True)
+            # Ensure stop_flag is set and cancel all tasks
+            stop_flag.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
     
     except asyncio.CancelledError:
         logger.info(f"Tasks cancelled for session: {session_id}")
@@ -379,6 +540,7 @@ async def voice_websocket(
             pass
     
     finally:
+        print("================================================================")
         # Cleanup - ensure call end is recorded even if there are errors
         if agent_service:
             try:
