@@ -216,20 +216,9 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
   const audioQueueRef = useRef<Float32Array[]>([])
   const nextPlayTimeRef = useRef<number>(0)
 
-  const playAudioQueue = async () => {
+  const playAudioQueue = () => {
     if (!audioPlayerRef.current || audioQueueRef.current.length === 0) return
     const audioContext = audioPlayerRef.current
-    
-    // Resume AudioContext if suspended
-    if (audioContext.state === 'suspended') {
-      try {
-        await audioContext.resume()
-      } catch (err) {
-        console.error('Error resuming AudioContext:', err)
-        return
-      }
-    }
-    
     const currentTime = audioContext.currentTime
     if (nextPlayTimeRef.current < currentTime) nextPlayTimeRef.current = currentTime
 
@@ -274,24 +263,14 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
       source.connect(processorRef.current)
       processorRef.current.connect(audioContextRef.current.destination)
       audioPlayerRef.current = new AudioContext({ sampleRate: 24000 })
-      
-      // Resume AudioContext if suspended (browser security requirement)
-      if (audioPlayerRef.current.state === 'suspended') {
-        await audioPlayerRef.current.resume()
-      }
 
       wsRef.current = new VoiceWebSocket(agent.id, null, token)
       wsRef.current.connect(
         (event) => {
           if (event.data instanceof Blob) {
-            event.data.arrayBuffer().then(async (buffer) => {
+            event.data.arrayBuffer().then((buffer) => {
               if (audioPlayerRef.current) {
                 try {
-                  // Ensure AudioContext is running
-                  if (audioPlayerRef.current.state === 'suspended') {
-                    await audioPlayerRef.current.resume()
-                  }
-                  
                   const int16Data = new Int16Array(buffer)
                   const float32Data = new Float32Array(int16Data.length)
                   for (let i = 0; i < int16Data.length; i++) {

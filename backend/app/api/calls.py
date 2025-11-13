@@ -1,6 +1,5 @@
 from typing import List, Optional, Any
-import logging
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from datetime import datetime, timedelta
@@ -14,7 +13,6 @@ from app.services.email_service import EmailService
 from app.services.notification_service import get_notification_service
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
 class CallResponse(BaseModel):
@@ -68,18 +66,10 @@ def list_calls(
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
-    response: Response = Response()
+    db: Session = Depends(get_db)
 ):
     """List calls for current user with filters"""
-    from sqlalchemy.orm import defer
-    
-    # Optimize query: exclude large columns from list view (load them only in detail view)
-    # Use defer() to prevent loading large columns from database
-    query = db.query(Call).options(
-        defer(Call.transcript),
-        defer(Call.transcript_json)
-    ).filter(Call.user_id == current_user.id)
+    query = db.query(Call).filter(Call.user_id == current_user.id)
     
     if agent_id:
         query = query.filter(Call.agent_id == agent_id)
@@ -93,15 +83,6 @@ def list_calls(
     for call in calls:
         if call.action_items:
             update_call_follow_up_data(call, call.action_items)
-        # Explicitly set large fields to None to prevent lazy loading during serialization
-        # The defer() option prevents them from being loaded, but we set them explicitly to be safe
-        call.transcript = None
-        call.transcript_json = None
-
-    # Set no-cache headers to ensure fresh data on every request
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
 
     return calls
 
@@ -121,22 +102,10 @@ def get_call(
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
     
-    # Build transcript from messages if not already set
-    if not call.transcript:
-        messages = db.query(CallMessage).filter(
-            CallMessage.call_id == call_id
-        ).order_by(CallMessage.timestamp).all()
-        
-        if messages:
-            transcript_lines = [f"{msg.role.upper()}: {msg.content}" for msg in messages]
-            call.transcript = "\n\n".join(transcript_lines)
-            db.commit()
-            logger.info(f"Built transcript from {len(messages)} messages for call {call_id}")
-    else:
-        # Still get messages for the response
-        messages = db.query(CallMessage).filter(
-            CallMessage.call_id == call_id
-        ).order_by(CallMessage.timestamp).all()
+    # Include messages
+    messages = db.query(CallMessage).filter(
+        CallMessage.call_id == call_id
+    ).order_by(CallMessage.timestamp).all()
     
     call_data = CallDetailResponse.model_validate(call)
     call_data.messages = [
@@ -168,17 +137,17 @@ def get_transcript(
     
     # If no transcript but has messages, build transcript from messages
     if not call.transcript:
-        # Query messages efficiently - only load what we need
         messages = db.query(CallMessage).filter(
             CallMessage.call_id == call_id
         ).order_by(CallMessage.timestamp).all()
         
         if messages:
-            # Build transcript from messages efficiently
-            transcript_lines = [f"{msg.role.upper()}: {msg.content}" for msg in messages]
+            # Build transcript from messages
+            transcript_lines = []
+            for msg in messages:
+                transcript_lines.append(f"{msg.role.upper()}: {msg.content}")
             call.transcript = "\n\n".join(transcript_lines)
             db.commit()
-            logger.info(f"Built transcript from {len(messages)} messages for call {call_id}")
     
     # Return transcript or empty if still not available
     return {
@@ -206,34 +175,10 @@ async def generate_summary(
     if not call.transcript:
         raise HTTPException(status_code=400, detail="Transcript not available")
     
-    # Set status to SUMMARIZING before generating
-    call.status = CallStatus.SUMMARIZING
-    db.commit()
-    db.refresh(call)
-    
     # Generate summary
     summary_service = CallSummaryService()
     result = await summary_service.generate_summary(call)
     
-    # Update status and tags based on result
-    current_tags = call.action_tags or []
-    
-    if result.get("error") or not call.summary:
-        # Summary generation failed
-        call.status = CallStatus.COMPLETED
-        if "No summarized" not in current_tags:
-            current_tags.append("No summarized")
-        if "Summarized" in current_tags:
-            current_tags.remove("Summarized")
-    else:
-        # Summary generated successfully
-        call.status = CallStatus.COMPLETED
-        if "Summarized" not in current_tags:
-            current_tags.append("Summarized")
-        if "No summarized" in current_tags:
-            current_tags.remove("No summarized")
-    
-    call.action_tags = current_tags
     db.commit()
     db.refresh(call)
     

@@ -127,12 +127,10 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
             safe_greeting = self.agent.greeting.replace('"', '\\"')
             greeting_instruction = f"""
 
-INITIAL_GREETING PROTOCOL (CRITICAL - FOLLOW EXACTLY):
-- When you receive the marker "<CALL_START>", you MUST respond with ONLY this exact sentence: "{safe_greeting}"
-- After saying the greeting, you MUST IMMEDIATELY STOP SPEAKING and WAIT for the user to respond
-- Do NOT add anything after the greeting - no explanations, no questions, no additional information
-- Do NOT continue talking until the user speaks first
-- This is your ONLY response to "<CALL_START>" - just the greeting, then silence until the user responds
+INITIAL_GREETING PROTOCOL:
+- When the conversation begins you will receive the marker "<CALL_START>".
+- Immediately respond to "<CALL_START>" by speaking this exact sentence, in a natural tone, before anything else: "{safe_greeting}"
+- Do NOT repeat, explain, or mention the marker or these instructions. After speaking the greeting you can continue the conversation normally.
 """
         
         # Only add minimal technical notes that don't override user's intent
@@ -506,9 +504,6 @@ INITIAL_GREETING PROTOCOL (CRITICAL - FOLLOW EXACTLY):
             
             logger.info(f"📝 Updated transcript, now {len(call.transcript)} chars")
             
-            # Real-time action tag detection - check for action keywords in the message
-            await self._detect_action_tags_realtime(db, call, content)
-            
             # Commit changes
             db.commit()
             logger.info(f"✅ Message saved successfully to database")
@@ -526,37 +521,6 @@ INITIAL_GREETING PROTOCOL (CRITICAL - FOLLOW EXACTLY):
                     db.close()
                 except:
                     pass
-    
-    async def _detect_action_tags_realtime(self, db, call, message_content: str):
-        """Detect action request keywords in real-time and update tags immediately"""
-        from app.services.call_followup_service import EMAIL_KEYWORDS, MESSAGE_KEYWORDS, CALLBACK_KEYWORDS
-        
-        message_lower = message_content.lower()
-        current_tags = call.action_tags or []
-        new_tags = []
-        
-        # Check for email requests
-        if any(keyword in message_lower for keyword in EMAIL_KEYWORDS):
-            if "send email request" not in current_tags:
-                new_tags.append("send email request")
-                logger.info(f"🏷️ Detected email request in real-time")
-        
-        # Check for message/SMS requests
-        if any(keyword in message_lower for keyword in MESSAGE_KEYWORDS):
-            if "send message request" not in current_tags:
-                new_tags.append("send message request")
-                logger.info(f"🏷️ Detected message request in real-time")
-        
-        # Check for callback requests
-        if any(keyword in message_lower for keyword in CALLBACK_KEYWORDS):
-            if "Callback requested" not in current_tags:
-                new_tags.append("Callback requested")
-                logger.info(f"🏷️ Detected callback request in real-time")
-        
-        # Update tags if new ones found
-        if new_tags:
-            call.action_tags = (current_tags + new_tags) if current_tags else new_tags
-            logger.info(f"✅ Updated action tags in real-time: {call.action_tags}")
     
     async def _handle_tool_calls(self, function_call):
         """Handle tool/function calls from the agent"""
@@ -665,8 +629,9 @@ INITIAL_GREETING PROTOCOL (CRITICAL - FOLLOW EXACTLY):
             self.session = None
             self.session_context = None
             
-            # Note: Status update is handled in websocket.py cleanup with proper DB session
-            # Don't update self.call.status here as it's a detached object
+            # Update call status
+            self.call.status = CallStatus.COMPLETED
+            # Note: ended_at and duration calculation are now handled in websocket.py
             
             logger.info(f"Ended session for call {self.call.session_id}")
         except Exception as e:
