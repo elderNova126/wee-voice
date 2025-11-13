@@ -36,22 +36,21 @@ export default function DashboardPage() {
 
   const loadStats = async () => {
     try {
-      const [agentsResponse, callsResponse] = await Promise.all([
+      // Use the stats endpoint which provides all the data we need
+      const [agentsResponse, statsResponse] = await Promise.all([
         agentsAPI.list(),
-        callsAPI.list()
+        callsAPI.getStats(30) // Get stats for last 30 days
       ])
 
       const agents = agentsResponse.data
-      const calls = callsResponse.data
+      const stats = statsResponse.data
 
-      const totalMinutes = calls.reduce((sum: number, call: any) => sum + (call.duration_minutes || 0), 0)
-      const totalCost = calls.reduce((sum: number, call: any) => sum + (call.cost || 0), 0)
-
+      // Use stats endpoint data directly - it already has totals for all calls
       setStats({
         total_agents: agents.length,
-        total_calls: calls.length,
-        total_minutes: totalMinutes,
-        total_cost: totalCost
+        total_calls: stats.total_calls || 0,
+        total_minutes: stats.total_minutes || 0,
+        total_cost: stats.total_cost || 0
       })
     } catch (error) {
       console.error('Failed to load stats:', error)

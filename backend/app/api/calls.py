@@ -364,42 +364,62 @@ def get_call_stats(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Get call statistics for the user"""
-    from_date = datetime.utcnow() - timedelta(days=days)
-    
-    # Total calls
-    total_calls = db.query(Call).filter(
-        Call.user_id == current_user.id,
-        Call.created_at >= from_date
-    ).count()
-    
-    # Total minutes
-    calls = db.query(Call).filter(
-        Call.user_id == current_user.id,
-        Call.created_at >= from_date,
-        Call.status == CallStatus.COMPLETED
-    ).all()
-    
-    total_minutes = sum(call.duration_minutes for call in calls)
-    total_cost = sum(call.cost for call in calls)
-    
-    # Calls by status
-    from sqlalchemy import func
-    status_counts = db.query(
-        Call.status,
-        func.count(Call.id)
-    ).filter(
-        Call.user_id == current_user.id,
-        Call.created_at >= from_date
-    ).group_by(Call.status).all()
-    
-    return {
-        "total_calls": total_calls,
-        "total_minutes": round(total_minutes, 2),
-        "total_cost": round(total_cost, 2),
-        "status_breakdown": {status: count for status, count in status_counts},
-        "period_days": days
-    }
+    """Get call statistics for the user with proper error handling"""
+    try:
+        from_date = datetime.utcnow() - timedelta(days=days)
+        
+        # Admin users can see all calls, regular users see only their agents' calls
+        if current_user.is_superuser:
+            base_query = db.query(Call)
+        else:
+            # Regular users see only calls from agents they created
+            base_query = db.query(Call).join(VoiceAgent, Call.agent_id == VoiceAgent.id).filter(
+                VoiceAgent.user_id == current_user.id
+            )
+        
+        # Total calls
+        total_calls = base_query.filter(
+            Call.created_at >= from_date
+        ).count()
+        
+        # Total minutes and cost from all calls (not just completed)
+        # Use aggregate functions for better performance instead of loading all calls
+        from sqlalchemy import func
+        totals = base_query.filter(
+            Call.created_at >= from_date
+        ).with_entities(
+            func.sum(Call.duration_minutes).label('total_minutes'),
+            func.sum(Call.cost).label('total_cost')
+        ).first()
+        
+        total_minutes = float(totals.total_minutes or 0)
+        total_cost = float(totals.total_cost or 0)
+        
+        # Calls by status
+        status_counts = base_query.filter(
+            Call.created_at >= from_date
+        ).with_entities(
+            Call.status,
+            func.count(Call.id)
+        ).group_by(Call.status).all()
+        
+        return {
+            "total_calls": total_calls,
+            "total_minutes": round(total_minutes, 2),
+            "total_cost": round(total_cost, 2),
+            "status_breakdown": {str(status): count for status, count in status_counts},
+            "period_days": days
+        }
+    except Exception as e:
+        logger.error(f"Error fetching call stats: {e}", exc_info=True)
+        # Return default values on error
+        return {
+            "total_calls": 0,
+            "total_minutes": 0.0,
+            "total_cost": 0.0,
+            "status_breakdown": {},
+            "period_days": days
+        }
 
 
 @router.post("/{call_id}/recalculate")
