@@ -280,16 +280,23 @@ async def handle_call_end(
     
     if call.started_at and call.ended_at:
         duration = (call.ended_at - call.started_at).total_seconds()
+        # Ensure duration is never negative
+        duration = max(0.0, duration)
         call.duration = int(duration)
+        call.duration_seconds = duration
+        call.duration_minutes = duration / 60.0
     elif call_duration:
-        call.duration = int(call_duration)
+        call_duration = max(0, int(call_duration))
+        call.duration = call_duration
+        call.duration_seconds = float(call_duration)
+        call.duration_minutes = call.duration_seconds / 60.0
     
     # Calculate cost
-    if call.duration:
+    if call.duration and call.duration > 0:
         agent = db.query(VoiceAgent).filter(VoiceAgent.id == call.agent_id).first()
         if agent:
             cost_per_minute = float(getattr(settings, 'COST_PER_MINUTE', 0.05))
-            call.cost = (call.duration / 60.0) * cost_per_minute
+            call.cost = max(0.0, call.duration_minutes * cost_per_minute)
     
     db.commit()
     

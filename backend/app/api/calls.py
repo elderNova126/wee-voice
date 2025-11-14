@@ -324,24 +324,48 @@ def send_call_followup_email(
     db: Session = Depends(get_db)
 ):
     """Send a follow-up email related to a call."""
-    call = db.query(Call).filter(
-        Call.id == call_id,
-        Call.user_id == current_user.id
-    ).first()
-
+    call = db.query(Call).filter(Call.id == call_id).first()
+    
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
+    
+    # Check access: admin can access any call, regular users only their agents' calls
+    if not current_user.is_superuser:
+        agent = db.query(VoiceAgent).filter(
+            VoiceAgent.id == call.agent_id,
+            VoiceAgent.user_id == current_user.id
+        ).first()
+        if not agent:
+            raise HTTPException(status_code=403, detail="Access denied to this call")
 
-    email_sent = EmailService.send_email(
-        to_email=payload.to_email,
-        subject=payload.subject,
-        body_text=payload.body,
-        from_email=payload.from_email,
-        from_name=payload.from_name,
-    )
+    try:
+        logger.info(f"Attempting to send email for call {call_id} to {payload.to_email}")
+        logger.info(f"Email subject: {payload.subject}")
+        
+        email_sent = EmailService.send_email(
+            to_email=payload.to_email,
+            subject=payload.subject,
+            body_text=payload.body,
+            from_email=payload.from_email,
+            from_name=payload.from_name,
+        )
 
-    if not email_sent:
-        raise HTTPException(status_code=500, detail="Failed to send email")
+        logger.info(f"Email service returned: {email_sent} for call {call_id} to {payload.to_email}")
+
+        if not email_sent:
+            logger.error(f"Failed to send email for call {call_id} to {payload.to_email}")
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to send email. Please check SMTP configuration and try again."
+            )
+        
+        logger.info(f"Email sent successfully for call {call_id} to {payload.to_email}")
+    except Exception as e:
+        logger.error(f"Error sending email for call {call_id}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send email: {str(e)}"
+        )
 
     # Record email activity as a system message on the call
     activity_message = CallMessage(

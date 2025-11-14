@@ -90,9 +90,11 @@ class Call(Base):
         """Calculate duration and cost based on started_at and ended_at timestamps"""
         if self.ended_at and self.started_at:
             duration_seconds = (self.ended_at - self.started_at).total_seconds()
+            # Ensure duration is never negative
+            duration_seconds = max(0.0, duration_seconds)
             self.duration_seconds = duration_seconds
             self.duration_minutes = duration_seconds / 60.0
-            self.cost = self.duration_minutes * cost_per_minute
+            self.cost = max(0.0, self.duration_minutes * cost_per_minute)
             return True
         return False
 

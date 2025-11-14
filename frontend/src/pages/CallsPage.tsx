@@ -419,9 +419,16 @@ export default function CallsPage() {
                   <div className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wide">
                     Total Calls
                   </div>
-                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                    {totalCalls}
-                  </div>
+                  {loading ? (
+                    <div className="flex items-center gap-2">
+                      <ArrowPathIcon className="h-5 w-5 text-blue-600 dark:text-blue-400 animate-spin" />
+                      <span className="text-2xl font-bold text-gray-900 dark:text-white">Loading...</span>
+                    </div>
+                  ) : (
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                      {totalCalls}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -806,11 +813,11 @@ export default function CallsPage() {
                     <div className="text-right">
                       <div className="flex items-center text-xs sm:text-sm text-gray-500 dark:text-gray-400">
                         <ClockIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                        <span className="whitespace-nowrap">{call.duration_minutes?.toFixed(1) || '0.0'} min</span>
+                        <span className="whitespace-nowrap">{Math.max(0, call.duration_minutes || 0).toFixed(1)} min</span>
                       </div>
                       <div className="flex items-center text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-1">
                         <CurrencyDollarIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                        <span className="whitespace-nowrap">${call.cost?.toFixed(2) || '0.00'}</span>
+                        <span className="whitespace-nowrap">${Math.max(0, call.cost || 0).toFixed(2)}</span>
                       </div>
                     </div>
                     <button
@@ -1109,13 +1116,13 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Duration</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white">
-                  {displayCall.duration_minutes?.toFixed(1) || '0.0'} minutes
+                  {Math.max(0, displayCall.duration_minutes || 0).toFixed(1)} minutes
                 </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Cost</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white">
-                  ${displayCall.cost?.toFixed(2) || '0.00'}
+                  ${Math.max(0, displayCall.cost || 0).toFixed(2)}
                 </p>
               </div>
               {displayCall.sentiment && (
@@ -1286,7 +1293,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                     ) : null}
                   </h4>
                 </div>
-                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3 max-h-96 overflow-y-auto">
+                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                   {displayCall.messages.map((message: any, index: number) => (
                     <div
                       key={index}
@@ -1301,7 +1308,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                       <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                         {message.role === 'user' ? 'Visitor' : message.role === 'system' ? 'System' : 'Agent'} • {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
                       </div>
-                      <div className="text-sm text-gray-900 dark:text-white">
+                      <div className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap break-words">
                         {message.content}
                       </div>
                     </div>
@@ -1310,47 +1317,6 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
               </div>
             )}
 
-            {/* Transcript */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Transcript
-                </h4>
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  {transcriptSource ? 'Transcript chargé' : 'Transcript indisponible'}
-                </span>
-              </div>
-              {loadingTranscript ? (
-                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg animate-pulse">
-                  <div className="h-20 bg-gray-200 dark:bg-gray-700 rounded"></div>
-                </div>
-              ) : transcriptSource ? (
-                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3 max-h-96 overflow-y-auto">
-                  {Array.isArray(transcriptSource) ? (
-                    transcriptSource.map((message: any, index: number) => (
-                      <div key={index} className="text-sm">
-                        <span
-                          className={`font-medium ${
-                            message.role === 'user'
-                              ? 'text-blue-600 dark:text-blue-400'
-                              : 'text-green-600 dark:text-green-400'
-                          }`}
-                        >
-                          {message.role === 'user' ? 'User' : 'Agent'}:
-                        </span>
-                        <span className="ml-2 text-gray-700 dark:text-gray-300">
-                          {message.content}
-                        </span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-gray-700 dark:text-gray-300">{transcriptSource}</p>
-                  )}
-                </div>
-              ) : (
-                <p className="text-gray-500 dark:text-gray-400 text-sm">No transcript available</p>
-              )}
-            </div>
           </div>
 
           <div className="mt-6 flex justify-end">
