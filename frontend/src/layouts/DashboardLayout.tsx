@@ -22,7 +22,10 @@ import {
   ChevronDownIcon,
   Cog6ToothIcon,
   PuzzlePieceIcon,
-  UserGroupIcon
+  UserGroupIcon,
+  BookOpenIcon,
+  ClockIcon,
+  DevicePhoneMobileIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
 import { useThemeStore } from '@/store/themeStore'
@@ -34,9 +37,10 @@ interface DashboardLayoutProps {
 const navigation = [
   { name: 'Tableau de bord', href: '/dashboard', icon: HomeIcon },
   { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
-  { name: 'Appels', href: '/dashboard/calls', icon: PhoneIcon },
+  { name: 'Bibliothèques', href: '/dashboard/libraries', icon: BookOpenIcon },
+  { name: 'Appels', href: '/dashboard/calls', icon: ClockIcon },
   { name: 'Intégrations', href: '/dashboard/integrations', icon: PuzzlePieceIcon },
-  { name: 'Numéros de téléphone', href: '/dashboard/phone-numbers', icon: PhoneIcon },
+  { name: 'Numéros de téléphone', href: '/dashboard/phone-numbers', icon: DevicePhoneMobileIcon },
   { name: 'Rappels', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
   { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
   { name: 'Support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },

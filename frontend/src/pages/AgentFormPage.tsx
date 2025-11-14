@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate, useParams, Link } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom'
 import { 
   ArrowLeftIcon, 
   CloudArrowUpIcon, 
@@ -8,7 +8,7 @@ import {
   CheckCircleIcon 
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
-import { agentsAPI, api } from '@/lib/api'
+import { agentsAPI, api, librariesAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
 
 interface AgentFormData {
@@ -35,7 +35,9 @@ interface KnowledgeDocument {
 export default function AgentFormPage() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const isEdit = Boolean(id)
+  const libraryId = searchParams.get('library')
 
   const [formData, setFormData] = useState<AgentFormData>({
     name: '',
@@ -90,8 +92,37 @@ export default function AgentFormPage() {
   }, [navigate])
 
   useEffect(() => {
-    if (isEdit && id) loadAgent(parseInt(id))
-  }, [isEdit, id, loadAgent])
+    if (isEdit && id) {
+      loadAgent(parseInt(id))
+    } else if (libraryId) {
+      // Load library template when creating new agent from library
+      loadLibrary(parseInt(libraryId))
+    }
+  }, [isEdit, id, libraryId, loadAgent])
+
+  const loadLibrary = async (libId: number) => {
+    try {
+      setLoadingAgent(true)
+      const { data: library } = await librariesAPI.get(libId)
+      setFormData({
+        name: library.name,
+        description: library.description || '',
+        language: library.language || 'fr-FR',
+        voice_gender: library.voice_gender || 'male',
+        system_prompt: library.system_prompt || '',
+        greeting: library.greeting || '',
+        is_public: false,
+        is_active: true,
+        rag_enabled: library.rag_enabled ?? false
+      })
+      toast.success(`Loaded template: ${library.name}`)
+    } catch (error) {
+      console.error('Failed to load library:', error)
+      toast.error('Failed to load library template')
+    } finally {
+      setLoadingAgent(false)
+    }
+  }
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -115,6 +146,19 @@ export default function AgentFormPage() {
       } else {
         await agentsAPI.create(formData)
         toast.success('🎉 Agent created successfully')
+        
+        // If created from library, increment usage count
+        if (libraryId) {
+          try {
+            const { data: library } = await librariesAPI.get(Number(libraryId))
+            await librariesAPI.update(Number(libraryId), {
+              usage_count: (library.usage_count || 0) + 1
+            })
+          } catch (e) {
+            // Ignore if update fails - not critical
+            console.log('Could not update library usage count:', e)
+          }
+        }
       }
       navigate('/dashboard/agents')
     } catch (err: any) {

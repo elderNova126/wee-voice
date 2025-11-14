@@ -91,6 +91,7 @@ export default function CallsPage() {
   const [selectedCallIds, setSelectedCallIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
   const [deletingCallId, setDeletingCallId] = useState<number | null>(null)
+  const [togglingBulkFavorite, setTogglingBulkFavorite] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(10)
   const [totalCalls, setTotalCalls] = useState(0)
@@ -322,7 +323,7 @@ export default function CallsPage() {
     if (selectedCallIds.size === 0) return
     
     try {
-      setDeleting(true) // Reuse deleting state for loading
+      setTogglingBulkFavorite(true)
       const response = await callsAPI.bulkToggleFavorite(Array.from(selectedCallIds), isFavorite)
       toast.success(response.data.message)
       loadCalls() // Reload to get updated favorite status
@@ -331,7 +332,7 @@ export default function CallsPage() {
       console.error('Failed to update favorites:', error)
       toast.error(error?.response?.data?.detail || 'Failed to update favorites')
     } finally {
-      setDeleting(false)
+      setTogglingBulkFavorite(false)
     }
   }
 
@@ -581,25 +582,33 @@ export default function CallsPage() {
               {activeTab === 'all' ? (
                 <button
                   onClick={() => handleBulkToggleFavorite(true)}
-                  disabled={deleting}
+                  disabled={togglingBulkFavorite || deleting}
                   className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-400 text-white rounded-md text-sm font-medium transition-colors flex items-center gap-2"
                 >
-                  <StarIconSolid className="h-4 w-4" />
-                  Add to Favorites
+                  {togglingBulkFavorite ? (
+                    <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <StarIconSolid className="h-4 w-4" />
+                  )}
+                  {togglingBulkFavorite ? 'Adding...' : 'Add to Favorites'}
                 </button>
               ) : (
                 <button
                   onClick={() => handleBulkToggleFavorite(false)}
-                  disabled={deleting}
+                  disabled={togglingBulkFavorite || deleting}
                   className="px-4 py-2 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white rounded-md text-sm font-medium transition-colors flex items-center gap-2"
                 >
-                  <StarIcon className="h-4 w-4" />
-                  Remove from Favorites
+                  {togglingBulkFavorite ? (
+                    <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <StarIcon className="h-4 w-4" />
+                  )}
+                  {togglingBulkFavorite ? 'Removing...' : 'Remove from Favorites'}
                 </button>
               )}
               <button
                 onClick={handleBulkDelete}
-                disabled={deleting}
+                disabled={deleting || togglingBulkFavorite}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-md text-sm font-medium transition-colors flex items-center gap-2"
               >
                 {deleting ? (

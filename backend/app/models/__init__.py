@@ -9,6 +9,7 @@ from app.models.support import SupportTicket, TicketResponse, TicketStatus, Tick
 from app.models.integration import Integration, IntegrationType, IntegrationProvider, IntegrationStatus
 from app.models.document import Document, DocumentChunk
 from app.models.zadarma import PhoneNumber, PhoneNumberStatus, VerificationDocument, DocumentType, VerificationStatus, CallbackRequest
+from app.models.agent_library import AgentLibrary, LibraryCategory
 
 __all__ = [
     "Base",
@@ -45,5 +46,7 @@ __all__ = [
     "DocumentType",
     "VerificationStatus",
     "CallbackRequest",
+    "AgentLibrary",
+    "LibraryCategory",
 ]
 

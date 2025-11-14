@@ -98,6 +98,27 @@ export const callsAPI = {
     api.post('/calls/bulk/favorite', { call_ids: callIds, is_favorite: isFavorite }),
 }
 
+// Libraries API
+export const librariesAPI = {
+  listPublic: (params?: { category?: string; search?: string }) =>
+    api.get('/libraries/public', { params }),
+  
+  listMy: (params?: { category?: string; search?: string }) =>
+    api.get('/libraries/my', { params }),
+  
+  get: (id: number) => api.get(`/libraries/${id}`),
+  
+  save: (id: number) => api.post(`/libraries/save/${id}`),
+  
+  create: (data: any) => api.post('/libraries/', data),
+  
+  update: (id: number, data: any) => api.put(`/libraries/${id}`, data),
+  
+  delete: (id: number) => api.delete(`/libraries/${id}`),
+  
+  listCategories: () => api.get('/libraries/categories/list'),
+}
+
 // API Keys API
 export const apiKeysAPI = {
   list: () => api.get('/auth/api-keys'),
