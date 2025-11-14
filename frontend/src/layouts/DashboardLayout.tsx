@@ -88,10 +88,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   // Admin navigation - only show if user is admin
   const adminNavigation = user?.is_superuser
     ? [
-        { name: 'Admin - Overview', href: '/dashboard/admin/overview', icon: HomeIcon },
-        { name: 'Admin - Users', href: '/dashboard/admin/users', icon: UserGroupIcon },
-        { name: 'Admin - Agents', href: '/dashboard/admin/agents', icon: MicrophoneIcon },
-        { name: 'Admin - Support', href: '/dashboard/admin/support', icon: ChatBubbleLeftRightIcon },
+        { name: t.nav.admin || 'Admin', href: '/dashboard/admin', icon: HomeIcon },
       ]
     : []
 
@@ -109,7 +106,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const isSettingsActive = settingsNavigation.some(item => location.pathname === item.href)
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-200">
       {/* Mobile sidebar */}
       <div className={`fixed inset-0 z-50 lg:hidden ${sidebarOpen ? '' : 'hidden'}`}>
         <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm transition-opacity" onClick={() => setSidebarOpen(false)} />
@@ -234,10 +231,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               )}
             </div>
           </nav>
-          <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+          <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-gray-50/50 dark:bg-gray-900/50">
             {/* User Menu */}
             <Menu as="div" className="relative">
-              <Menu.Button className="w-full bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 hover:from-gray-100 hover:to-gray-200 dark:hover:from-gray-600 dark:hover:to-gray-700 rounded-xl p-3 transition-all duration-200 cursor-pointer group">
+              <Menu.Button className="w-full bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-700 hover:from-gray-50 hover:to-gray-100 dark:hover:from-gray-700 dark:hover:to-gray-600 border border-gray-200 dark:border-gray-600 rounded-xl p-3 transition-all duration-200 cursor-pointer group shadow-sm">
                 <div className="flex items-center gap-3">
                   <div className="flex-shrink-0">
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
@@ -260,7 +257,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 leaveFrom="transform opacity-100 scale-100"
                 leaveTo="transform opacity-0 scale-95"
               >
-                <Menu.Items className="absolute bottom-full left-0 right-0 mb-2 origin-bottom bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                <Menu.Items className="absolute bottom-full left-0 right-0 mb-2 origin-bottom bg-gray-50 dark:bg-gray-900 rounded-xl shadow-2xl ring-2 ring-gray-200 dark:ring-gray-700 divide-y divide-gray-200 dark:divide-gray-700 focus:outline-none overflow-hidden border border-gray-200 dark:border-gray-700">
                   {/* Profile */}
                   <div className="p-1">
                     <Menu.Item>
@@ -452,10 +449,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               )}
             </div>
           </nav>
-          <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+          <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-gray-50/50 dark:bg-gray-900/50">
             {/* User Menu */}
             <Menu as="div" className="relative">
-              <Menu.Button className="w-full bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-700 dark:to-gray-800 hover:from-gray-100 hover:to-gray-200 dark:hover:from-gray-600 dark:hover:to-gray-700 rounded-xl p-3 transition-all duration-200 cursor-pointer group">
+              <Menu.Button className="w-full bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-700 hover:from-gray-50 hover:to-gray-100 dark:hover:from-gray-700 dark:hover:to-gray-600 border border-gray-200 dark:border-gray-600 rounded-xl p-3 transition-all duration-200 cursor-pointer group shadow-sm">
                 <div className="flex items-center gap-3">
                   <div className="flex-shrink-0">
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
@@ -478,7 +475,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 leaveFrom="transform opacity-100 scale-100"
                 leaveTo="transform opacity-0 scale-95"
               >
-                <Menu.Items className="absolute bottom-full left-0 right-0 mb-2 origin-bottom bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                <Menu.Items className="absolute bottom-full left-0 right-0 mb-2 origin-bottom bg-gray-50 dark:bg-gray-900 rounded-xl shadow-2xl ring-2 ring-gray-200 dark:ring-gray-700 divide-y divide-gray-200 dark:divide-gray-700 focus:outline-none overflow-hidden border border-gray-200 dark:border-gray-700">
                   {/* Profile */}
                   <div className="p-1">
                     <Menu.Item>
@@ -570,7 +567,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         </div>
 
         {/* Page content */}
-        <main className="py-8 px-4 sm:px-6 lg:px-8 min-h-screen">
+        <main className="py-8 px-4 sm:px-6 lg:px-8 min-h-screen bg-white dark:bg-gray-900">
           {children}
         </main>
       </div>

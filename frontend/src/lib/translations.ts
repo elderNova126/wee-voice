@@ -52,6 +52,7 @@ export interface Translations {
     billing: string
     usage: string
     security: string
+    admin: string
   }
 
   // Dashboard
@@ -995,6 +996,7 @@ const translations: Record<Language, Translations> = {
       billing: 'Facturation',
       usage: 'Utilisation',
       security: 'Sécurité',
+      admin: 'Administration',
     },
     dashboard: {
       title: 'Tableau de bord',
@@ -1895,6 +1897,7 @@ const translations: Record<Language, Translations> = {
       billing: 'Billing',
       usage: 'Usage',
       security: 'Security',
+      admin: 'Administration',
     },
     dashboard: {
       title: 'Dashboard',
