@@ -5,6 +5,7 @@ import DashboardLayout from '@/layouts/DashboardLayout'
 import { callsAPI } from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface Call {
   id: number
@@ -83,6 +84,7 @@ const getTagColor = (tag: string) => {
 }
 
 export default function CallsPage() {
+  const t = useTranslation()
   const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
@@ -404,9 +406,9 @@ export default function CallsPage() {
         <div className="mb-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
             <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-1">Call History</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-1">{t.callsPage.callHistory}</h1>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                View and analyze all voice agent calls
+                {t.common.status === 'Statut' ? 'Consultez et analysez tous les appels des agents vocaux' : 'View and analyze all voice agent calls'}
               </p>
             </div>
             
@@ -418,12 +420,12 @@ export default function CallsPage() {
                 </div>
                 <div>
                   <div className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wide">
-                    Total Calls
+                    {t.callsPage.totalCalls}
                   </div>
                   {loading ? (
                     <div className="flex items-center gap-2">
                       <ArrowPathIcon className="h-5 w-5 text-blue-600 dark:text-blue-400 animate-spin" />
-                      <span className="text-2xl font-bold text-gray-900 dark:text-white">Loading...</span>
+                      <span className="text-2xl font-bold text-gray-900 dark:text-white">{t.callsPage.loading}</span>
                     </div>
                   ) : (
                     <div className="text-2xl font-bold text-gray-900 dark:text-white">
@@ -445,7 +447,7 @@ export default function CallsPage() {
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
               }`}
             >
-              All Calls
+              {t.callsPage.allCalls}
             </button>
             <button
               onClick={() => setActiveTab('favorites')}
@@ -456,7 +458,7 @@ export default function CallsPage() {
               }`}
             >
               <StarIconSolid className={`h-4 w-4 ${activeTab === 'favorites' ? 'text-yellow-500' : ''}`} />
-              Favorites
+              {t.callsPage.favorites}
             </button>
           </div>
         </div>
@@ -471,7 +473,7 @@ export default function CallsPage() {
               type="text"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search calls by transcript, summary, caller name, or phone..."
+              placeholder={t.callsPage.searchPlaceholder}
               className="w-full pl-10 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
             />
             {searchInput && (
@@ -493,7 +495,7 @@ export default function CallsPage() {
               <div className="p-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg">
                 <FunnelIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
               </div>
-              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">Filters</span>
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{t.callsPage.filters}</span>
             </div>
             
             {/* Filter Controls */}
@@ -501,7 +503,7 @@ export default function CallsPage() {
               {/* Status Filter */}
               <div className="flex-1">
                 <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
-                  Status
+                  {t.callsPage.status}
                 </label>
                 <div className="relative">
                   <select
@@ -509,7 +511,7 @@ export default function CallsPage() {
                     onChange={(e) => setStatusFilter(e.target.value)}
                     className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all appearance-none cursor-pointer hover:border-gray-400 dark:hover:border-gray-500"
                   >
-                    <option value="all">All Status</option>
+                    <option value="all">{t.callsPage.allStatuses}</option>
                     <option value="initiated">Initiated</option>
                     <option value="in_progress">In Progress</option>
                     <option value="summarizing">Summarizing</option>
@@ -528,7 +530,7 @@ export default function CallsPage() {
               {/* Action Required Filter */}
               <div className="flex-1">
                 <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
-                  Action Required
+                  {t.callsPage.actionRequired}
                 </label>
                 <div className="relative">
                   {actionRequiredFilter === true && (
@@ -550,9 +552,9 @@ export default function CallsPage() {
                         : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 hover:border-gray-400 dark:hover:border-gray-500'
                     }`}
                   >
-                    <option value="all">All Calls</option>
-                    <option value="yes">Action Required</option>
-                    <option value="no">No Action Required</option>
+                    <option value="all">{t.callsPage.allCalls}</option>
+                    <option value="yes">{t.callsPage.actionRequired}</option>
+                    <option value="no">{t.common.status === 'Statut' ? 'Aucune action requise' : 'No Action Required'}</option>
                   </select>
                   <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
                     <svg className={`h-4 w-4 ${actionRequiredFilter === true ? 'text-amber-500' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -576,7 +578,7 @@ export default function CallsPage() {
         {selectedCallIds.size > 0 && (
           <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <span className="text-sm font-medium text-amber-900 dark:text-amber-100">
-              {selectedCallIds.size} call(s) selected
+              {selectedCallIds.size} {t.common.status === 'Statut' ? 'appel(s) sélectionné(s)' : 'call(s) selected'}
             </span>
             <div className="flex items-center gap-2 flex-wrap">
               {activeTab === 'all' ? (
@@ -590,7 +592,7 @@ export default function CallsPage() {
                   ) : (
                     <StarIconSolid className="h-4 w-4" />
                   )}
-                  {togglingBulkFavorite ? 'Adding...' : 'Add to Favorites'}
+                  {togglingBulkFavorite ? (t.common.status === 'Statut' ? 'Ajout...' : 'Adding...') : t.callsPage.bulkFavorite}
                 </button>
               ) : (
                 <button
@@ -603,7 +605,7 @@ export default function CallsPage() {
                   ) : (
                     <StarIcon className="h-4 w-4" />
                   )}
-                  {togglingBulkFavorite ? 'Removing...' : 'Remove from Favorites'}
+                  {togglingBulkFavorite ? (t.common.status === 'Statut' ? 'Retrait...' : 'Removing...') : t.callsPage.bulkUnfavorite}
                 </button>
               )}
               <button
@@ -616,7 +618,7 @@ export default function CallsPage() {
                 ) : (
                   <TrashIcon className="h-4 w-4" />
                 )}
-                {deleting ? 'Deleting...' : 'Delete Selected'}
+                {deleting ? (t.common.status === 'Statut' ? 'Suppression...' : 'Deleting...') : t.callsPage.bulkDelete}
               </button>
             </div>
           </div>
@@ -634,9 +636,9 @@ export default function CallsPage() {
       ) : calls.length === 0 ? (
         <div className="card text-center py-12">
           <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
-          <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-white">No calls yet</h3>
+          <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-white">{t.callsPage.noCalls}</h3>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Start testing your agents to see call history here.
+            {t.common.status === 'Statut' ? 'Commencez à tester vos agents pour voir l\'historique des appels ici.' : 'Start testing your agents to see call history here.'}
           </p>
         </div>
       ) : (
@@ -645,17 +647,17 @@ export default function CallsPage() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
             <div className="flex items-center gap-4 flex-wrap">
               <div className="text-sm text-gray-600 dark:text-gray-400">
-                Showing <span className="font-semibold text-gray-900 dark:text-white">{startItem}</span> to{' '}
-                <span className="font-semibold text-gray-900 dark:text-white">{endItem}</span> of{' '}
-                <span className="font-semibold text-gray-900 dark:text-white">{totalCalls}</span> calls
+                {t.callsPage.showing} <span className="font-semibold text-gray-900 dark:text-white">{startItem}</span> {t.common.status === 'Statut' ? 'à' : 'to'}{' '}
+                <span className="font-semibold text-gray-900 dark:text-white">{endItem}</span> {t.callsPage.of}{' '}
+                <span className="font-semibold text-gray-900 dark:text-white">{totalCalls}</span> {t.common.status === 'Statut' ? 'appels' : 'calls'}
                 {searchQuery && (
                   <span className="ml-2 text-blue-600 dark:text-blue-400">
-                    (search: "{searchQuery}")
+                    ({t.common.search}: "{searchQuery}")
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">Per page:</label>
+                <label className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">{t.common.status === 'Statut' ? 'Par page :' : 'Per page:'}</label>
                 <select
                   value={itemsPerPage}
                   onChange={(e) => setItemsPerPage(Number(e.target.value))}
@@ -731,7 +733,7 @@ export default function CallsPage() {
               onChange={handleSelectAll}
               className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
             />
-            <label className="text-sm text-gray-700 dark:text-gray-300">Select All (Current Page)</label>
+            <label className="text-sm text-gray-700 dark:text-gray-300">{t.common.status === 'Statut' ? 'Tout sélectionner (Page actuelle)' : 'Select All (Current Page)'}</label>
           </div>
           
           {paginatedCalls
@@ -771,7 +773,7 @@ export default function CallsPage() {
                         )}
                         {actionRequests.length > 0 && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 uppercase tracking-wide">
-                            Action Required
+                            {t.callsPage.actionRequired}
                           </span>
                         )}
                         {call.summarization_status && (
@@ -837,7 +839,7 @@ export default function CallsPage() {
                           ? 'text-yellow-500 hover:text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
                           : 'text-gray-400 hover:text-yellow-500 hover:bg-gray-50 dark:hover:bg-gray-700'
                       }`}
-                      title={call.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+                      title={call.is_favorite ? t.callsPage.unfavorite : t.callsPage.favorite}
                     >
                       {togglingFavorite === call.id ? (
                         <ArrowPathIcon className="h-5 w-5 animate-spin" />
@@ -851,7 +853,7 @@ export default function CallsPage() {
                       onClick={(e) => handleDeleteCall(call.id, e)}
                       disabled={deleting && deletingCallId === call.id}
                       className="p-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors disabled:opacity-50 flex-shrink-0"
-                      title={deleting && deletingCallId === call.id ? 'Deleting...' : 'Delete call'}
+                      title={deleting && deletingCallId === call.id ? (t.common.status === 'Statut' ? 'Suppression...' : 'Deleting...') : t.common.delete}
                     >
                       {deleting && deletingCallId === call.id ? (
                         <ArrowPathIcon className="h-5 w-5 animate-spin" />
@@ -869,7 +871,7 @@ export default function CallsPage() {
           {totalPages > 1 && (
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
               <div className="text-sm text-gray-600 dark:text-gray-400">
-                Page <span className="font-semibold text-gray-900 dark:text-white">{currentPage}</span> of{' '}
+                {t.callsPage.page} <span className="font-semibold text-gray-900 dark:text-white">{currentPage}</span> {t.callsPage.of}{' '}
                 <span className="font-semibold text-gray-900 dark:text-white">{totalPages}</span>
               </div>
               
@@ -879,7 +881,7 @@ export default function CallsPage() {
                   disabled={currentPage === 1}
                   className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  First
+                  {t.common.status === 'Statut' ? 'Premier' : 'First'}
                 </button>
                 <button
                   onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
@@ -887,14 +889,14 @@ export default function CallsPage() {
                   className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
                 >
                   <ChevronLeftIcon className="h-4 w-4" />
-                  Previous
+                  {t.common.previous}
                 </button>
                 <button
                   onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
                   disabled={currentPage === totalPages}
                   className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
                 >
-                  Next
+                  {t.common.next}
                   <ChevronRightIcon className="h-4 w-4" />
                 </button>
                 <button
@@ -902,7 +904,7 @@ export default function CallsPage() {
                   disabled={currentPage === totalPages}
                   className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  Last
+                  {t.common.status === 'Statut' ? 'Dernier' : 'Last'}
                 </button>
               </div>
             </div>
@@ -928,6 +930,7 @@ interface CallDetailsModalProps {
 }
 
 function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
+  const t = useTranslation()
   const [transcript, setTranscript] = useState<any>(null)
   const [loadingTranscript, setLoadingTranscript] = useState(true)
   const [callDetails, setCallDetails] = useState<CallWithDetails | null>(null)
@@ -937,7 +940,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const [sendingEmail, setSendingEmail] = useState(false)
   const [emailForm, setEmailForm] = useState({
     to_email: '',
-    subject: `Follow-up for call #${call.id}`,
+    subject: `${t.common.status === 'Statut' ? 'Suivi pour l\'appel' : 'Follow-up for call'} #${call.id}`,
     body: ''
   })
   const token = useAuthStore(state => state.token)
@@ -950,11 +953,11 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
       setCallDetails(response.data)
     } catch (error) {
       console.error('Failed to load call details:', error)
-      toast.error('Failed to load call details')
+      toast.error(t.common.status === 'Statut' ? 'Échec du chargement des détails de l\'appel' : 'Failed to load call details')
     } finally {
       setLoadingDetails(false)
     }
-  }, [call.id])
+  }, [call.id, t])
 
   const loadTranscript = useCallback(async () => {
     setLoadingTranscript(true)
@@ -969,12 +972,12 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
         setTranscript(call.transcript ?? null)
       } else {
         console.error('Failed to load transcript:', error)
-        toast.error('Failed to load transcript')
+        toast.error(t.common.status === 'Statut' ? 'Échec du chargement de la transcription' : 'Failed to load transcript')
       }
     } finally {
       setLoadingTranscript(false)
     }
-  }, [call.id, call.transcript])
+  }, [call.id, call.transcript, t])
 
   useEffect(() => {
     loadCallDetails()
@@ -1014,11 +1017,11 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
     setGeneratingSummary(true)
     try {
       await callsAPI.generateSummary(call.id)
-      toast.success('Résumé régénéré')
+      toast.success(t.common.status === 'Statut' ? 'Résumé régénéré' : 'Summary regenerated')
       await Promise.all([loadCallDetails(), loadTranscript()])
     } catch (error) {
       console.error('Failed to regenerate summary:', error)
-      toast.error('Erreur lors de la régénération du résumé')
+      toast.error(t.common.status === 'Statut' ? 'Erreur lors de la régénération du résumé' : 'Error regenerating summary')
     } finally {
       setGeneratingSummary(false)
     }
@@ -1033,9 +1036,9 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   useEffect(() => {
     setEmailForm((prev) => ({
       ...prev,
-      subject: `Follow-up for call #${call.id}`
+      subject: `${t.common.status === 'Statut' ? 'Suivi pour l\'appel' : 'Follow-up for call'} #${call.id}`
     }))
-  }, [call.id])
+  }, [call.id, t])
 
   const handleEmailFieldChange = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = event.target
@@ -1048,15 +1051,15 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const handleSendEmail = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!emailForm.to_email.trim()) {
-      toast.error('Recipient email is required')
+      toast.error(t.common.status === 'Statut' ? 'L\'email du destinataire est requis' : 'Recipient email is required')
       return
     }
     if (!emailForm.subject.trim()) {
-      toast.error('Subject is required')
+      toast.error(t.common.status === 'Statut' ? 'Le sujet est requis' : 'Subject is required')
       return
     }
     if (!emailForm.body.trim()) {
-      toast.error('Email body cannot be empty')
+      toast.error(t.common.status === 'Statut' ? 'Le corps de l\'email ne peut pas être vide' : 'Email body cannot be empty')
       return
     }
 
@@ -1067,16 +1070,16 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
         subject: emailForm.subject.trim(),
         body: emailForm.body.trim(),
       })
-      toast.success('Email sent successfully')
+      toast.success(t.callsPage.emailSent)
       setShowEmailComposer(false)
       setEmailForm({
         to_email: '',
-        subject: `Follow-up for call #${call.id}`,
+        subject: `${t.common.status === 'Statut' ? 'Suivi pour l\'appel' : 'Follow-up for call'} #${call.id}`,
         body: ''
       })
       await loadCallDetails()
     } catch (error: any) {
-      const message = error?.response?.data?.detail || 'Failed to send email'
+      const message = error?.response?.data?.detail || t.callsPage.emailError
       toast.error(message)
       console.error('Failed to send follow-up email:', error)
     } finally {
@@ -1092,10 +1095,10 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
         <div className="relative bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
           <div className="mb-6">
             <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-              Call Details
+              {t.callsPage.callDetails}
             </h3>
             <p className="text-gray-600 dark:text-gray-400 mt-1">
-              Session ID: {displayCall.session_id}
+              {t.callsPage.sessionId}: {displayCall.session_id}
             </p>
             {transcriptAvailable && (
               <button
@@ -1105,10 +1108,10 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
               >
                 <ClockIcon className="h-4 w-4 mr-2" />
                 {generatingSummary
-                  ? 'Régénération...'
+                  ? t.callsPage.regenerating
                   : displayCall.summary
-                    ? 'Régénérer le résumé'
-                    : 'Générer un résumé'}
+                    ? t.callsPage.regenerateSummary
+                    : t.callsPage.generateSummary}
               </button>
             )}
           </div>
@@ -1117,26 +1120,26 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
             {/* Metadata */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Status</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t.callsPage.status}</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white capitalize">
                   {displayCall.status}
                 </p>
               </div>
               <div>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Duration</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t.callsPage.duration}</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white">
-                  {Math.max(0, displayCall.duration_minutes || 0).toFixed(1)} minutes
+                  {Math.max(0, displayCall.duration_minutes || 0).toFixed(1)} {t.callsPage.minutes}
                 </p>
               </div>
               <div>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Cost</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t.callsPage.cost}</p>
                 <p className="text-lg font-medium text-gray-900 dark:text-white">
                   ${Math.max(0, displayCall.cost || 0).toFixed(2)}
                 </p>
               </div>
               {displayCall.sentiment && (
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Sentiment</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{t.callsPage.sentiment}</p>
                   <p className="text-lg font-medium text-gray-900 dark:text-white capitalize">
                     {displayCall.sentiment}
                   </p>
@@ -1148,12 +1151,12 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
             {displayCall.action_tags && displayCall.action_tags.length > 0 && (
               <div>
                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                  Actions de suivi détectées
+                  {t.callsPage.followUpActions}
                 </h4>
                 {modalActionRequests.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-2">
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 uppercase tracking-wide">
-                      Action Required
+                      {t.callsPage.actionRequired}
                     </span>
                     {modalActionRequests.map((tag, index) => (
                       <span
@@ -1185,17 +1188,17 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <h5 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-                      Send follow-up email
+                      {t.callsPage.sendEmail}
                     </h5>
                     <p className="text-xs text-amber-700 dark:text-amber-300">
-                      Complete the action request by emailing the customer directly.
+                      {t.common.status === 'Statut' ? 'Complétez la demande d\'action en envoyant un email directement au client.' : 'Complete the action request by emailing the customer directly.'}
                     </p>
                   </div>
                   <button
                     onClick={() => setShowEmailComposer((prev) => !prev)}
                     className="btn-secondary btn-xs"
                   >
-                    {showEmailComposer ? 'Close' : 'Compose'}
+                    {showEmailComposer ? t.common.cancel : t.callsPage.compose}
                   </button>
                 </div>
 
@@ -1203,7 +1206,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                   <form onSubmit={handleSendEmail} className="space-y-3">
                     <div>
                       <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                        To
+                        {t.callsPage.to}
                       </label>
                       <input
                         type="email"
@@ -1217,7 +1220,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                        Subject
+                        {t.callsPage.subject}
                       </label>
                       <input
                         type="text"
@@ -1230,7 +1233,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                        Message
+                        {t.callsPage.message}
                       </label>
                       <textarea
                         name="body"
@@ -1238,7 +1241,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                         value={emailForm.body}
                         onChange={handleEmailFieldChange}
                         className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-                        placeholder="Draft your follow-up email..."
+                        placeholder={t.common.status === 'Statut' ? 'Rédigez votre email de suivi...' : 'Draft your follow-up email...'}
                         required
                       />
                     </div>
@@ -1249,14 +1252,14 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                         onClick={() => setShowEmailComposer(false)}
                         disabled={sendingEmail}
                       >
-                        Cancel
+                        {t.common.cancel}
                       </button>
                       <button
                         type="submit"
                         className="btn-primary btn-sm"
                         disabled={sendingEmail}
                       >
-                        {sendingEmail ? 'Sending...' : 'Send email'}
+                        {sendingEmail ? t.callsPage.sending : t.callsPage.sendEmail}
                       </button>
                     </div>
                   </form>
@@ -1268,7 +1271,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
             {displayCall.action_items && displayCall.action_items.length > 0 && (
               <div>
                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                  Détails des actions à entreprendre
+                  {t.callsPage.actionItems}
                 </h4>
                 <ul className="list-disc list-inside space-y-1 text-gray-700 dark:text-gray-300">
                   {displayCall.action_items.map((item, index) => (
@@ -1282,7 +1285,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
             {displayCall.summary && (
               <div>
                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                  Summary
+                  {t.callsPage.summary}
                 </h4>
                 <p className="text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
                   {displayCall.summary}
@@ -1295,9 +1298,9 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="text-lg font-semibold text-gray-900 dark:text-white">
-                    Messages {displayCall.status === 'in_progress' || displayCall.status === 'summarizing' ? (
+                    {t.callsPage.messages} {displayCall.status === 'in_progress' || displayCall.status === 'summarizing' ? (
                       <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                        Live
+                        {t.callsPage.live}
                       </span>
                     ) : null}
                   </h4>
@@ -1315,7 +1318,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                       }`}
                     >
                       <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        {message.role === 'user' ? 'Visitor' : message.role === 'system' ? 'System' : 'Agent'} • {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
+                        {message.role === 'user' ? t.callsPage.visitor : message.role === 'system' ? t.callsPage.system : t.callsPage.agent} • {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
                       </div>
                       <div className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap break-words">
                         {message.content}
@@ -1330,7 +1333,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
 
           <div className="mt-6 flex justify-end">
             <button onClick={onClose} className="btn-secondary">
-              Close
+              {t.callsPage.close}
             </button>
           </div>
         </div>

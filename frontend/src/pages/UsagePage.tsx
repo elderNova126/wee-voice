@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { usageAPI } from '@/lib/api'
 import DashboardLayout from '@/layouts/DashboardLayout'
+import { useTranslation } from '@/lib/translations'
+import toast from 'react-hot-toast'
 import { 
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
@@ -47,6 +49,7 @@ interface UsageAnalytics {
 const COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4']
 
 const UsagePage = () => {
+  const t = useTranslation()
   const [analytics, setAnalytics] = useState<UsageAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeView, setActiveView] = useState<'day' | 'month'>('day')
@@ -78,9 +81,10 @@ const UsagePage = () => {
       document.body.appendChild(link)
       link.click()
       link.remove()
+      toast.success(t.common.status === 'Statut' ? 'Données exportées avec succès' : 'Data exported successfully')
     } catch (error) {
       console.error('Error exporting data:', error)
-      alert('Failed to export data')
+      toast.error(t.common.status === 'Statut' ? 'Échec de l\'exportation des données' : 'Failed to export data')
     }
   }
 
@@ -117,8 +121,8 @@ const UsagePage = () => {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Usage & Analytics</h1>
-          <p className="mt-2 text-gray-600 dark:text-gray-400">Track your voice agent usage and spending</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.usage.title}</h1>
+          <p className="mt-2 text-gray-600 dark:text-gray-400">{t.usage.subtitle}</p>
         </div>
         <button
           onClick={handleExport}
@@ -127,7 +131,7 @@ const UsagePage = () => {
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          Export CSV
+          {t.common.status === 'Statut' ? 'Exporter CSV' : 'Export CSV'}
         </button>
       </div>
 
@@ -136,7 +140,7 @@ const UsagePage = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Total Spend</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">{t.common.status === 'Statut' ? 'Dépenses totales' : 'Total Spend'}</p>
               {loading ? (
                 <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-24 mt-1 animate-pulse"></div>
               ) : (
@@ -145,8 +149,8 @@ const UsagePage = () => {
                 </p>
               )}
             </div>
-            <div className="bg-indigo-100 rounded-full p-3">
-              <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-indigo-100 dark:bg-indigo-900/30 rounded-full p-3">
+              <svg className="w-6 h-6 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
@@ -155,7 +159,7 @@ const UsagePage = () => {
             <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 mt-2 animate-pulse"></div>
           ) : (
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-              {formatCurrency(summary.current_month_cost)} this month
+              {formatCurrency(summary.current_month_cost)} {t.common.status === 'Statut' ? 'ce mois' : 'this month'}
             </p>
           )}
         </div>
@@ -163,7 +167,7 @@ const UsagePage = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Total Minutes</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">{t.usage.minutes}</p>
               {loading ? (
                 <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 mt-1 animate-pulse"></div>
               ) : (
@@ -172,8 +176,8 @@ const UsagePage = () => {
                 </p>
               )}
             </div>
-            <div className="bg-green-100 rounded-full p-3">
-              <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-green-100 dark:bg-green-900/30 rounded-full p-3">
+              <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
@@ -182,7 +186,7 @@ const UsagePage = () => {
             <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-28 mt-2 animate-pulse"></div>
           ) : (
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-              {formatMinutes(summary.current_month_minutes)} this month
+              {formatMinutes(summary.current_month_minutes)} {t.common.status === 'Statut' ? 'ce mois' : 'this month'}
             </p>
           )}
         </div>
@@ -190,7 +194,7 @@ const UsagePage = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Total Calls</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">{t.dashboard.totalCalls}</p>
               {loading ? (
                 <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-20 mt-1 animate-pulse"></div>
               ) : (
@@ -199,8 +203,8 @@ const UsagePage = () => {
                 </p>
               )}
             </div>
-            <div className="bg-purple-100 rounded-full p-3">
-              <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-purple-100 dark:bg-purple-900/30 rounded-full p-3">
+              <svg className="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
               </svg>
             </div>
@@ -210,7 +214,7 @@ const UsagePage = () => {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Avg Call Duration</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">{t.common.status === 'Statut' ? 'Durée moyenne d\'appel' : 'Avg Call Duration'}</p>
               {loading ? (
                 <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-16 mt-1 animate-pulse"></div>
               ) : (
@@ -219,8 +223,8 @@ const UsagePage = () => {
                 </p>
               )}
             </div>
-            <div className="bg-orange-100 rounded-full p-3">
-              <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-orange-100 dark:bg-orange-900/30 rounded-full p-3">
+              <svg className="w-6 h-6 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
               </svg>
             </div>
@@ -231,7 +235,7 @@ const UsagePage = () => {
       {/* Time-based Charts */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-8">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Usage Over Time</h2>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.common.status === 'Statut' ? 'Utilisation dans le temps' : 'Usage Over Time'}</h2>
           <div className="flex gap-2">
             <button
               onClick={() => setActiveView('day')}
@@ -241,7 +245,7 @@ const UsagePage = () => {
                   : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
-              Daily
+              {t.common.status === 'Statut' ? 'Quotidien' : 'Daily'}
             </button>
             <button
               onClick={() => setActiveView('month')}
@@ -251,7 +255,7 @@ const UsagePage = () => {
                   : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
-              Monthly
+              {t.common.status === 'Statut' ? 'Mensuel' : 'Monthly'}
             </button>
           </div>
         </div>
@@ -271,14 +275,14 @@ const UsagePage = () => {
               <Tooltip 
                 labelFormatter={(date) => new Date(date).toLocaleDateString()}
                 formatter={(value: any, name: string) => {
-                  if (name === 'cost') return [formatCurrency(value), 'Cost']
-                  if (name === 'minutes') return [formatMinutes(value), 'Minutes']
+                  if (name === 'cost') return [formatCurrency(value), t.common.status === 'Statut' ? 'Coût' : 'Cost']
+                  if (name === 'minutes') return [formatMinutes(value), t.usage.minutes]
                   return [value, name]
                 }}
               />
               <Legend />
-              <Bar yAxisId="left" dataKey="minutes" fill="#6366f1" name="Minutes" />
-              <Bar yAxisId="right" dataKey="cost" fill="#10b981" name="Cost ($)" />
+              <Bar yAxisId="left" dataKey="minutes" fill="#6366f1" name={t.usage.minutes} />
+              <Bar yAxisId="right" dataKey="cost" fill="#10b981" name={t.common.status === 'Statut' ? 'Coût ($)' : 'Cost ($)'} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
@@ -290,14 +294,14 @@ const UsagePage = () => {
               <YAxis yAxisId="right" orientation="right" />
               <Tooltip 
                 formatter={(value: any, name: string) => {
-                  if (name === 'cost') return [formatCurrency(value), 'Cost']
-                  if (name === 'minutes') return [formatMinutes(value), 'Minutes']
+                  if (name === 'cost') return [formatCurrency(value), t.common.status === 'Statut' ? 'Coût' : 'Cost']
+                  if (name === 'minutes') return [formatMinutes(value), t.usage.minutes]
                   return [value, name]
                 }}
               />
               <Legend />
-              <Line yAxisId="left" type="monotone" dataKey="minutes" stroke="#6366f1" strokeWidth={2} name="Minutes" />
-              <Line yAxisId="right" type="monotone" dataKey="cost" stroke="#10b981" strokeWidth={2} name="Cost ($)" />
+              <Line yAxisId="left" type="monotone" dataKey="minutes" stroke="#6366f1" strokeWidth={2} name={t.usage.minutes} />
+              <Line yAxisId="right" type="monotone" dataKey="cost" stroke="#10b981" strokeWidth={2} name={t.common.status === 'Statut' ? 'Coût ($)' : 'Cost ($)'} />
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -307,7 +311,7 @@ const UsagePage = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Pie Chart */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">Usage by Agent</h2>
+          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">{t.common.status === 'Statut' ? 'Utilisation par agent' : 'Usage by Agent'}</h2>
           {loading ? (
             <div className="h-64 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
           ) : by_agent.length > 0 ? (
@@ -332,13 +336,13 @@ const UsagePage = () => {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-center text-gray-500 dark:text-gray-400 py-12">No agent data available</p>
+            <p className="text-center text-gray-500 dark:text-gray-400 py-12">{t.common.status === 'Statut' ? 'Aucune donnée d\'agent disponible' : 'No agent data available'}</p>
           )}
         </div>
 
         {/* Agent Details Table */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">Agent Breakdown</h2>
+          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">{t.common.status === 'Statut' ? 'Répartition par agent' : 'Agent Breakdown'}</h2>
           {loading ? (
             <div className="space-y-4">
               {[1, 2, 3, 4].map((i) => (
@@ -368,7 +372,7 @@ const UsagePage = () => {
                     ></div>
                     <div>
                       <p className="font-medium text-gray-900 dark:text-white">{agent.agent_name}</p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">{agent.calls} calls</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{agent.calls} {t.common.status === 'Statut' ? 'appels' : 'calls'}</p>
                     </div>
                   </div>
                   <div className="text-right">
@@ -379,7 +383,7 @@ const UsagePage = () => {
               ))}
             </div>
           ) : (
-            <p className="text-center text-gray-500 dark:text-gray-400 py-12">No agent data available</p>
+            <p className="text-center text-gray-500 dark:text-gray-400 py-12">{t.common.status === 'Statut' ? 'Aucune donnée d\'agent disponible' : 'No agent data available'}</p>
           )}
         </div>
       </div>

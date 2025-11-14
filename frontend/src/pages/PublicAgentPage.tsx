@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon, PhoneIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { VoiceWebSocket, api, callsAPI } from '@/lib/api'
+import { useTranslation } from '@/lib/translations'
 
 interface Agent {
   id: number
@@ -17,6 +18,7 @@ interface Agent {
 }
 
 export default function PublicAgentPage() {
+  const t = useTranslation()
   const { agentId } = useParams<{ agentId: string }>()
   const navigate = useNavigate()
   
@@ -39,7 +41,7 @@ export default function PublicAgentPage() {
   const audioQueueRef = useRef<Float32Array[]>([])
   const isPlayingRef = useRef<boolean>(false)
   const nextPlayTimeRef = useRef<number>(0)
-  const isFrench = agent?.language?.startsWith('fr') ?? true
+  const isFrench = t.common.status === 'Statut'
 
   useEffect(() => {
     loadAgent()
@@ -56,13 +58,13 @@ export default function PublicAgentPage() {
       const selectedAgent = publicAgents.find((a: Agent) => a.id === parseInt(agentId || '0'))
       
       if (!selectedAgent) {
-        toast.error('Agent not found or not public')
+        toast.error(t.publicAgent.agentNotFound)
         navigate('/')
         return
       }
       
       if (!selectedAgent.is_active) {
-        toast.error('This agent is currently inactive')
+        toast.error(t.publicAgent.agentInactive)
         navigate('/')
         return
       }
@@ -70,7 +72,7 @@ export default function PublicAgentPage() {
       setAgent(selectedAgent)
     } catch (error) {
       console.error('Error loading agent:', error)
-      toast.error('Failed to load agent')
+      toast.error(t.publicAgent.loadError)
       navigate('/')
     } finally {
       setLoading(false)
@@ -137,7 +139,7 @@ export default function PublicAgentPage() {
       return true
     } catch (error) {
       console.error('Error initializing audio:', error)
-      toast.error(isFrench ? 'Impossible d\'accéder au microphone' : 'Could not access microphone')
+      toast.error(t.common.status === 'Statut' ? 'Impossible d\'accéder au microphone' : 'Could not access microphone')
       return false
     }
   }
@@ -179,7 +181,7 @@ export default function PublicAgentPage() {
               if (data.call_id) {
                 setCallId(data.call_id)
               }
-              toast.success(isFrench ? 'Connecté ! Vous pouvez commencer à parler...' : 'Connected! Start speaking...')
+              toast.success(t.common.status === 'Statut' ? 'Connecté ! Vous pouvez commencer à parler...' : 'Connected! Start speaking...')
             } else if (data.type === 'transcript') {
               setTranscript(prev => [...prev, { role: data.role, text: data.text }])
             } else if (data.type === 'error') {
@@ -191,7 +193,7 @@ export default function PublicAgentPage() {
         // onError callback
         (error) => {
           console.error('WebSocket error:', error)
-          toast.error(isFrench ? 'Erreur de connexion' : 'Connection error')
+          toast.error(t.common.status === 'Statut' ? 'Erreur de connexion' : 'Connection error')
           setIsConnecting(false)
           stopConversation()
         },
@@ -205,7 +207,7 @@ export default function PublicAgentPage() {
       )
     } catch (error) {
       console.error('Error starting conversation:', error)
-      toast.error(isFrench ? 'Impossible de démarrer la conversation' : 'Failed to start conversation')
+      toast.error(t.common.status === 'Statut' ? 'Impossible de démarrer la conversation' : 'Failed to start conversation')
       setIsConnecting(false)
       cleanup()
     }
@@ -283,7 +285,7 @@ export default function PublicAgentPage() {
     nextPlayTimeRef.current = 0
     
     cleanup()
-    toast.success(isFrench ? 'Conversation terminée' : 'Conversation ended')
+    toast.success(t.common.status === 'Statut' ? 'Conversation terminée' : 'Conversation ended')
   }
 
   const sendMessage = async () => {
@@ -293,10 +295,10 @@ export default function PublicAgentPage() {
       setSendingMessage(true)
       await callsAPI.sendMessage(callId, messageInput.trim())
       setMessageInput('')
-      toast.success(isFrench ? 'Message envoyé' : 'Message sent')
+      toast.success(t.common.status === 'Statut' ? 'Message envoyé' : 'Message sent')
     } catch (error: any) {
       console.error('Error sending message:', error)
-      toast.error(error?.response?.data?.detail || (isFrench ? 'Erreur lors de l\'envoi du message' : 'Failed to send message'))
+      toast.error(error?.response?.data?.detail || (t.common.status === 'Statut' ? 'Erreur lors de l\'envoi du message' : 'Failed to send message'))
     } finally {
       setSendingMessage(false)
     }
@@ -324,7 +326,7 @@ export default function PublicAgentPage() {
             className="flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
           >
             <ArrowLeftIcon className="w-5 h-5" />
-            <span className="font-medium">Back to Home</span>
+            <span className="font-medium">{t.common.status === 'Statut' ? 'Retour à l\'accueil' : 'Back to Home'}</span>
           </Link>
           
           <div className="flex items-center gap-2">
@@ -350,7 +352,7 @@ export default function PublicAgentPage() {
                 {agent.name}
               </h1>
               <p className="text-lg text-gray-600 dark:text-gray-300 mb-4">
-                {agent.description || 'Voice agent ready to help you'}
+                {agent.description || (t.common.status === 'Statut' ? 'Agent vocal prêt à vous aider' : 'Voice agent ready to help you')}
               </p>
               
               <div className="flex flex-wrap gap-2">
@@ -361,7 +363,7 @@ export default function PublicAgentPage() {
                 {agent.rag_enabled && (
                   <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-sm font-medium rounded-full">
                     <SparklesIcon className="w-4 h-4" />
-                    Knowledge Base Enabled
+                    {t.common.status === 'Statut' ? 'Base de connaissances activée' : 'Knowledge Base Enabled'}
                   </span>
                 )}
               </div>
@@ -373,7 +375,7 @@ export default function PublicAgentPage() {
                     className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
                   >
                     <PhoneIcon className="w-4 h-4" />
-                    {isFrench ? 'Appeler par téléphone' : 'Call by phone'}
+                    {t.common.status === 'Statut' ? 'Appeler par téléphone' : 'Call by phone'}
                   </a>
                   <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                     {agent.phone_number}
@@ -390,10 +392,10 @@ export default function PublicAgentPage() {
             {!isConnected && !isConnecting && (
               <>
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-                  {isFrench ? 'Prêt à démarrer ?' : 'Ready to Start?'}
+                  {t.common.status === 'Statut' ? 'Prêt à démarrer ?' : 'Ready to Start?'}
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 mb-8">
-                  {isFrench
+                  {t.common.status === 'Statut'
                     ? `Cliquez sur le bouton ci-dessous pour parler avec ${agent.name}`
                     : `Click the button below to start talking with ${agent.name}`}
                 </p>
@@ -402,7 +404,7 @@ export default function PublicAgentPage() {
                   className="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                 >
                   <MicrophoneIcon className="w-6 h-6" />
-                  {isFrench ? 'Démarrer la conversation' : 'Start Conversation'}
+                  {t.publicAgent.connect}
                 </button>
               </>
             )}
@@ -411,9 +413,7 @@ export default function PublicAgentPage() {
               <>
                 <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600 mx-auto mb-4"></div>
                 <p className="text-lg text-gray-600 dark:text-gray-400">
-                  {isFrench
-                    ? `Connexion en cours avec ${agent.name}...`
-                    : `Connecting to ${agent.name}...`}
+                  {t.publicAgent.connecting} {agent.name}...
                 </p>
               </>
             )}
@@ -435,13 +435,13 @@ export default function PublicAgentPage() {
                 
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
                   {isRecording
-                    ? (isFrench ? 'En écoute...' : 'Listening...')
-                    : (isFrench ? 'Connecté' : 'Connected')}
+                    ? t.publicAgent.recording
+                    : t.publicAgent.connect}
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 mb-8">
                   {isRecording
-                    ? (isFrench ? 'Parlez naturellement – l\'agent vous écoute' : 'Speak naturally – the agent is listening')
-                    : (isFrench ? 'Traitement en cours...' : 'Processing...')}
+                    ? (t.common.status === 'Statut' ? 'Parlez naturellement – l\'agent vous écoute' : 'Speak naturally – the agent is listening')
+                    : (t.common.status === 'Statut' ? 'Traitement en cours...' : 'Processing...')}
                 </p>
 
                 {/* Message Input */}
@@ -457,7 +457,7 @@ export default function PublicAgentPage() {
                           sendMessage()
                         }
                       }}
-                      placeholder={isFrench ? 'Tapez votre message...' : 'Type your message...'}
+                      placeholder={t.publicAgent.messagePlaceholder}
                       className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       disabled={sendingMessage}
                     />
@@ -470,7 +470,7 @@ export default function PublicAgentPage() {
                     </button>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
-                    {isFrench ? 'Vous pouvez aussi envoyer un message texte' : 'You can also send a text message'}
+                    {t.common.status === 'Statut' ? 'Vous pouvez aussi envoyer un message texte' : 'You can also send a text message'}
                   </p>
                 </div>
 
@@ -479,7 +479,7 @@ export default function PublicAgentPage() {
                   className="inline-flex items-center gap-3 px-8 py-4 bg-red-600 hover:bg-red-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                 >
                   <StopIcon className="w-6 h-6" />
-                  {isFrench ? 'Terminer la conversation' : 'End Conversation'}
+                  {t.publicAgent.disconnect}
                 </button>
               </>
             )}
@@ -489,24 +489,24 @@ export default function PublicAgentPage() {
           {!isConnected && !isConnecting && (
             <div className="mt-8 pt-8 border-t border-gray-200 dark:border-gray-700">
               <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                {isFrench ? 'Conseils pour une meilleure expérience :' : 'Tips for best experience:'}
+                {t.common.status === 'Statut' ? 'Conseils pour une meilleure expérience :' : 'Tips for best experience:'}
               </h3>
               <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  {isFrench ? 'Choisissez un environnement calme' : 'Use a quiet environment'}
+                  {t.common.status === 'Statut' ? 'Choisissez un environnement calme' : 'Use a quiet environment'}
                 </li>
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  {isFrench ? 'Parlez clairement et naturellement' : 'Speak clearly and naturally'}
+                  {t.common.status === 'Statut' ? 'Parlez clairement et naturellement' : 'Speak clearly and naturally'}
                 </li>
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  {isFrench ? 'Autorisez l’accès au micro lorsqu’on vous le demande' : 'Allow microphone access when prompted'}
+                  {t.common.status === 'Statut' ? 'Autorisez l\'accès au micro lorsqu\'on vous le demande' : 'Allow microphone access when prompted'}
                 </li>
                 <li className="flex items-center gap-2">
                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-600"></div>
-                  {isFrench ? 'Fonctionne mieux avec les navigateurs Chrome ou Edge' : 'Works best with Chrome or Edge browsers'}
+                  {t.common.status === 'Statut' ? 'Fonctionne mieux avec les navigateurs Chrome ou Edge' : 'Works best with Chrome or Edge browsers'}
                 </li>
               </ul>
             </div>
@@ -517,7 +517,7 @@ export default function PublicAgentPage() {
         {transcript.length > 0 && (
           <div className="mt-8 bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-200 dark:border-gray-700">
             <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-              {isFrench ? 'Conversation' : 'Conversation'}
+              {t.callDetail.conversation}
             </h3>
             <div className="space-y-4">
               {transcript.map((msg, idx) => (
@@ -533,7 +533,7 @@ export default function PublicAgentPage() {
                     }`}
                   >
                     <p className="text-sm font-medium mb-1 opacity-75">
-                      {msg.role === 'user' ? (isFrench ? 'Vous' : 'You') : agent.name}
+                      {msg.role === 'user' ? (t.common.status === 'Statut' ? 'Vous' : 'You') : agent.name}
                     </p>
                     <p>{msg.text}</p>
                   </div>

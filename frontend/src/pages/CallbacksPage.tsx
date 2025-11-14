@@ -6,6 +6,8 @@ import DashboardLayout from '../layouts/DashboardLayout';
 import api from '../lib/api';
 import { PhoneIcon, ClockIcon, CheckCircleIcon, XCircleIcon, ExclamationTriangleIcon, UserIcon, EnvelopeIcon, CalendarIcon } from '@heroicons/react/24/outline'
 import { Link } from 'react-router-dom';
+import { useTranslation } from '../lib/translations';
+import toast from 'react-hot-toast';
 
 interface CallbackRequest {
   id: number;
@@ -27,6 +29,7 @@ interface CallbackRequest {
 }
 
 export const CallbacksPage: React.FC = () => {
+  const t = useTranslation();
   const [callbacks, setCallbacks] = useState<CallbackRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [updateLoading, setUpdateLoading] = useState(false);
@@ -70,9 +73,9 @@ export const CallbacksPage: React.FC = () => {
       await loadCallbacks();
       setShowUpdateModal(false);
       setSelectedCallback(null);
-      alert('Callback updated successfully!');
+      toast.success(t.callbacks.updateSuccess);
     } catch (error: any) {
-      alert('Error updating callback: ' + (error.response?.data?.detail || error.message));
+      toast.error(t.callbacks.updateError + ': ' + (error.response?.data?.detail || error.message));
     } finally {
       setUpdateLoading(false);
     }
@@ -122,9 +125,9 @@ export const CallbacksPage: React.FC = () => {
           {/* Header - Keep static */}
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Callback Requests</h1>
+              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.callbacks.callbackRequests}</h1>
               <p className="text-gray-600 dark:text-gray-400 mt-1">
-                Manage callback requests from your voice agents
+                {t.callbacks.manageCallbacks}
               </p>
             </div>
           </div>
@@ -176,9 +179,9 @@ export const CallbacksPage: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Callback Requests</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.callbacks.callbackRequests}</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Manage callback requests from your voice agents
+            {t.callbacks.manageCallbacks}
           </p>
         </div>
       </div>
@@ -190,28 +193,28 @@ export const CallbacksPage: React.FC = () => {
           size="sm"
           onClick={() => setFilter('all')}
         >
-          All
+          {t.callbacks.all}
         </Button>
         <Button
           variant={filter === 'pending' ? 'default' : 'outline'}
           size="sm"
           onClick={() => setFilter('pending')}
         >
-          Pending
+          {t.callbacks.pending}
         </Button>
         <Button
           variant={filter === 'contacted' ? 'default' : 'outline'}
           size="sm"
           onClick={() => setFilter('contacted')}
         >
-          Contacted
+          {t.callbacks.contacted}
         </Button>
         <Button
           variant={filter === 'completed' ? 'default' : 'outline'}
           size="sm"
           onClick={() => setFilter('completed')}
         >
-          Completed
+          {t.callbacks.completed}
         </Button>
       </div>
 
@@ -221,10 +224,10 @@ export const CallbacksPage: React.FC = () => {
           <div className="text-center py-12">
             <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
             <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">
-              No callback requests
+              {t.callbacks.noCallbackRequests}
             </h3>
             <p className="mt-2 text-gray-600 dark:text-gray-400">
-              Callback requests will appear here when agents detect the need for human intervention
+              {t.callbacks.noCallbackRequestsDesc}
             </p>
           </div>
         </Card>
@@ -238,7 +241,7 @@ export const CallbacksPage: React.FC = () => {
                     {getPriorityBadge(callback.priority)}
                     {getStatusBadge(callback.status)}
                     <span className="text-sm text-gray-500">
-                      {new Date(callback.created_at).toLocaleString()}
+                      {t.callbacks.createdAt}: {new Date(callback.created_at).toLocaleString()}
                     </span>
                   </div>
 
@@ -268,7 +271,7 @@ export const CallbacksPage: React.FC = () => {
                     {callback.preferred_callback_time && (
                       <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
                         <CalendarIcon className="h-4 w-4" />
-                        <span>Preferred: {callback.preferred_callback_time}</span>
+                        <span>{t.callbacks.preferredCallbackTime}: {callback.preferred_callback_time}</span>
                       </div>
                     )}
                   </div>
@@ -276,7 +279,7 @@ export const CallbacksPage: React.FC = () => {
                   {callback.notes && (
                     <div className="mb-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                       <p className="text-sm text-gray-700 dark:text-gray-300">
-                        <strong>Notes:</strong> {callback.notes}
+                        <strong>{t.callbacks.notes}:</strong> {callback.notes}
                       </p>
                     </div>
                   )}
@@ -284,14 +287,14 @@ export const CallbacksPage: React.FC = () => {
                   {callback.resolution && (
                     <div className="mb-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
                       <p className="text-sm text-green-700 dark:text-green-300">
-                        <strong>Resolution:</strong> {callback.resolution}
+                        <strong>{t.callbacks.resolution}:</strong> {callback.resolution}
                       </p>
                     </div>
                   )}
 
                   {callback.assigned_to && (
                     <div className="text-sm text-gray-600 dark:text-gray-400">
-                      <strong>Assigned to:</strong> {callback.assigned_to}
+                      <strong>{t.callbacks.assignedTo}:</strong> {callback.assigned_to}
                     </div>
                   )}
                 </div>
@@ -299,7 +302,7 @@ export const CallbacksPage: React.FC = () => {
                 <div className="flex flex-col gap-2 ml-4">
                   <Link to={`/calls/${callback.call_id}`}>
                     <Button variant="outline" size="sm">
-                      View Call
+                      {t.callbacks.viewCall}
                     </Button>
                   </Link>
                   {callback.status !== 'completed' && callback.status !== 'cancelled' && (
@@ -316,7 +319,7 @@ export const CallbacksPage: React.FC = () => {
                         setShowUpdateModal(true);
                       }}
                     >
-                      Update
+                      {t.callbacks.update}
                     </Button>
                   )}
                 </div>
@@ -330,52 +333,52 @@ export const CallbacksPage: React.FC = () => {
       {showUpdateModal && selectedCallback && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-4">Update Callback Request</h2>
+            <h2 className="text-2xl font-bold mb-4">{t.callbacks.updateCallbackRequest}</h2>
             <form onSubmit={handleUpdateCallback} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-2">Status</label>
+                <label className="block text-sm font-medium mb-2">{t.callbacks.status}</label>
                 <select
                   value={updateData.status}
                   onChange={(e) => setUpdateData({ ...updateData, status: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                 >
-                  <option value="pending">Pending</option>
-                  <option value="contacted">Contacted</option>
-                  <option value="completed">Completed</option>
-                  <option value="cancelled">Cancelled</option>
+                  <option value="pending">{t.callbacks.pending}</option>
+                  <option value="contacted">{t.callbacks.contacted}</option>
+                  <option value="completed">{t.callbacks.completed}</option>
+                  <option value="cancelled">{t.callbacks.cancelled}</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Assigned To</label>
+                <label className="block text-sm font-medium mb-2">{t.callbacks.assignedTo}</label>
                 <input
                   type="text"
                   value={updateData.assigned_to}
                   onChange={(e) => setUpdateData({ ...updateData, assigned_to: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  placeholder="Name or email"
+                  placeholder={t.callbacks.assignedToPlaceholder}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Notes</label>
+                <label className="block text-sm font-medium mb-2">{t.callbacks.notes}</label>
                 <textarea
                   value={updateData.notes}
                   onChange={(e) => setUpdateData({ ...updateData, notes: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                   rows={3}
-                  placeholder="Additional notes or comments"
+                  placeholder={t.callbacks.notesPlaceholder}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Resolution</label>
+                <label className="block text-sm font-medium mb-2">{t.callbacks.resolution}</label>
                 <textarea
                   value={updateData.resolution}
                   onChange={(e) => setUpdateData({ ...updateData, resolution: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                   rows={3}
-                  placeholder="How was this resolved?"
+                  placeholder={t.callbacks.resolutionPlaceholder}
                 />
               </div>
 
@@ -384,12 +387,12 @@ export const CallbacksPage: React.FC = () => {
                   {updateLoading ? (
                     <>
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Updating...
+                      {t.callbacks.updating}
                     </>
                   ) : (
                     <>
                       <CheckCircleIcon className="mr-2 h-4 w-4" />
-                      Update
+                      {t.callbacks.updateButton}
                     </>
                   )}
                 </Button>
@@ -402,7 +405,7 @@ export const CallbacksPage: React.FC = () => {
                   }}
                   className="flex-1"
                 >
-                  Cancel
+                  {t.common.cancel}
                 </Button>
               </div>
             </form>

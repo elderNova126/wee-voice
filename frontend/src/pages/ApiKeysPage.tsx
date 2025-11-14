@@ -9,6 +9,7 @@ import {
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { apiKeysAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface APIKey {
   id: number
@@ -21,6 +22,7 @@ interface APIKey {
 }
 
 export default function APIKeysPage() {
+  const t = useTranslation()
   const [apiKeys, setApiKeys] = useState<APIKey[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -36,33 +38,33 @@ export default function APIKeysPage() {
       setApiKeys(response.data)
     } catch (error) {
       console.error('Failed to load API keys:', error)
-      toast.error('Failed to load API keys')
+      toast.error(t.apiKeys.createError.replace('create', 'load'))
     } finally {
       setLoading(false)
     }
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this API key?')) return
+    if (!confirm(t.apiKeys.deleteConfirm)) return
     try {
       await apiKeysAPI.delete(id)
-      toast.success('API key deleted successfully')
+      toast.success(t.apiKeys.deleteSuccess)
       loadAPIKeys()
     } catch (error) {
       console.error('Failed to delete API key:', error)
-      toast.error('Failed to delete API key')
+      toast.error(t.apiKeys.deleteError)
     }
   }
 
   const copyToClipboard = (key: string) => {
     navigator.clipboard.writeText(key)
     setCopiedKey(key)
-    toast.success('API key copied to clipboard')
+    toast.success(t.apiKeys.copySuccess)
     setTimeout(() => setCopiedKey(null), 2000)
   }
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return 'Never'
+    if (!dateString) return t.apiKeys.never
     return new Date(dateString).toLocaleString()
   }
 
@@ -71,10 +73,10 @@ export default function APIKeysPage() {
       <div className="flex items-center justify-between mb-10">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            API Keys
+            {t.apiKeys.title}
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Securely manage your access keys for voice agent APIs.
+            {t.apiKeys.subtitle}
           </p>
         </div>
         <button
@@ -82,7 +84,7 @@ export default function APIKeysPage() {
           className="btn-primary flex items-center gap-2"
         >
           <PlusIcon className="h-5 w-5" />
-          New API Key
+          {t.apiKeys.createApiKey}
         </button>
       </div>
 
@@ -97,7 +99,7 @@ export default function APIKeysPage() {
         <div className="border border-dashed border-gray-300 dark:border-gray-600 rounded-2xl py-16 text-center bg-gray-50/50 dark:bg-gray-800/50">
           <KeyIcon className="mx-auto h-10 w-10 text-gray-400 mb-3" />
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            No API Keys Found
+            {t.apiKeys.noApiKeys}
           </h3>
           <p className="text-gray-500 dark:text-gray-400 mt-1">
             Create your first API key to start integrating your agents.

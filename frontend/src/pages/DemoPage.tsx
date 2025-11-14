@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { MicrophoneIcon, StopIcon, ArrowLeftIcon, PhoneIcon } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { VoiceWebSocket, agentsAPI } from '@/lib/api'
+import { useTranslation } from '@/lib/translations'
 
 interface Agent {
   id: number
@@ -14,6 +15,7 @@ interface Agent {
 }
 
 export default function DemoPage() {
+  const t = useTranslation()
   const [searchParams] = useSearchParams()
   const urlAgentId = searchParams.get('agent')
   
@@ -35,7 +37,7 @@ export default function DemoPage() {
   const isPlayingRef = useRef<boolean>(false) // Track if audio is currently playing
   const nextPlayTimeRef = useRef<number>(0) // Track next scheduled play time for seamless playback
   const activeLanguage = selectedAgent?.language ?? 'fr-FR'
-  const isFrench = activeLanguage.startsWith('fr')
+  const isFrench = t.common.status === 'Statut'
   
   const selectAgent = (agent: Agent, resetTranscript: boolean = true) => {
     setSelectedAgent(agent)
@@ -47,11 +49,7 @@ export default function DemoPage() {
   
   const handleAgentSelection = (agent: Agent) => {
     if (isConnected) {
-      toast.error(
-        selectedAgent?.language?.startsWith('fr')
-          ? 'Déconnectez-vous d\'abord pour changer d\'agent'
-          : 'Disconnect first to change agents'
-      )
+      toast.error(t.demo.disconnectFirst)
       return
     }
     selectAgent(agent)
@@ -66,7 +64,7 @@ export default function DemoPage() {
         
         if (agentsList.length === 0) {
           console.warn('No demo agents found')
-          toast.error('No demo agents available')
+          toast.error(t.demo.noAgentsAvailable)
           return
         }
         
@@ -89,7 +87,7 @@ export default function DemoPage() {
       })
       .catch(error => {
         console.error('Failed to load demo agents:', error)
-        toast.error('Unable to load demo agents')
+        toast.error(t.demo.loadError)
       })
     
     return () => {
@@ -139,7 +137,7 @@ export default function DemoPage() {
   const connect = async () => {
     if (!agentId) {
       console.error('No agent ID available')
-      toast.error(isFrench ? 'Agent non disponible' : 'Agent unavailable')
+      toast.error(t.common.status === 'Statut' ? 'Agent non disponible' : 'Agent unavailable')
       return
     }
     
@@ -218,7 +216,7 @@ export default function DemoPage() {
               setIsRecording(true)
               setIsConnected(true)
               setIsConnecting(false)
-              toast.success(isFrench ? 'Connexion établie !' : 'Connection established!')
+              toast.success(t.common.status === 'Statut' ? 'Connexion établie !' : 'Connection established!')
             } else if (data.type === 'transcript') {
               setTranscript(prev => [...prev, { role: data.role, text: data.text }])
             } else if (data.type === 'error') {
@@ -229,7 +227,7 @@ export default function DemoPage() {
         },
         (error) => {
           console.error('WebSocket error:', error)
-          toast.error(isFrench ? 'Erreur de connexion' : 'Connection error')
+          toast.error(t.common.status === 'Statut' ? 'Erreur de connexion' : 'Connection error')
           setIsConnecting(false)
         },
         () => {
@@ -241,7 +239,7 @@ export default function DemoPage() {
       
     } catch (error) {
       console.error('Connection error:', error)
-      toast.error(isFrench ? 'Impossible d\'accéder au microphone' : 'Unable to access microphone')
+      toast.error(t.common.status === 'Statut' ? 'Impossible d\'accéder au microphone' : 'Unable to access microphone')
       setIsConnecting(false)
     }
   }
@@ -349,10 +347,10 @@ export default function DemoPage() {
                   <MicrophoneIcon className="w-16 h-16 text-white" />
                 </div>
                 <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
-                  {isFrench ? 'Prêt à commencer ?' : 'Ready to start?'}
+                  {t.common.status === 'Statut' ? 'Prêt à commencer ?' : 'Ready to start?'}
                 </h2>
                 <p className="text-lg text-gray-600 dark:text-gray-400 mb-8 max-w-md mx-auto">
-                  {isFrench
+                  {t.common.status === 'Statut'
                     ? 'Cliquez sur le bouton ci-dessous pour démarrer une conversation vocale'
                     : 'Click the button below to start a voice conversation'}
                 </p>
@@ -362,7 +360,7 @@ export default function DemoPage() {
                   className="inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 disabled:cursor-not-allowed"
                 >
                   <MicrophoneIcon className="w-6 h-6" />
-                  {isFrench ? 'Démarrer la Conversation' : 'Start Conversation'}
+                  {t.demo.connect}
                 </button>
               </div>
             ) : isConnecting ? (
@@ -374,10 +372,10 @@ export default function DemoPage() {
                   <div className="absolute inset-0 rounded-full border-4 border-indigo-600 animate-spin" style={{ borderTopColor: 'transparent' }}></div>
                 </div>
                 <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
-                  {isFrench ? 'Connexion en cours...' : 'Connecting...'}
+                  {t.demo.connecting}
                 </h2>
                 <p className="text-lg text-gray-600 dark:text-gray-400">
-                  {isFrench
+                  {t.common.status === 'Statut'
                     ? 'Veuillez patienter pendant que nous établissons la connexion'
                     : 'Please wait while we establish the connection'}
                 </p>
@@ -397,10 +395,10 @@ export default function DemoPage() {
                   )}
                 </div>
                 <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
-                  {isFrench ? 'En écoute...' : 'Listening...'}
+                  {t.demo.recording}
                 </h2>
                 <p className="text-lg text-gray-600 dark:text-gray-400 mb-8">
-                  {isFrench
+                  {t.common.status === 'Statut'
                     ? 'Parlez naturellement en français'
                     : 'Speak naturally in English'}
                 </p>
@@ -409,7 +407,7 @@ export default function DemoPage() {
                   className="inline-flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                 >
                   <StopIcon className="w-6 h-6" />
-                  {isFrench ? 'Arrêter' : 'Stop'}
+                  {t.demo.stop}
                 </button>
               </div>
             )}
@@ -423,7 +421,7 @@ export default function DemoPage() {
               <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm">
                 📝
               </span>
-            {isFrench ? 'Transcription' : 'Transcript'}
+            {t.callDetail.transcript}
             </h3>
             <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
               {transcript.map((item, index) => (
@@ -441,8 +439,8 @@ export default function DemoPage() {
                       : 'text-gray-500 dark:text-gray-400'
                   }`}>
                     {item.role === 'user' 
-                      ? (isFrench ? '👤 Vous' : '👤 You')
-                      : '🤖 Agent'}
+                      ? (t.common.status === 'Statut' ? '👤 Vous' : '👤 You')
+                      : `🤖 ${t.callDetail.agent}`}
                   </div>
                   <div className="text-gray-900 dark:text-white leading-relaxed">
                     {item.text}
@@ -457,9 +455,9 @@ export default function DemoPage() {
         <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-2xl border border-blue-200 dark:border-blue-800 p-8">
           <h3 className="text-xl font-bold text-blue-900 dark:text-blue-300 mb-4 flex items-center gap-2">
             <span>💡</span>
-            {isFrench ? 'Conseils pour une meilleure expérience' : 'Tips for a better experience'}
+            {t.common.status === 'Statut' ? 'Conseils pour une meilleure expérience' : 'Tips for a better experience'}
           </h3>
-          {isFrench ? (
+          {t.common.status === 'Statut' ? (
             <ul className="text-gray-700 dark:text-gray-300 space-y-3">
               <li className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">1</span>

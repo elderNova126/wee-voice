@@ -18,6 +18,7 @@ import DashboardLayout from '@/layouts/DashboardLayout'
 import { librariesAPI, agentsAPI } from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface AgentLibrary {
   id: number
@@ -52,19 +53,7 @@ interface AgentLibrary {
   can_delete: boolean
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  real_estate: 'Immobilier',
-  customer_service: 'Service Client',
-  sales: 'Vente',
-  support: 'Support',
-  marketing: 'Marketing',
-  hr: 'RH',
-  healthcare: 'Santé',
-  education: 'Éducation',
-  finance: 'Finance',
-  legal: 'Juridique',
-  general: 'Général',
-}
+// Category labels will be translated using useTranslation hook
 
 const CATEGORY_COLORS: Record<string, string> = {
   real_estate: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
@@ -81,6 +70,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 }
 
 export default function LibrariesPage() {
+  const t = useTranslation()
   const [activeTab, setActiveTab] = useState<'public' | 'my'>('public')
   const [libraries, setLibraries] = useState<AgentLibrary[]>([])
   const [loading, setLoading] = useState(true)
@@ -113,6 +103,20 @@ export default function LibrariesPage() {
   const navigate = useNavigate()
   const { user } = useAuthStore()
   const isAdmin = user?.is_superuser || false
+
+  const CATEGORY_LABELS: Record<string, string> = {
+    real_estate: t.categories.realEstate,
+    customer_service: t.categories.customerService,
+    sales: t.categories.sales,
+    support: t.categories.support,
+    marketing: t.categories.marketing,
+    hr: t.categories.hr,
+    healthcare: t.categories.healthcare,
+    education: t.categories.education,
+    finance: t.categories.finance,
+    legal: t.categories.legal,
+    general: t.categories.general,
+  }
 
   useEffect(() => {
     loadCategories()
@@ -340,10 +344,10 @@ export default function LibrariesPage() {
         <div className="mb-6 flex justify-between items-start">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-1">
-              Agent Libraries
+              {t.libraries.title}
             </h1>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Browse and save agent templates to quickly create new agents
+              {t.libraries.subtitle}
             </p>
           </div>
           {isAdmin && activeTab === 'public' && (
@@ -352,7 +356,7 @@ export default function LibrariesPage() {
               className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
             >
               <PlusIcon className="h-5 w-5" />
-              Create Public Library
+              {t.libraries.createPublicLibrary}
             </button>
           )}
         </div>
@@ -368,7 +372,7 @@ export default function LibrariesPage() {
             }`}
           >
             <BookOpenIcon className="h-4 w-4 inline mr-2" />
-            Public Libraries
+            {t.libraries.publicLibraries}
           </button>
           <button
             onClick={() => setActiveTab('my')}
@@ -379,7 +383,7 @@ export default function LibrariesPage() {
             }`}
           >
             <StarIconSolid className="h-4 w-4 inline mr-2" />
-            My Libraries
+            {t.libraries.myLibraries}
           </button>
         </div>
 
@@ -396,7 +400,7 @@ export default function LibrariesPage() {
                   type="text"
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="Search libraries by name, description, or prompt..."
+                  placeholder={t.libraries.searchPlaceholder}
                   className="w-full pl-10 pr-10 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
                 {searchInput && (
@@ -421,7 +425,7 @@ export default function LibrariesPage() {
                   onChange={(e) => setSelectedCategory(e.target.value)}
                   className="w-full pl-10 pr-8 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none cursor-pointer"
                 >
-                  <option value="all">All Categories</option>
+                  <option value="all">{t.libraries.allCategories}</option>
                   {categories.map((cat) => (
                     <option key={cat} value={cat}>
                       {CATEGORY_LABELS[cat] || cat}

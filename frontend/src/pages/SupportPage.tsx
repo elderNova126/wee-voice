@@ -5,6 +5,7 @@ import { supportAPI } from '@/lib/api'
 import { Card, CardHeader, CardContent, Button, Input } from '@/components/ui'
 import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 import { 
   ChatBubbleLeftRightIcon,
   EnvelopeIcon,
@@ -21,19 +22,20 @@ interface TicketForm {
   category: string
 }
 
-const categories = [
-  { value: 'technical', label: 'Support Technique' },
-  { value: 'billing', label: 'Facturation' },
-  { value: 'general', label: 'Question Générale' },
-  { value: 'feature_request', label: 'Demande de Fonctionnalité' },
-  { value: 'bug_report', label: 'Rapport de Bug' },
-]
-
 export default function SupportPage() {
+  const t = useTranslation()
   const { user } = useAuthStore()
   const [loading, setLoading] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [ticketNumber, setTicketNumber] = useState('')
+  
+  const categories = [
+    { value: 'technical', label: t.common.status === 'Statut' ? 'Support Technique' : 'Technical Support' },
+    { value: 'billing', label: t.common.status === 'Statut' ? 'Facturation' : 'Billing' },
+    { value: 'general', label: t.common.status === 'Statut' ? 'Question Générale' : 'General Question' },
+    { value: 'feature_request', label: t.common.status === 'Statut' ? 'Demande de Fonctionnalité' : 'Feature Request' },
+    { value: 'bug_report', label: t.common.status === 'Statut' ? 'Rapport de Bug' : 'Bug Report' },
+  ]
   
   const [formData, setFormData] = useState<TicketForm>({
     name: user?.full_name || '',
@@ -87,10 +89,10 @@ export default function SupportPage() {
       const response = await supportAPI.createTicket(formData)
       setTicketNumber(response.data.ticket_number)
       setSubmitted(true)
-      toast.success('Votre demande a été envoyée avec succès!')
+      toast.success(t.support.createSuccess)
     } catch (error: any) {
       console.error('Error submitting ticket:', error)
-      toast.error(error.response?.data?.detail || 'Erreur lors de l\'envoi de votre demande')
+      toast.error(error.response?.data?.detail || t.support.createError)
     } finally {
       setLoading(false)
     }

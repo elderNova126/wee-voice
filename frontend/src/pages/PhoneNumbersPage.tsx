@@ -4,6 +4,9 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import DashboardLayout from '../layouts/DashboardLayout';
 import api from '../lib/api';
+import { useTranslation } from '../lib/translations';
+import { useLanguageStore } from '../store/languageStore';
+import toast from 'react-hot-toast';
 import {
   PhoneIcon,
   CloudArrowUpIcon,
@@ -94,6 +97,18 @@ interface PBXFormState {
 }
 
 export const PhoneNumbersPage: React.FC = () => {
+  const t = useTranslation();
+  
+  // Safety check: ensure phoneNumbers translations exist
+  if (!t?.phoneNumbers) {
+    console.error('phoneNumbers translations not found', {
+      hasT: !!t,
+      availableKeys: t ? Object.keys(t) : [],
+      language: useLanguageStore.getState().language,
+      translationKeys: t?.phoneNumbers ? Object.keys(t.phoneNumbers) : []
+    });
+  }
+  
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<PhoneNumber | null>(null);
@@ -137,22 +152,25 @@ export const PhoneNumbersPage: React.FC = () => {
     days: ['mon', 'tue', 'wed', 'thu', 'fri'],
   };
 
-  const getDefaultPBXForm = (): PBXFormState => ({
-    business_hours: { ...defaultBusinessHours },
-    menu_options: [
-      {
-        key: '1',
-        label: 'Speak with our AI agent',
+  const getDefaultPBXForm = (): PBXFormState => {
+    const isFrench = t.common.status === 'Statut';
+    return {
+      business_hours: { ...defaultBusinessHours },
+      menu_options: [
+        {
+          key: '1',
+          label: isFrench ? 'Parler avec notre agent IA' : 'Speak with our AI agent',
+          destination_type: 'agent',
+          destination_value: '',
+        },
+      ],
+      after_hours_routing: {
         destination_type: 'agent',
+        message: isFrench ? 'Nos bureaux sont actuellement fermés. Connexion à notre agent virtuel.' : 'Our offices are currently closed. Connecting you to our virtual agent.',
         destination_value: '',
       },
-    ],
-    after_hours_routing: {
-      destination_type: 'agent',
-      message: 'Our offices are currently closed. Connecting you to our virtual agent.',
-      destination_value: '',
-    },
-  });
+    };
+  };
 
   const [pbxForm, setPbxForm] = useState<PBXFormState>(getDefaultPBXForm());
   const [pbxSaving, setPbxSaving] = useState(false);
@@ -177,7 +195,7 @@ export const PhoneNumbersPage: React.FC = () => {
   ];
 
   const formatBusinessHoursSummary = (hours?: PBXBusinessHours | null) => {
-    if (!hours) return 'Not configured';
+    if (!hours) return t?.phoneNumbers?.notConfigured || 'Not configured';
     const activeDays = Array.isArray(hours.days)
       ? dayOptions.filter((d) => (hours.days as DayCode[]).includes(d.value))
       : [];
@@ -188,28 +206,28 @@ export const PhoneNumbersPage: React.FC = () => {
     const openTime = hours.open_time || defaultBusinessHours.open_time;
     const closeTime = hours.close_time || defaultBusinessHours.close_time;
     const timezone = hours.timezone || defaultBusinessHours.timezone;
-    return `${orderedDays || 'No days selected'} • ${openTime} - ${closeTime} (${timezone})`;
+    return `${orderedDays || (t.common.status === 'Statut' ? 'Aucun jour sélectionné' : 'No days selected')} • ${openTime} - ${closeTime} (${timezone})`;
   };
 
   const describeAfterHoursDestination = (afterHours?: StoredAfterHoursRouting | null) => {
     if (!afterHours) {
-      return 'Default: connect to AI agent';
+      return t.common.status === 'Statut' ? 'Par défaut : se connecter à l\'agent IA' : 'Default: connect to AI agent';
     }
 
     const destinationType = afterHours.destination_type || afterHours.destination?.type || 'agent';
     if (destinationType === 'agent') {
-      return 'Connect to AI agent';
+      return t?.phoneNumbers?.connectToAIAgent || 'Connect to AI Agent';
     }
     if (destinationType === 'voicemail') {
-      return 'Send to voicemail';
+      return t?.phoneNumbers?.sendToVoicemail || 'Send to Voicemail';
     }
     if (destinationType === 'forward') {
-      return `Forward to ${afterHours.destination_value || afterHours.destination?.value || 'external number'}`;
+      return `${t?.phoneNumbers?.forwardTo || 'Forward to'} ${afterHours.destination_value || afterHours.destination?.value || (t?.phoneNumbers?.externalNumber || 'External Number')}`;
     }
     if (destinationType === 'external') {
-      return `External destination: ${afterHours.destination_value || afterHours.destination?.value || 'N/A'}`;
+      return `${t?.phoneNumbers?.externalDestination || 'External Destination'} ${afterHours.destination_value || afterHours.destination?.value || 'N/A'}`;
     }
-    return 'Custom routing';
+    return t?.phoneNumbers?.customRouting || 'Custom Routing';
   };
 
   const initializePBXFormFromNumber = (number: PhoneNumber): PBXFormState => {
@@ -273,7 +291,7 @@ export const PhoneNumbersPage: React.FC = () => {
 
   const openPBXModal = (number: PhoneNumber) => {
     if (!number.agent_id) {
-      alert('Assign this phone number to an agent before configuring PBX routing.');
+      toast.error(t.common.status === 'Statut' ? 'Assignez ce numéro de téléphone à un agent avant de configurer le routage PBX.' : 'Assign this phone number to an agent before configuring PBX routing.');
       return;
     }
     const preparedForm = initializePBXFormFromNumber(number);
@@ -388,7 +406,7 @@ export const PhoneNumbersPage: React.FC = () => {
     );
 
     if (selectedDays.length === 0) {
-      alert('Select at least one business day for the PBX menu.');
+      toast.error(t.common.status === 'Statut' ? 'Sélectionnez au moins un jour ouvrable pour le menu PBX.' : 'Select at least one business day for the PBX menu.');
       setPbxSaving(false);
       return;
     }
@@ -436,11 +454,11 @@ export const PhoneNumbersPage: React.FC = () => {
     try {
       await api.post(`/phone-numbers/${pbxTargetNumber.id}/configure-pbx`, payload);
       await loadPhoneNumbers();
-      alert('PBX configuration saved successfully!');
+      toast.success(t.phoneNumbers.pbxSavedSuccess);
       closePBXModal();
     } catch (error: any) {
       console.error('Error saving PBX configuration:', error);
-      alert('Failed to save PBX configuration: ' + (error.response?.data?.detail || error.message));
+      toast.error(t.phoneNumbers.updateError + ': ' + (error.response?.data?.detail || error.message));
     } finally {
       setPbxSaving(false);
     }
@@ -495,9 +513,9 @@ export const PhoneNumbersPage: React.FC = () => {
         country_code: 'BE',
         business_name: ''
       });
-      alert('Phone number added successfully! You can now assign it to an agent.');
+      toast.success(t.phoneNumbers.phoneNumberAddedSuccess);
     } catch (error: any) {
-      alert('Error adding phone number: ' + (error.response?.data?.detail || error.message));
+      toast.error(t.phoneNumbers.createError + ': ' + (error.response?.data?.detail || error.message));
     } finally {
       setRequestLoading(false);
     }
@@ -517,9 +535,9 @@ export const PhoneNumbersPage: React.FC = () => {
         business_type: 'company',
         business_address: ''
       });
-      alert('Phone number requested successfully! Please upload verification documents.');
+      toast.success(t.phoneNumbers.phoneNumberRequestedSuccess);
     } catch (error: any) {
-      alert('Error requesting phone number: ' + (error.response?.data?.detail || error.message));
+      toast.error(t.phoneNumbers.createError + ': ' + (error.response?.data?.detail || error.message));
     } finally {
       setRequestLoading(false);
     }
@@ -545,9 +563,9 @@ export const PhoneNumbersPage: React.FC = () => {
       await loadDocuments(selectedNumber.id);
       setShowUploadModal(false);
       setUploadData({ document_type: 'company_registration', file: null });
-      alert('Document uploaded successfully!');
+      toast.success(t.phoneNumbers.documentUploadedSuccess);
     } catch (error: any) {
-      alert('Error uploading document: ' + (error.response?.data?.detail || error.message));
+      toast.error(t.common.error + ': ' + (error.response?.data?.detail || error.message));
     } finally {
       setUploadLoading(false);
     }
@@ -563,18 +581,18 @@ export const PhoneNumbersPage: React.FC = () => {
       setShowAssignAgentModal(false);
       setSelectedNumber(null);
       setSelectedAgentId(null);
-      alert('Phone number assigned to agent successfully!');
+      toast.success(t.phoneNumbers.agentAssignedSuccess);
     } catch (error: any) {
-      alert('Error assigning agent: ' + (error.response?.data?.detail || error.message));
+      toast.error(t.phoneNumbers.updateError + ': ' + (error.response?.data?.detail || error.message));
     } finally {
       setRequestLoading(false);
     }
   };
 
   const getAgentName = (agentId: number | null) => {
-    if (!agentId) return 'Not assigned';
+    if (!agentId) return t.common.status === 'Statut' ? 'Non assigné' : 'Not assigned';
     const agent = agents.find(a => a.id === agentId);
-    return agent ? agent.name : 'Unknown Agent';
+    return agent ? agent.name : (t?.phoneNumbers?.unknownAgent || 'Unknown Agent');
   };
 
   const getStatusBadge = (status: string) => {
@@ -616,14 +634,14 @@ export const PhoneNumbersPage: React.FC = () => {
           {/* Header - Keep static */}
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Phone Numbers</h1>
+              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t?.phoneNumbers?.title || 'Phone Numbers'}</h1>
               <p className="text-gray-600 dark:text-gray-400 mt-1">
-                Manage phone numbers for your voice agents
+                {t?.phoneNumbers?.subtitle || 'Manage phone numbers for your voice agents'}
               </p>
             </div>
             <Button disabled>
               <PhoneIcon className="mr-2 h-4 w-4" />
-              Request New Number
+              {t?.phoneNumbers?.requestNewNumber || 'Request New Number'}
             </Button>
           </div>
 
@@ -661,18 +679,20 @@ export const PhoneNumbersPage: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Phone Numbers</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t?.phoneNumbers?.title || 'Phone Numbers'}</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Manage phone numbers for your voice agents
+            {t?.phoneNumbers?.subtitle || 'Manage phone numbers for your voice agents'}
           </p>
         </div>
         <div className="flex gap-3">
-          <Button onClick={() => setShowAddExistingModal(true)}>
-            <PhoneIcon className="mr-2 h-4 w-4" />
-            Add Existing Number
+          <Button 
+            onClick={() => setShowAddExistingModal(true)}
+          >
+            <PhoneIcon className="h-4 w-4 mr-2" />
+            {t?.phoneNumbers?.addExistingNumber || 'Add Existing Number'}
           </Button>
           <Button onClick={() => setShowRequestModal(true)} variant="outline">
-            Request New Number
+            {t?.phoneNumbers?.requestNewNumber || 'Request New Number'}
           </Button>
         </div>
       </div>
@@ -683,17 +703,17 @@ export const PhoneNumbersPage: React.FC = () => {
             <div className="text-center py-12">
               <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
               <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">
-                No phone numbers yet
+                {t?.phoneNumbers?.noPhoneNumbers || 'No Phone Numbers'}
               </h3>
               <p className="mt-2 text-gray-600 dark:text-gray-400">
-                Add your existing Zadarma number or request a new one
+                {t?.phoneNumbers?.noPhoneNumbersDesc || 'Add your existing Zadarma number or request a new one'}
               </p>
               <div className="flex gap-3 justify-center mt-4">
                 <Button onClick={() => setShowAddExistingModal(true)}>
-                  Add Existing Number
+                  {t?.phoneNumbers?.addExistingNumber || 'Add Existing Number'}
                 </Button>
                 <Button onClick={() => setShowRequestModal(true)} variant="outline">
-                  Request New Number
+                  {t?.phoneNumbers?.requestNewNumber || 'Request New Number'}
                 </Button>
               </div>
             </div>
@@ -715,37 +735,37 @@ export const PhoneNumbersPage: React.FC = () => {
                       {number.business_name} • {number.country_code}
                     </p>
                     <div className="flex items-center gap-4 mt-2 text-sm">
-                      <span className="text-gray-500">Monthly: ${number.monthly_cost}</span>
-                      <span className="text-gray-500">Per minute: ${number.per_minute_cost}</span>
+                      <span className="text-gray-500">{t?.phoneNumbers?.monthly || 'Monthly'} ${number.monthly_cost}</span>
+                      <span className="text-gray-500">{t?.phoneNumbers?.perMinute || 'Per minute'} ${number.per_minute_cost}</span>
                     </div>
                     <div className="mt-2 text-sm">
-                      <span className="text-gray-700 dark:text-gray-300 font-medium">Agent: </span>
+                      <span className="text-gray-700 dark:text-gray-300 font-medium">{t?.phoneNumbers?.agent || 'Agent'}: </span>
                       <span className={number.agent_id ? "text-green-600 dark:text-green-400 font-medium" : "text-orange-600 dark:text-orange-400"}>
                         {getAgentName(number.agent_id)}
                       </span>
                     </div>
                     <div className="mt-3 text-sm">
                       <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
-                        PBX Routing
+                        {t?.phoneNumbers?.pbxRouting || 'PBX Routing'}
                       </div>
                       {number.pbx_enabled ? (
                         <div className="space-y-1 text-gray-700 dark:text-gray-300">
                           <div>
-                            <span className="font-medium">Extension:</span>{' '}
-                            {number.pbx_extension || 'Auto'}
+                            <span className="font-medium">{t?.phoneNumbers?.extension || 'Extension'}</span>{' '}
+                            {number.pbx_extension || (t?.phoneNumbers?.auto || 'Auto')}
                           </div>
                           <div>
-                            <span className="font-medium">Business hours:</span>{' '}
+                            <span className="font-medium">{t?.phoneNumbers?.businessHours || 'Business Hours'}</span>{' '}
                             {formatBusinessHoursSummary(number.business_hours || null)}
                           </div>
                           <div>
-                            <span className="font-medium">After hours:</span>{' '}
+                            <span className="font-medium">{t?.phoneNumbers?.afterHours || 'After Hours'}</span>{' '}
                             {describeAfterHoursDestination(number.after_hours_routing || null)}
                           </div>
                         </div>
                       ) : (
                         <p className="text-gray-500 dark:text-gray-400">
-                          PBX menu not configured yet. Calls route directly to the assigned agent.
+                          {t?.phoneNumbers?.pbxNotConfiguredDesc || 'PBX routing not configured'}
                         </p>
                       )}
                     </div>
@@ -765,7 +785,7 @@ export const PhoneNumbersPage: React.FC = () => {
                         }}
                       >
                         <CloudArrowUpIcon className="mr-2 h-3.5 w-3.5" />
-                        Upload Documents
+                        {t?.phoneNumbers?.uploadDocuments || 'Upload Documents'}
                       </Button>
                     ) : null}
                     {(number.status === 'active' || number.status === 'approved') && (
@@ -777,7 +797,7 @@ export const PhoneNumbersPage: React.FC = () => {
                           setShowAssignAgentModal(true);
                         }}
                       >
-                        {number.agent_id ? 'Change Agent' : 'Assign Agent'}
+                        {number.agent_id ? (t?.phoneNumbers?.changeAgent || 'Change Agent') : (t?.phoneNumbers?.assignAgent || 'Assign Agent')}
                       </Button>
                     )}
                     {number.agent_id && (
@@ -787,7 +807,7 @@ export const PhoneNumbersPage: React.FC = () => {
                         onClick={() => openPBXModal(number)}
                       >
                         <Cog6ToothIcon className="mr-2 h-3.5 w-3.5" />
-                        Configure PBX
+                        {t?.phoneNumbers?.configurePBX || 'Configure PBX'}
                       </Button>
                     )}
                   </div>
@@ -798,7 +818,7 @@ export const PhoneNumbersPage: React.FC = () => {
               {selectedNumber?.id === number.id && (
                 <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
                   <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                    Verification Documents
+                    {t?.phoneNumbers?.verificationDocuments || 'Verification Documents'}
                   </h4>
                   {documentsLoading ? (
                     <div className="space-y-2">
@@ -858,7 +878,7 @@ export const PhoneNumbersPage: React.FC = () => {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-500 dark:text-gray-400">No documents uploaded yet</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{t?.phoneNumbers?.noDocumentsUploaded || 'No documents uploaded'}</p>
                   )}
                 </div>
               )}
@@ -871,50 +891,50 @@ export const PhoneNumbersPage: React.FC = () => {
       {showAddExistingModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="max-w-lg w-full">
-            <h2 className="text-2xl font-bold mb-4">Add Existing Phone Number</h2>
+            <h2 className="text-2xl font-bold mb-4">{t?.phoneNumbers?.addExistingPhoneNumber || 'Add Existing Phone Number'}</h2>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-              Add a phone number you already own on Zadarma (e.g., +3242833288)
+              {t?.phoneNumbers?.addExistingDesc || 'Add your existing Zadarma phone number to your account'}
             </p>
             <form onSubmit={handleAddExistingNumber} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-2">Phone Number *</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.phoneNumberLabel || 'Phone Number'}</label>
                 <input
                   type="text"
                   required
                   value={existingNumberData.phone_number}
                   onChange={(e) => setExistingNumberData({ ...existingNumberData, phone_number: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  placeholder="+3242833288"
+                  placeholder={t?.phoneNumbers?.phoneNumberPlaceholder || 'Enter phone number'}
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Include country code (e.g., +32 for Belgium)
+                  {t?.phoneNumbers?.phoneNumberHelper || 'Enter your Zadarma phone number'}
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Country Code</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.countryCode || 'Country Code'}</label>
                 <select
                   value={existingNumberData.country_code}
                   onChange={(e) => setExistingNumberData({ ...existingNumberData, country_code: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                 >
-                  <option value="BE">Belgium (BE)</option>
-                  <option value="FR">France (FR)</option>
-                  <option value="US">United States (US)</option>
-                  <option value="UK">United Kingdom (UK)</option>
-                  <option value="DE">Germany (DE)</option>
-                  <option value="NL">Netherlands (NL)</option>
+                  <option value="BE">{t.common.status === 'Statut' ? 'Belgique (BE)' : 'Belgium (BE)'}</option>
+                  <option value="FR">{t.common.status === 'Statut' ? 'France (FR)' : 'France (FR)'}</option>
+                  <option value="US">{t.common.status === 'Statut' ? 'États-Unis (US)' : 'United States (US)'}</option>
+                  <option value="UK">{t.common.status === 'Statut' ? 'Royaume-Uni (UK)' : 'United Kingdom (UK)'}</option>
+                  <option value="DE">{t.common.status === 'Statut' ? 'Allemagne (DE)' : 'Germany (DE)'}</option>
+                  <option value="NL">{t.common.status === 'Statut' ? 'Pays-Bas (NL)' : 'Netherlands (NL)'}</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Business Name (Optional)</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessNameOptional || 'Business Name (Optional)'}</label>
                 <input
                   type="text"
                   value={existingNumberData.business_name}
                   onChange={(e) => setExistingNumberData({ ...existingNumberData, business_name: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  placeholder="Your Company Name"
+                  placeholder={t?.phoneNumbers?.businessNamePlaceholder || 'Enter business name'}
                 />
               </div>
 
@@ -923,10 +943,10 @@ export const PhoneNumbersPage: React.FC = () => {
                   {requestLoading ? (
                     <>
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Adding...
+                      {t?.phoneNumbers?.adding || 'Adding...'}
                     </>
                   ) : (
-                    'Add Phone Number'
+                    t?.phoneNumbers?.addPhoneNumberButton || 'Add Phone Number'
                   )}
                 </Button>
                 <Button
@@ -935,7 +955,7 @@ export const PhoneNumbersPage: React.FC = () => {
                   onClick={() => setShowAddExistingModal(false)}
                   className="flex-1"
                 >
-                  Cancel
+                  {t?.common?.cancel || 'Cancel'}
                 </Button>
               </div>
             </form>
@@ -947,48 +967,48 @@ export const PhoneNumbersPage: React.FC = () => {
       {showRequestModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-4">Request New Phone Number</h2>
+            <h2 className="text-2xl font-bold mb-4">{t?.phoneNumbers?.requestNewPhoneNumber || 'Request New Phone Number'}</h2>
             <form onSubmit={handleRequestNumber} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-2">Phone Number</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.phoneNumber || 'Phone Number'}</label>
                 <input
                   type="text"
                   required
                   value={formData.phone_number}
                   onChange={(e) => setFormData({ ...formData, phone_number: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  placeholder="+33123456789"
+                  placeholder={t?.phoneNumbers?.phoneNumberPlaceholderRequest || 'Enter desired phone number'}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Country Code</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.countryCode || 'Country Code'}</label>
                 <select
                   value={formData.country_code}
                   onChange={(e) => setFormData({ ...formData, country_code: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                 >
-                  <option value="FR">France (FR)</option>
-                  <option value="US">United States (US)</option>
-                  <option value="UK">United Kingdom (UK)</option>
-                  <option value="DE">Germany (DE)</option>
+                  <option value="FR">{t.common.status === 'Statut' ? 'France (FR)' : 'France (FR)'}</option>
+                  <option value="US">{t.common.status === 'Statut' ? 'États-Unis (US)' : 'United States (US)'}</option>
+                  <option value="UK">{t.common.status === 'Statut' ? 'Royaume-Uni (UK)' : 'United Kingdom (UK)'}</option>
+                  <option value="DE">{t.common.status === 'Statut' ? 'Allemagne (DE)' : 'Germany (DE)'}</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Business Type</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessType || 'Business Type'}</label>
                 <select
                   value={formData.business_type}
                   onChange={(e) => setFormData({ ...formData, business_type: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                 >
-                  <option value="company">Company</option>
-                  <option value="individual">Individual</option>
+                  <option value="company">{t?.phoneNumbers?.company || 'Company'}</option>
+                  <option value="individual">{t?.phoneNumbers?.individual || 'Individual'}</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Business Name</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessName || 'Business Name'}</label>
                 <input
                   type="text"
                   required
@@ -999,7 +1019,7 @@ export const PhoneNumbersPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Business Address</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessAddress || 'Business Address'}</label>
                 <textarea
                   required
                   value={formData.business_address}
@@ -1014,10 +1034,10 @@ export const PhoneNumbersPage: React.FC = () => {
                   {requestLoading ? (
                     <>
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Requesting...
+                      {t?.phoneNumbers?.requesting || 'Requesting...'}
                     </>
                   ) : (
-                    'Request Number'
+                    t?.phoneNumbers?.requestNewNumber || 'Request New Number'
                   )}
                 </Button>
                 <Button
@@ -1026,7 +1046,7 @@ export const PhoneNumbersPage: React.FC = () => {
                   onClick={() => setShowRequestModal(false)}
                   className="flex-1"
                 >
-                  Cancel
+                  {t?.common?.cancel || 'Cancel'}
                 </Button>
               </div>
             </form>
@@ -1038,17 +1058,17 @@ export const PhoneNumbersPage: React.FC = () => {
       {showAssignAgentModal && selectedNumber && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="max-w-lg w-full">
-            <h2 className="text-2xl font-bold mb-4">Assign Agent to Phone Number</h2>
+            <h2 className="text-2xl font-bold mb-4">{t?.phoneNumbers?.assignAgentToPhoneNumber || 'Assign Agent to Phone Number'}</h2>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-              Choose which agent will handle calls to <strong>{selectedNumber.phone_number}</strong>
+              {t?.phoneNumbers?.chooseAgentDescription || 'Choose an agent to handle calls for'} <strong>{selectedNumber.phone_number}</strong>
             </p>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-2">Select Agent</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.selectAnAgent || 'Select an Agent'}</label>
                 {agents.length === 0 ? (
                   <div className="text-center py-8 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                    <p className="text-gray-500">No agents available</p>
-                    <p className="text-sm text-gray-400 mt-2">Create an agent first to assign to this number</p>
+                    <p className="text-gray-500">{t?.phoneNumbers?.noAgentsAvailable || 'No agents available'}</p>
+                    <p className="text-sm text-gray-400 mt-2">{t?.phoneNumbers?.createAgentFirst || 'Create an agent first'}</p>
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -1086,10 +1106,10 @@ export const PhoneNumbersPage: React.FC = () => {
                   {requestLoading ? (
                     <>
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Assigning...
+                      {t?.phoneNumbers?.assigning || 'Assigning...'}
                     </>
                   ) : (
-                    'Assign Agent'
+                    t?.phoneNumbers?.assignAgentButton || 'Assign Agent'
                   )}
                 </Button>
                 <Button
@@ -1102,7 +1122,7 @@ export const PhoneNumbersPage: React.FC = () => {
                   }}
                   className="flex-1"
                 >
-                  Cancel
+                  {t?.common?.cancel || 'Cancel'}
                 </Button>
               </div>
             </div>
@@ -1114,28 +1134,28 @@ export const PhoneNumbersPage: React.FC = () => {
       {showUploadModal && selectedNumber && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="max-w-lg w-full">
-            <h2 className="text-2xl font-bold mb-4">Upload Verification Document</h2>
+            <h2 className="text-2xl font-bold mb-4">{t.phoneNumbers.uploadVerificationDocument}</h2>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-              Upload documents for {selectedNumber.phone_number}
+              {t.phoneNumbers.uploadDocumentsFor} {selectedNumber.phone_number}
             </p>
             <form onSubmit={handleUploadDocument} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-2">Document Type</label>
+                <label className="block text-sm font-medium mb-2">{t.phoneNumbers.documentType}</label>
                 <select
                   value={uploadData.document_type}
                   onChange={(e) => setUploadData({ ...uploadData, document_type: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                 >
-                  <option value="company_registration">Company Registration</option>
-                  <option value="proof_of_address">Proof of Address</option>
-                  <option value="passport">Passport</option>
-                  <option value="national_id">National ID</option>
-                  <option value="other">Other</option>
+                  <option value="company_registration">{t.common.status === 'Statut' ? 'Enregistrement d\'entreprise' : 'Company Registration'}</option>
+                  <option value="proof_of_address">{t.common.status === 'Statut' ? 'Justificatif de domicile' : 'Proof of Address'}</option>
+                  <option value="passport">{t.common.status === 'Statut' ? 'Passeport' : 'Passport'}</option>
+                  <option value="national_id">{t.common.status === 'Statut' ? 'Carte d\'identité nationale' : 'National ID'}</option>
+                  <option value="other">{t.common.status === 'Statut' ? 'Autre' : 'Other'}</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">File</label>
+                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.file || 'File'}</label>
                 <input
                   type="file"
                   required
@@ -1146,7 +1166,7 @@ export const PhoneNumbersPage: React.FC = () => {
                   accept=".pdf,.jpg,.jpeg,.png"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Accepted formats: PDF, JPG, PNG (max 10MB)
+                  {t.common.status === 'Statut' ? 'Formats acceptés : PDF, JPG, PNG (max 10 Mo)' : 'Accepted formats: PDF, JPG, PNG (max 10MB)'}
                 </p>
               </div>
 
@@ -1155,12 +1175,12 @@ export const PhoneNumbersPage: React.FC = () => {
                   {uploadLoading ? (
                     <>
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Uploading...
+                      {t?.phoneNumbers?.uploading || 'Uploading...'}
                     </>
                   ) : (
                     <>
                       <CloudArrowUpIcon className="mr-2 h-4 w-4" />
-                      Upload
+                      {t?.phoneNumbers?.uploadDocumentButton || 'Upload Document'}
                     </>
                   )}
                 </Button>
@@ -1173,7 +1193,7 @@ export const PhoneNumbersPage: React.FC = () => {
                   }}
                   className="flex-1"
                 >
-                  Cancel
+                  {t?.common?.cancel || 'Cancel'}
                 </Button>
               </div>
             </form>
@@ -1185,19 +1205,19 @@ export const PhoneNumbersPage: React.FC = () => {
       {showPBXModal && pbxTargetNumber && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
           <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-2">Configure PBX Routing</h2>
+            <h2 className="text-2xl font-bold mb-2">{t?.phoneNumbers?.pbxConfiguration || 'PBX Configuration'}</h2>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-              Define business hours and IVR options for <strong>{pbxTargetNumber.phone_number}</strong>. During office hours, callers can navigate the menu; outside office hours they will follow the after-hours rule.
+              {t.common.status === 'Statut' ? 'Définissez les heures d\'ouverture et les options IVR pour' : 'Define business hours and IVR options for'} <strong>{pbxTargetNumber.phone_number}</strong>. {t.common.status === 'Statut' ? 'Pendant les heures de bureau, les appelants peuvent naviguer dans le menu ; en dehors des heures de bureau, ils suivront la règle hors heures.' : 'During office hours, callers can navigate the menu; outside office hours they will follow the after-hours rule.'}
             </p>
             <form onSubmit={handleSavePBX} className="space-y-6">
               <section>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Business Hours</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{t?.phoneNumbers?.businessHours || 'Business Hours'}</h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                  Select the timezone, opening hours, and days when callers should hear the IVR menu.
+                  {t.common.status === 'Statut' ? 'Sélectionnez le fuseau horaire, les heures d\'ouverture et les jours où les appelants doivent entendre le menu IVR.' : 'Select the timezone, opening hours, and days when callers should hear the IVR menu.'}
                 </p>
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">Timezone</label>
+                    <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.timezone || 'Timezone'}</label>
                     <select
                       value={pbxForm.business_hours.timezone}
                       onChange={(e) => updateBusinessHours('timezone', e.target.value)}
@@ -1212,7 +1232,7 @@ export const PhoneNumbersPage: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium mb-1">Open Time</label>
+                      <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.openTime || 'Open Time'}</label>
                       <input
                         type="time"
                         value={pbxForm.business_hours.open_time}
@@ -1222,7 +1242,7 @@ export const PhoneNumbersPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-1">Close Time</label>
+                      <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.closeTime || 'Close Time'}</label>
                       <input
                         type="time"
                         value={pbxForm.business_hours.close_time}
@@ -1234,7 +1254,7 @@ export const PhoneNumbersPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="mt-4">
-                  <label className="block text-sm font-medium mb-2">Active Days</label>
+                  <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.activeDays || 'Active Days'}</label>
                   <div className="flex flex-wrap gap-2">
                     {dayOptions.map((day) => {
                       const isActive = pbxForm.business_hours.days.includes(day.value);
@@ -1258,9 +1278,9 @@ export const PhoneNumbersPage: React.FC = () => {
               </section>
 
               <section>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Daytime Menu Options</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{t?.phoneNumbers?.menuOptions || 'Menu Options'}</h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                  Define the keypad options callers can press during business hours.
+                  {t.common.status === 'Statut' ? 'Définissez les options du clavier que les appelants peuvent appuyer pendant les heures de bureau.' : 'Define the keypad options callers can press during business hours.'}
                 </p>
                 <div className="space-y-4">
                   {pbxForm.menu_options.map((option, index) => (
@@ -1270,7 +1290,7 @@ export const PhoneNumbersPage: React.FC = () => {
                     >
                       <div className="flex justify-between items-center">
                         <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-                          Option #{index + 1}
+                          {t?.phoneNumbers?.option || 'Option'} #{index + 1}
                         </h4>
                         {pbxForm.menu_options.length > 1 && (
                           <button
@@ -1279,13 +1299,13 @@ export const PhoneNumbersPage: React.FC = () => {
                             className="text-red-600 hover:text-red-700 flex items-center gap-1 text-sm"
                           >
                             <TrashIcon className="h-4 w-4" />
-                            Remove
+                            {t?.common?.delete || 'Delete'}
                           </button>
                         )}
                       </div>
                       <div className="grid md:grid-cols-6 gap-3">
                         <div className="md:col-span-1">
-                          <label className="block text-sm font-medium mb-1">Key</label>
+                          <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.key || 'Key'}</label>
                           <input
                             type="text"
                             maxLength={1}
@@ -1297,17 +1317,17 @@ export const PhoneNumbersPage: React.FC = () => {
                           />
                         </div>
                         <div className="md:col-span-2">
-                          <label className="block text-sm font-medium mb-1">Label</label>
+                          <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.label || 'Label'}</label>
                           <input
                             type="text"
                             value={option.label || ''}
                             onChange={(e) => updateMenuOption(index, 'label', e.target.value)}
                             className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                            placeholder="Speak to sales"
+                            placeholder={t?.phoneNumbers?.speakToSales || 'Speak to sales'}
                           />
                         </div>
                         <div className="md:col-span-3">
-                          <label className="block text-sm font-medium mb-1">Destination</label>
+                          <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.destination || 'Destination'}</label>
                           <div className="grid grid-cols-2 gap-2">
                             <select
                               value={option.destination_type}
@@ -1320,10 +1340,10 @@ export const PhoneNumbersPage: React.FC = () => {
                               }
                               className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                             >
-                              <option value="agent">AI Agent (extension)</option>
-                              <option value="forward">Forward to phone</option>
-                              <option value="voicemail">Voicemail</option>
-                              <option value="external">External action</option>
+                              <option value="agent">{t.common.status === 'Statut' ? 'Agent IA (extension)' : 'AI Agent (extension)'}</option>
+                              <option value="forward">{t.common.status === 'Statut' ? 'Transférer vers téléphone' : 'Forward to phone'}</option>
+                              <option value="voicemail">{t.common.status === 'Statut' ? 'Messagerie vocale' : 'Voicemail'}</option>
+                              <option value="external">{t.common.status === 'Statut' ? 'Action externe' : 'External action'}</option>
                             </select>
                             {option.destination_type !== 'agent' && (
                               <input
@@ -1333,8 +1353,8 @@ export const PhoneNumbersPage: React.FC = () => {
                                 className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                                 placeholder={
                                   option.destination_type === 'voicemail'
-                                    ? 'Mailbox ID'
-                                    : 'Destination (e.g., +33123456789)'
+                                    ? (t.common.status === 'Statut' ? 'ID de boîte vocale' : 'Mailbox ID')
+                                    : (t.common.status === 'Statut' ? 'Destination (ex: +33123456789)' : 'Destination (e.g., +33123456789)')
                                 }
                                 required
                               />
@@ -1353,19 +1373,19 @@ export const PhoneNumbersPage: React.FC = () => {
                     className="text-indigo-600 hover:text-indigo-700"
                   >
                     <PlusCircleIcon className="h-5 w-5" />
-                    Add Menu Option
+                    {t?.phoneNumbers?.addMenuOption || 'Add Menu Option'}
                   </Button>
                 </div>
               </section>
 
               <section>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">After-Hours Routing</h3>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{t?.phoneNumbers?.afterHoursRouting || 'After Hours Routing'}</h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                  Choose what happens when customers call outside of business hours.
+                  {t.common.status === 'Statut' ? 'Choisissez ce qui se passe lorsque les clients appellent en dehors des heures de bureau.' : 'Choose what happens when customers call outside of business hours.'}
                 </p>
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">Destination</label>
+                    <label className="block text-sm font-medium mb-1">{t.common.status === 'Statut' ? 'Destination' : 'Destination'}</label>
                     <select
                       value={pbxForm.after_hours_routing.destination_type}
                       onChange={(e) =>
@@ -1376,36 +1396,36 @@ export const PhoneNumbersPage: React.FC = () => {
                       }
                       className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                     >
-                      <option value="agent">Connect to AI agent</option>
-                      <option value="forward">Forward to human phone</option>
-                      <option value="voicemail">Send to voicemail</option>
-                      <option value="external">External destination</option>
+                      <option value="agent">{t?.phoneNumbers?.connectToAIAgent || 'Connect to AI Agent'}</option>
+                      <option value="forward">{t?.common?.status === 'Statut' ? 'Transférer vers téléphone humain' : 'Forward to human phone'}</option>
+                      <option value="voicemail">{t?.phoneNumbers?.sendToVoicemail || 'Send to Voicemail'}</option>
+                      <option value="external">{(t?.phoneNumbers?.externalDestination || 'External Destination').replace(':', '')}</option>
                     </select>
                   </div>
                   {pbxForm.after_hours_routing.destination_type !== 'agent' && (
                     <div>
                       <label className="block text-sm font-medium mb-1">
-                        Destination Value
+                        {t?.phoneNumbers?.destinationValue || 'Destination Value'}
                       </label>
                       <input
                         type="text"
                         value={pbxForm.after_hours_routing.destination_value || ''}
                         onChange={(e) => updateAfterHours('destination_value', e.target.value)}
                         className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                        placeholder="e.g., +33123456789 or mailbox id"
+                        placeholder={t.common.status === 'Statut' ? 'ex: +33123456789 ou ID de boîte vocale' : 'e.g., +33123456789 or mailbox id'}
                         required
                       />
                     </div>
                   )}
                 </div>
                 <div className="mt-3">
-                  <label className="block text-sm font-medium mb-1">Message (optional)</label>
+                  <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.message || 'Message'} ({t?.phoneNumbers?.optional || 'Optional'})</label>
                   <textarea
                     value={pbxForm.after_hours_routing.message || ''}
                     onChange={(e) => updateAfterHours('message', e.target.value)}
                     className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                     rows={3}
-                    placeholder="Our offices are currently closed..."
+                    placeholder={t.common.status === 'Statut' ? 'Nos bureaux sont actuellement fermés...' : 'Our offices are currently closed...'}
                   />
                 </div>
               </section>
@@ -1418,10 +1438,10 @@ export const PhoneNumbersPage: React.FC = () => {
                   className="md:w-auto w-full"
                   disabled={pbxSaving}
                 >
-                  Cancel
+                  {t?.common?.cancel || 'Cancel'}
                 </Button>
                 <Button type="submit" className="md:w-auto w-full" loading={pbxSaving}>
-                  Save PBX Configuration
+                  {pbxSaving ? (t?.phoneNumbers?.saving || 'Saving...') : (t?.phoneNumbers?.savePBX || 'Save PBX')}
                 </Button>
               </div>
             </form>

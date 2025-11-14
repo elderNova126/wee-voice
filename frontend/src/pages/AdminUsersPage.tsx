@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { adminAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -41,6 +42,7 @@ interface UserStats {
 }
 
 export default function AdminUsersPage() {
+  const t = useTranslation()
   const [users, setUsers] = useState<User[]>([])
   const [stats, setStats] = useState<UserStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -69,7 +71,7 @@ export default function AdminUsersPage() {
       setStats(statsRes.data)
     } catch (error: any) {
       console.error('Failed to load data:', error)
-      toast.error(error.response?.data?.detail || 'Failed to load users')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Échec du chargement des utilisateurs' : 'Failed to load users'))
     } finally {
       setLoading(false)
     }
@@ -78,40 +80,40 @@ export default function AdminUsersPage() {
   const handleApprove = async (userId: number) => {
     try {
       await adminAPI.approveUser(userId)
-      toast.success('User approved')
+      toast.success(t.admin.approveSuccess)
       loadData()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to approve user')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Échec de l\'approbation de l\'utilisateur' : 'Failed to approve user'))
     }
   }
 
   const handleReject = async (userId: number) => {
     try {
       await adminAPI.rejectUser(userId)
-      toast.success('User rejected')
+      toast.success(t.admin.rejectSuccess)
       loadData()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to reject user')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Échec du rejet de l\'utilisateur' : 'Failed to reject user'))
     }
   }
 
   const handleActivate = async (userId: number) => {
     try {
       await adminAPI.activateUser(userId)
-      toast.success('User activated')
+      toast.success(t.admin.activateSuccess)
       loadData()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to activate user')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Échec de l\'activation de l\'utilisateur' : 'Failed to activate user'))
     }
   }
 
   const handleDeactivate = async (userId: number) => {
     try {
       await adminAPI.deactivateUser(userId)
-      toast.success('User deactivated')
+      toast.success(t.admin.deactivateSuccess)
       loadData()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to deactivate user')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Échec de la désactivation de l\'utilisateur' : 'Failed to deactivate user'))
     }
   }
 
@@ -127,10 +129,10 @@ export default function AdminUsersPage() {
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            User Management
+            {t.admin.usersTitle}
           </h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Manage user accounts, approvals, and permissions
+            {t.common.status === 'Statut' ? 'Gérez les comptes utilisateurs, les approbations et les permissions' : 'Manage user accounts, approvals, and permissions'}
           </p>
         </div>
 
@@ -138,30 +140,30 @@ export default function AdminUsersPage() {
         {stats && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <StatCard
-              title="Total Users"
+              title={t.common.status === 'Statut' ? 'Total Utilisateurs' : 'Total Users'}
               value={stats.total_users}
               icon={<UserCircleIcon className="w-5 h-5" />}
             />
             <StatCard
-              title="Pending Approval"
+              title={t.common.status === 'Statut' ? 'En attente d\'approbation' : 'Pending Approval'}
               value={stats.pending_users}
               icon={<UserCircleIcon className="w-5 h-5" />}
               iconColor="from-yellow-500 to-yellow-600"
             />
             <StatCard
-              title="Approved Users"
+              title={t.common.status === 'Statut' ? 'Utilisateurs approuvés' : 'Approved Users'}
               value={stats.approved_users}
               icon={<CheckCircleIcon className="w-5 h-5" />}
               iconColor="from-green-500 to-green-600"
             />
             <StatCard
-              title="Active Users"
+              title={t.common.status === 'Statut' ? 'Utilisateurs actifs' : 'Active Users'}
               value={stats.active_users}
               icon={<CheckCircleIcon className="w-5 h-5" />}
               iconColor="from-blue-500 to-blue-600"
             />
             <StatCard
-              title="Admin Users"
+              title={t.common.status === 'Statut' ? 'Utilisateurs Admin' : 'Admin Users'}
               value={stats.admin_users}
               icon={<UserCircleIcon className="w-5 h-5" />}
               iconColor="from-purple-500 to-purple-600"
@@ -177,7 +179,7 @@ export default function AdminUsersPage() {
               <div className="flex-1">
                 <Input
                   type="text"
-                  placeholder="Search by email or name..."
+                  placeholder={t.common.status === 'Statut' ? 'Rechercher par email ou nom...' : 'Search by email or name...'}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   icon={<MagnifyingGlassIcon className="w-5 h-5" />}
@@ -196,9 +198,9 @@ export default function AdminUsersPage() {
                 }
                 className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               >
-                <option value="">All Approval Status</option>
-                <option value="true">Approved</option>
-                <option value="false">Pending</option>
+                <option value="">{t.common.status === 'Statut' ? 'Tous les statuts d\'approbation' : 'All Approval Status'}</option>
+                <option value="true">{t.admin.approved}</option>
+                <option value="false">{t.admin.pending}</option>
               </select>
 
               {/* Active Filter */}
@@ -211,9 +213,9 @@ export default function AdminUsersPage() {
                 }
                 className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               >
-                <option value="">All Status</option>
-                <option value="true">Active</option>
-                <option value="false">Inactive</option>
+                <option value="">{t.common.status === 'Statut' ? 'Tous les statuts' : 'All Status'}</option>
+                <option value="true">{t.admin.active}</option>
+                <option value="false">{t.admin.inactive}</option>
               </select>
 
               {/* Clear Filters */}
@@ -223,7 +225,7 @@ export default function AdminUsersPage() {
                   onClick={clearFilters}
                   icon={<ArrowPathIcon className="w-4 h-4" />}
                 >
-                  Clear
+                  {t.common.status === 'Statut' ? 'Effacer' : 'Clear'}
                 </Button>
               )}
             </div>
@@ -236,14 +238,14 @@ export default function AdminUsersPage() {
             <div className="p-8 text-center">
               <ArrowPathIcon className="h-8 w-8 animate-spin mx-auto text-gray-400" />
               <p className="mt-2 text-gray-600 dark:text-gray-400">
-                Loading users...
+                {t.common.status === 'Statut' ? 'Chargement des utilisateurs...' : 'Loading users...'}
               </p>
             </div>
           ) : users.length === 0 ? (
             <div className="p-8 text-center">
               <UserCircleIcon className="h-12 w-12 mx-auto text-gray-400" />
               <p className="mt-2 text-gray-600 dark:text-gray-400">
-                No users found
+                {t.common.status === 'Statut' ? 'Aucun utilisateur trouvé' : 'No users found'}
               </p>
             </div>
           ) : (
@@ -252,22 +254,22 @@ export default function AdminUsersPage() {
                 <thead className="bg-gray-50 dark:bg-gray-800">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      User
+                      {t.common.status === 'Statut' ? 'Utilisateur' : 'User'}
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Status
+                      {t.common.status}
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Subscription
+                      {t.common.status === 'Statut' ? 'Abonnement' : 'Subscription'}
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Usage
+                      {t.common.status === 'Statut' ? 'Utilisation' : 'Usage'}
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Created
+                      {t.common.status === 'Statut' ? 'Créé' : 'Created'}
                     </th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                      Actions
+                      {t.common.actions}
                     </th>
                   </tr>
                 </thead>
@@ -301,15 +303,15 @@ export default function AdminUsersPage() {
                               user.is_approved ? 'success' : 'warning'
                             }
                           >
-                            {user.is_approved ? 'Approved' : 'Pending'}
+                            {user.is_approved ? t.admin.approved : t.admin.pending}
                           </Badge>
                           <Badge
                             variant={user.is_active ? 'success' : 'danger'}
                           >
-                            {user.is_active ? 'Active' : 'Inactive'}
+                            {user.is_active ? t.admin.active : t.admin.inactive}
                           </Badge>
                           {user.is_superuser && (
-                            <Badge variant="info">Admin</Badge>
+                            <Badge variant="info">{t.common.status === 'Statut' ? 'Admin' : 'Admin'}</Badge>
                           )}
                         </div>
                       </td>
@@ -320,10 +322,10 @@ export default function AdminUsersPage() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                         <div>
-                          {user.total_minutes_used.toFixed(1)} min total
+                          {user.total_minutes_used.toFixed(1)} {t.common.status === 'Statut' ? 'min au total' : 'min total'}
                         </div>
                         <div className="text-xs">
-                          {user.monthly_minutes_used.toFixed(1)} min this month
+                          {user.monthly_minutes_used.toFixed(1)} {t.common.status === 'Statut' ? 'min ce mois' : 'min this month'}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
@@ -339,7 +341,7 @@ export default function AdminUsersPage() {
                               icon={<CheckCircleIcon className="w-4 h-4" />}
                               className="bg-green-600 hover:bg-green-700 focus:ring-green-500"
                             >
-                              Approve
+                              {t.admin.approve}
                             </Button>
                           )}
                           {user.is_approved && (
@@ -349,7 +351,7 @@ export default function AdminUsersPage() {
                               onClick={() => handleReject(user.id)}
                               icon={<XCircleIcon className="w-4 h-4" />}
                             >
-                              Reject
+                              {t.admin.reject}
                             </Button>
                           )}
                           {!user.is_active && (
@@ -359,7 +361,7 @@ export default function AdminUsersPage() {
                               onClick={() => handleActivate(user.id)}
                               className="bg-green-600 hover:bg-green-700 focus:ring-green-500"
                             >
-                              Activate
+                              {t.admin.activate}
                             </Button>
                           )}
                           {user.is_active && (
@@ -368,7 +370,7 @@ export default function AdminUsersPage() {
                               variant="danger"
                               onClick={() => handleDeactivate(user.id)}
                             >
-                              Deactivate
+                              {t.admin.deactivate}
                             </Button>
                           )}
                         </div>

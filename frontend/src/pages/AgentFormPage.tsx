@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom'
+import { useTranslation } from '@/lib/translations'
 import { 
   ArrowLeftIcon, 
   CloudArrowUpIcon, 
@@ -36,6 +37,7 @@ export default function AgentFormPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const t = useTranslation()
   const isEdit = Boolean(id)
   const libraryId = searchParams.get('library')
 
@@ -142,10 +144,10 @@ export default function AgentFormPage() {
     try {
       if (isEdit && id) {
         await agentsAPI.update(Number(id), formData)
-        toast.success('✅ Agent updated successfully')
+        toast.success(t.agentForm.agentUpdated)
       } else {
         await agentsAPI.create(formData)
-        toast.success('🎉 Agent created successfully')
+        toast.success(t.agentForm.agentCreated)
         
         // If created from library, increment usage count
         if (libraryId) {
@@ -162,7 +164,7 @@ export default function AgentFormPage() {
       }
       navigate('/dashboard/agents')
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to save agent.')
+      toast.error(err.response?.data?.detail || (isEdit ? t.agentForm.agentUpdateError : t.agentForm.agentCreateError))
     } finally {
       setLoading(false)
     }
@@ -170,7 +172,7 @@ export default function AgentFormPage() {
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!id) {
-      toast.error('Please save the agent first before uploading documents')
+      toast.error(t.agentForm.saveAgentFirst)
       return
     }
 
@@ -287,13 +289,13 @@ export default function AgentFormPage() {
             className="inline-flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition"
           >
             <ArrowLeftIcon className="mr-1 h-4 w-4" />
-            Back to Agents
+            {t.agentForm.backToAgents}
           </Link>
           <h1 className="mt-2 text-3xl font-semibold text-gray-900 dark:text-white tracking-tight">
-            {isEdit ? 'Edit Agent' : 'Create New Agent'}
+            {isEdit ? t.agentForm.editAgent : t.agentForm.createNewAgent}
           </h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Configure details, behavior, and language for your AI agent.
+            {t.agentForm.configureDetails}
           </p>
         </div>
       </div>
@@ -312,7 +314,7 @@ export default function AgentFormPage() {
             {/* Agent Name */}
             <div className="group">
               <label htmlFor="name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Agent Name *
+                {t.agentForm.agentName}
               </label>
               <input
                 id="name"
@@ -320,7 +322,7 @@ export default function AgentFormPage() {
                 required
                 value={formData.name}
                 onChange={handleChange}
-                placeholder="Customer Support Bot"
+                placeholder={t.agentForm.agentNamePlaceholder}
                 className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all"
               />
             </div>
@@ -328,7 +330,7 @@ export default function AgentFormPage() {
             {/* Description */}
             <div>
               <label htmlFor="description" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Description
+                {t.agentForm.description}
               </label>
               <textarea
                 id="description"
@@ -336,7 +338,7 @@ export default function AgentFormPage() {
                 rows={3}
                 value={formData.description}
                 onChange={handleChange}
-                placeholder="Briefly describe this agent's role..."
+                placeholder={t.agentForm.descriptionPlaceholder}
                 className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all resize-none"
               />
             </div>
@@ -344,7 +346,7 @@ export default function AgentFormPage() {
             {/* Greeting */}
             <div>
               <label htmlFor="greeting" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Greeting Message
+                {t.agentForm.greeting}
               </label>
               <textarea
                 id="greeting"
@@ -352,22 +354,18 @@ export default function AgentFormPage() {
                 rows={2}
                 value={formData.greeting}
                 onChange={handleChange}
-                placeholder={
-                  formData.language === 'fr-FR'
-                    ? "Bonjour, je suis assistante chez Weedoo. Comment puis-je vous aider ?"
-                    : "Hello, I'm a assistant from Weedoo. How can I help you?"
-                }
+                placeholder={t.agentForm.greetingPlaceholder}
                 className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all resize-none"
               />
               <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                First message the agent will say when starting a conversation.
+                {t.agentForm.greetingPlaceholder.includes('Bonjour') ? 'Premier message que l\'agent dira au début d\'une conversation.' : 'First message the agent will say when starting a conversation.'}
               </p>
             </div>
 
             {/* Language */}
             <div>
               <label htmlFor="language" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Language *
+                {t.agentForm.language} *
               </label>
               <select
                 id="language"
@@ -385,7 +383,7 @@ export default function AgentFormPage() {
             {/* Voice Gender */}
             <div>
               <label htmlFor="voice_gender" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Voice Type *
+                {t.agentForm.voiceGender} *
               </label>
               <select
                 id="voice_gender"
@@ -415,7 +413,7 @@ export default function AgentFormPage() {
                   className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">
-                  Active (can receive calls)
+                  {t.agentForm.isActive} {t.common.status === 'Statut' ? '(peut recevoir des appels)' : '(can receive calls)'}
                 </span>
               </label>
 
@@ -428,7 +426,7 @@ export default function AgentFormPage() {
                   className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">
-                  Public (no authentication)
+                  {t.agentForm.isPublic} {t.common.status === 'Statut' ? '(sans authentification)' : '(no authentication)'}
                 </span>
               </label>
 
@@ -441,7 +439,7 @@ export default function AgentFormPage() {
                   className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">
-                  Enable Knowledge Base (RAG)
+                  {t.agentForm.ragEnabled}
                 </span>
               </label>
             </div>
@@ -450,7 +448,7 @@ export default function AgentFormPage() {
           {/* RIGHT COLUMN */}
           <div>
             <label htmlFor="system_prompt" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              System Prompt *
+              {t.agentForm.systemPrompt} *
             </label>
             <textarea
               id="system_prompt"
@@ -460,14 +458,10 @@ export default function AgentFormPage() {
               value={formData.system_prompt}
               onChange={handleChange}
               className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 font-mono text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all resize-none"
-              placeholder={
-                formData.language === 'fr-FR'
-                  ? 'Tu es un assistant vocal intelligent et serviable.\nRéponds avec courtoisie et précision.'
-                  : 'You are a helpful and intelligent voice assistant.\nRespond courteously and clearly.'
-              }
+              placeholder={t.agentForm.systemPromptPlaceholder}
             />
             <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              Defines the assistant’s tone, context, and behavior.
+              {t.common.status === 'Statut' ? 'Définit le ton, le contexte et le comportement de l\'assistant.' : 'Defines the assistant\'s tone, context, and behavior.'}
             </p>
           </div>
         </div>
@@ -476,10 +470,10 @@ export default function AgentFormPage() {
         {isEdit && formData.rag_enabled && (
           <div className="mt-8 border-t border-gray-200 dark:border-gray-700/60 pt-8">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              📚 Knowledge Base
+              📚 {t.agentForm.ragEnabled}
             </h3>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-              Upload PDFs or add websites to give your agent knowledge for answering questions.
+              {t.common.status === 'Statut' ? 'Téléchargez des PDF ou ajoutez des sites web pour donner des connaissances à votre agent pour répondre aux questions.' : 'Upload PDFs or add websites to give your agent knowledge for answering questions.'}
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -487,7 +481,7 @@ export default function AgentFormPage() {
               <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center hover:border-primary-400 dark:hover:border-primary-500 transition">
                 <CloudArrowUpIcon className="w-10 h-10 text-gray-400 mx-auto mb-3" />
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                  Upload PDF Document
+                  {t.agentForm.uploadDocument}
                 </p>
                 <label className="cursor-pointer">
                   <input
@@ -498,7 +492,7 @@ export default function AgentFormPage() {
                     disabled={uploading}
                   />
                   <span className="inline-block px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50">
-                    {uploading ? 'Uploading...' : 'Choose PDF'}
+                    {uploading ? (t.common.status === 'Statut' ? 'Téléchargement...' : 'Uploading...') : (t.common.status === 'Statut' ? 'Choisir PDF' : 'Choose PDF')}
                   </span>
                 </label>
                 <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">Max 10MB</p>
@@ -508,14 +502,14 @@ export default function AgentFormPage() {
               <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 hover:border-primary-400 dark:hover:border-primary-500 transition">
                 <DocumentTextIcon className="w-10 h-10 text-gray-400 mx-auto mb-3" />
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                  Scrape Website
+                  {t.agentForm.addWebsite}
                 </p>
                 <div className="flex gap-2">
                   <input
                     type="url"
                     value={websiteUrl}
                     onChange={(e) => setWebsiteUrl(e.target.value)}
-                    placeholder="https://example.com"
+                    placeholder={t.agentForm.websiteUrl}
                     className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900/60 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-400"
                     disabled={uploading}
                   />
@@ -525,7 +519,7 @@ export default function AgentFormPage() {
                     disabled={uploading || !websiteUrl}
                     className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50"
                   >
-                    Add
+                    {t.common.status === 'Statut' ? 'Ajouter' : 'Add'}
                   </button>
                 </div>
               </div>
@@ -535,7 +529,7 @@ export default function AgentFormPage() {
             {documents.length > 0 && (
               <div className="space-y-2">
                 <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                  Uploaded Knowledge ({documents.length})
+                  {t.agentForm.documents} ({documents.length})
                 </h4>
                 {documents.map((doc) => (
                   <div
@@ -549,9 +543,9 @@ export default function AgentFormPage() {
                           {doc.original_filename}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {doc.status === 'completed' && `${doc.total_chunks} chunks`}
-                          {doc.status === 'processing' && 'Processing...'}
-                          {doc.status === 'failed' && 'Failed'}
+                          {doc.status === 'completed' && `${doc.total_chunks} ${t.common.status === 'Statut' ? 'morceaux' : 'chunks'}`}
+                          {doc.status === 'processing' && t.agentForm.processing}
+                          {doc.status === 'failed' && t.agentForm.failed}
                         </p>
                       </div>
                       {doc.status === 'completed' && (
@@ -562,6 +556,7 @@ export default function AgentFormPage() {
                       type="button"
                       onClick={() => handleDeleteDocument(doc.id)}
                       className="ml-3 p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition"
+                      title={t.agentForm.deleteDocument}
                     >
                       <TrashIcon className="w-4 h-4" />
                     </button>
@@ -572,7 +567,7 @@ export default function AgentFormPage() {
 
             {documents.length === 0 && (
               <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
-                No documents added yet. Upload a PDF or add a website above.
+                {t.agentForm.noDocuments} {t.common.status === 'Statut' ? 'Téléchargez un PDF ou ajoutez un site web ci-dessus.' : 'Upload a PDF or add a website above.'}
               </div>
             )}
           </div>
@@ -594,14 +589,14 @@ export default function AgentFormPage() {
             to="/dashboard/agents"
             className="inline-flex items-center justify-center rounded-lg border border-gray-300 dark:border-gray-600 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
           >
-            Cancel
+            {t.common.cancel}
           </Link>
           <button
             type="submit"
             disabled={loading}
             className="inline-flex items-center justify-center rounded-lg bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-700 hover:to-primary-600 text-white px-5 py-2 text-sm font-medium shadow-md transition disabled:opacity-70"
           >
-            {loading ? 'Saving...' : isEdit ? 'Update Agent' : 'Create Agent'}
+            {loading ? (t.common.status === 'Statut' ? 'Enregistrement...' : 'Saving...') : isEdit ? t.agentForm.editAgent : t.agentForm.createNewAgent}
           </button>
         </div>
       </form>

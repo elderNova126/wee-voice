@@ -5,6 +5,8 @@ import { Button } from '../components/ui/Button';
 import DashboardLayout from '../layouts/DashboardLayout';
 import api from '../lib/api';
 import { ClipboardDocumentIcon, CodeBracketIcon, CheckCircleIcon, GlobeAltIcon, Cog6ToothIcon } from '@heroicons/react/24/outline'
+import { useTranslation } from '../lib/translations';
+import toast from 'react-hot-toast';
 
 interface EmbedConfig {
   embed_enabled: boolean;
@@ -21,6 +23,7 @@ interface Agent {
 }
 
 export const AgentEmbedPage: React.FC = () => {
+  const t = useTranslation();
   const { agentId } = useParams<{ agentId: string }>();
   const [agent, setAgent] = useState<Agent | null>(null);
   const [config, setConfig] = useState<EmbedConfig>({
@@ -81,15 +84,16 @@ export const AgentEmbedPage: React.FC = () => {
         await loadEmbedCode();
       }
       
-      alert('Embed configuration saved successfully!');
+      toast.success(t.agentEmbed.saveSuccess);
     } catch (error: any) {
-      alert('Error saving configuration: ' + (error.response?.data?.detail || error.message));
+      toast.error(t.agentEmbed.saveError + ': ' + (error.response?.data?.detail || error.message));
     }
   };
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(embedCode);
     setCopied(true);
+    toast.success(t.agentEmbed.codeCopied);
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -148,10 +152,10 @@ export const AgentEmbedPage: React.FC = () => {
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            Website Embed - {agent?.name || 'Loading...'}
+            {t.agentEmbed.title} - {agent?.name || t.common.loading}
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Configure and integrate your voice agent into your website
+            {t.common.status === 'Statut' ? 'Configurez et intégrez votre agent vocal dans votre site web' : 'Configure and integrate your voice agent into your website'}
           </p>
         </div>
 
@@ -160,7 +164,7 @@ export const AgentEmbedPage: React.FC = () => {
         <div className="flex items-center gap-3 mb-6">
           <Cog6ToothIcon className="text-indigo-600 h-6 w-6" />
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-            Embed Configuration
+            {t.agentEmbed.embedConfiguration}
           </h2>
         </div>
 
@@ -169,10 +173,10 @@ export const AgentEmbedPage: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-                Enable Website Embed
+                {t.agentEmbed.enableEmbed}
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Allow this agent to be embedded on websites
+                {t.common.status === 'Statut' ? 'Autoriser cet agent à être intégré sur les sites web' : 'Allow this agent to be embedded on websites'}
               </p>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
@@ -189,7 +193,7 @@ export const AgentEmbedPage: React.FC = () => {
           {/* Widget Color */}
           <div>
             <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
-              Widget Color
+              {t.agentEmbed.widgetColor}
             </label>
             <div className="flex items-center gap-3">
               <input
@@ -211,22 +215,24 @@ export const AgentEmbedPage: React.FC = () => {
           {/* Widget Position */}
           <div>
             <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
-              Widget Position
+              {t.agentEmbed.widgetPosition}
             </label>
             <select
               value={config.embed_position}
               onChange={(e) => setConfig({ ...config, embed_position: e.target.value })}
               className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
             >
-              <option value="bottom-right">Bottom Right</option>
-              <option value="bottom-left">Bottom Left</option>
+              <option value="bottom-right">{t.agentEmbed.bottomRight}</option>
+              <option value="bottom-left">{t.agentEmbed.bottomLeft}</option>
+              <option value="top-right">{t.agentEmbed.topRight}</option>
+              <option value="top-left">{t.agentEmbed.topLeft}</option>
             </select>
           </div>
 
           {/* Greeting Message */}
           <div>
             <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
-              Greeting Message
+              {t.agentEmbed.greetingMessage}
             </label>
             <textarea
               value={config.embed_greeting_message}
@@ -240,10 +246,10 @@ export const AgentEmbedPage: React.FC = () => {
           {/* Allowed Domains */}
           <div>
             <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
-              Allowed Domains (Optional)
+              {t.agentEmbed.allowedDomains} ({t.common.status === 'Statut' ? 'Optionnel' : 'Optional'})
             </label>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-              Restrict which websites can embed this agent. Leave empty to allow all domains.
+              {t.common.status === 'Statut' ? 'Restreignez les sites web qui peuvent intégrer cet agent. Laissez vide pour autoriser tous les domaines.' : 'Restrict which websites can embed this agent. Leave empty to allow all domains.'}
             </p>
             
             <div className="flex gap-2 mb-3">
@@ -253,10 +259,10 @@ export const AgentEmbedPage: React.FC = () => {
                 onChange={(e) => setDomainInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleAddDomain()}
                 className="flex-1 px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                placeholder="example.com"
+                placeholder={t.agentEmbed.domainPlaceholder}
               />
               <Button onClick={handleAddDomain} variant="outline">
-                Add
+                {t.agentEmbed.addDomain}
               </Button>
             </div>
 
@@ -285,7 +291,7 @@ export const AgentEmbedPage: React.FC = () => {
           <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
             <Button onClick={handleSaveConfig} className="w-full">
               <CheckCircleIcon className="mr-2 h-4 w-4" />
-              Save Configuration
+              {t.agentEmbed.saveConfig}
             </Button>
           </div>
         </div>
@@ -297,14 +303,13 @@ export const AgentEmbedPage: React.FC = () => {
           <div className="flex items-center gap-3 mb-6">
             <CodeBracketIcon className="text-indigo-600 h-6 w-6" />
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-              Embed Code
+              {t.agentEmbed.embedCode}
             </h2>
           </div>
 
           <div className="space-y-4">
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Copy and paste this code snippet into your website's HTML, just before the closing
-              &lt;/body&gt; tag.
+              {t.common.status === 'Statut' ? 'Copiez et collez cet extrait de code dans le HTML de votre site web, juste avant la balise de fermeture' : 'Copy and paste this code snippet into your website\'s HTML, just before the closing'} &lt;/body&gt; {t.common.status === 'Statut' ? 'tag.' : 'tag.'}
             </p>
 
             <div className="relative">
@@ -320,12 +325,12 @@ export const AgentEmbedPage: React.FC = () => {
                 {copied ? (
                   <>
                     <CheckCircleIcon className="mr-2 h-4 w-4" />
-                    Copied!
+                    {t.agentEmbed.codeCopied}
                   </>
                 ) : (
                   <>
                     <ClipboardDocumentIcon className="mr-2 h-4 w-4" />
-                    Copy Code
+                    {t.agentEmbed.copyCode}
                   </>
                 )}
               </Button>
@@ -334,21 +339,21 @@ export const AgentEmbedPage: React.FC = () => {
             {/* Installation Instructions */}
             <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
               <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-200 mb-2">
-                Installation Instructions
+                {t.common.status === 'Statut' ? 'Instructions d\'installation' : 'Installation Instructions'}
               </h3>
               <ol className="list-decimal list-inside space-y-2 text-sm text-blue-800 dark:text-blue-300">
-                <li>Copy the embed code above</li>
-                <li>Open your website's HTML file</li>
-                <li>Paste the code just before the closing &lt;/body&gt; tag</li>
-                <li>Save and deploy your website</li>
-                <li>The voice agent widget will appear on your website!</li>
+                <li>{t.common.status === 'Statut' ? 'Copiez le code d\'intégration ci-dessus' : 'Copy the embed code above'}</li>
+                <li>{t.common.status === 'Statut' ? 'Ouvrez le fichier HTML de votre site web' : 'Open your website\'s HTML file'}</li>
+                <li>{t.common.status === 'Statut' ? 'Collez le code juste avant la balise de fermeture' : 'Paste the code just before the closing'} &lt;/body&gt; {t.common.status === 'Statut' ? 'tag' : 'tag'}</li>
+                <li>{t.common.status === 'Statut' ? 'Enregistrez et déployez votre site web' : 'Save and deploy your website'}</li>
+                <li>{t.common.status === 'Statut' ? 'Le widget de l\'agent vocal apparaîtra sur votre site web !' : 'The voice agent widget will appear on your website!'}</li>
               </ol>
             </div>
 
             {/* Preview */}
             <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg">
               <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                Preview
+                {t.common.status === 'Statut' ? 'Aperçu' : 'Preview'}
               </h3>
               <div className="flex items-center gap-3">
                 <div
@@ -359,13 +364,13 @@ export const AgentEmbedPage: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-gray-900 dark:text-white">
-                    Voice Agent Widget
+                    {t.common.status === 'Statut' ? 'Widget Agent Vocal' : 'Voice Agent Widget'}
                   </p>
                   <p className="text-xs text-gray-600 dark:text-gray-400">
-                    Position: {config.embed_position}
+                    {t.common.status === 'Statut' ? 'Position:' : 'Position:'} {config.embed_position === 'bottom-right' ? t.agentEmbed.bottomRight : config.embed_position === 'bottom-left' ? t.agentEmbed.bottomLeft : config.embed_position === 'top-right' ? t.agentEmbed.topRight : t.agentEmbed.topLeft}
                   </p>
                   <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                    {config.embed_greeting_message || `Hi! I'm ${agent?.name}. How can I help you?`}
+                    {config.embed_greeting_message || (t.common.status === 'Statut' ? `Bonjour ! Je suis ${agent?.name}. Comment puis-je vous aider ?` : `Hi! I'm ${agent?.name}. How can I help you?`)}
                   </p>
                 </div>
               </div>
@@ -379,10 +384,10 @@ export const AgentEmbedPage: React.FC = () => {
           <div className="text-center py-12">
             <CodeBracketIcon className="mx-auto h-12 w-12 text-gray-400" />
             <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">
-              Embed Not Enabled
+              {t.common.status === 'Statut' ? 'Intégration non activée' : 'Embed Not Enabled'}
             </h3>
             <p className="mt-2 text-gray-600 dark:text-gray-400">
-              Enable the website embed feature above to generate your embed code.
+              {t.common.status === 'Statut' ? 'Activez la fonctionnalité d\'intégration de site web ci-dessus pour générer votre code d\'intégration.' : 'Enable the website embed feature above to generate your embed code.'}
             </p>
           </div>
         </Card>

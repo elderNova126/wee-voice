@@ -4,6 +4,7 @@ import { ArrowLeftIcon } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { integrationsAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface IntegrationFormData {
   name: string
@@ -74,6 +75,7 @@ const CONFIG_TEMPLATES: Record<string, Record<string, any>> = {
 }
 
 export default function IntegrationFormPage() {
+  const t = useTranslation()
   const { id } = useParams()
   const navigate = useNavigate()
   const isEdit = Boolean(id)
@@ -130,12 +132,12 @@ export default function IntegrationFormPage() {
         config: integration.config || {},
       })
     } catch (err) {
-      toast.error('Failed to load integration.')
+      toast.error(t.integrations.loadIntegrationError)
       navigate('/dashboard/integrations')
     } finally {
       setLoadingIntegration(false)
     }
-  }, [navigate])
+  }, [navigate, t])
 
   useEffect(() => {
     if (isEdit && id) loadIntegration(parseInt(id))
@@ -175,14 +177,14 @@ export default function IntegrationFormPage() {
     try {
       if (isEdit && id) {
         await integrationsAPI.update(Number(id), formData)
-        toast.success('✅ Integration updated successfully')
+        toast.success(t.integrations.updateSuccess)
       } else {
         await integrationsAPI.create(formData)
-        toast.success('🎉 Integration created successfully')
+        toast.success(t.integrations.createSuccess)
       }
       navigate('/dashboard/integrations')
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to save integration.')
+      toast.error(err.response?.data?.detail || t.integrations.saveError)
     } finally {
       setLoading(false)
     }
@@ -196,7 +198,7 @@ export default function IntegrationFormPage() {
 
     return (
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Configuration</h3>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{t.integrations.configuration}</h3>
         {Object.keys(template).map((key) => {
           const isPassword = key.toLowerCase().includes('password') || key.toLowerCase().includes('token')
           const value = config[key] || ''
@@ -205,7 +207,7 @@ export default function IntegrationFormPage() {
             return (
               <div key={key} className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Headers (JSON)
+                  {t.integrations.headersJson}
                 </label>
                 <textarea
                   name={`config.${key}`}
@@ -230,7 +232,7 @@ export default function IntegrationFormPage() {
             <div key={key}>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                {typeof template[key] === 'number' && ' (Number)'}
+                {typeof template[key] === 'number' && (t.common.status === 'Statut' ? ' (Nombre)' : ' (Number)')}
               </label>
               <input
                 type={isPassword ? 'password' : typeof template[key] === 'number' ? 'number' : 'text'}
@@ -245,7 +247,7 @@ export default function IntegrationFormPage() {
           )
         })}
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          ⚠️ Credentials are stored securely. Make sure to use valid credentials for your integration.
+          {t.integrations.credentialsWarning}
         </p>
       </div>
     )
@@ -270,17 +272,17 @@ export default function IntegrationFormPage() {
           className="inline-flex items-center text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-6"
         >
           <ArrowLeftIcon className="h-4 w-4 mr-1" />
-          Back to Integrations
+          {t.integrations.backToIntegrations}
         </Link>
 
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-8">
-          {isEdit ? 'Edit Integration' : 'New Integration'}
+          {isEdit ? t.integrations.editIntegrationTitle : t.integrations.newIntegrationTitle}
         </h1>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Name *
+              {t.integrations.name}
             </label>
             <input
               type="text"
@@ -289,13 +291,13 @@ export default function IntegrationFormPage() {
               onChange={handleChange}
               required
               className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-              placeholder="My Google Calendar"
+              placeholder={t.integrations.namePlaceholder}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Description
+              {t.integrations.description}
             </label>
             <textarea
               name="description"
@@ -303,13 +305,13 @@ export default function IntegrationFormPage() {
               onChange={handleChange}
               rows={3}
               className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-              placeholder="Optional description for this integration"
+              placeholder={t.integrations.descriptionPlaceholder}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Integration Type *
+              {t.integrations.integrationType}
             </label>
             <select
               name="integration_type"
@@ -318,7 +320,7 @@ export default function IntegrationFormPage() {
               required
               className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
             >
-              <option value="">Select a type</option>
+              <option value="">{t.integrations.selectType}</option>
               {typesData.types.map((type) => (
                 <option key={type} value={type}>
                   {type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
@@ -330,7 +332,7 @@ export default function IntegrationFormPage() {
           {formData.integration_type && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Provider *
+                {t.integrations.provider}
               </label>
               <select
                 name="provider"
@@ -339,7 +341,7 @@ export default function IntegrationFormPage() {
                 required
                 className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
               >
-                <option value="">Select a provider</option>
+                <option value="">{t.integrations.selectProvider}</option>
                 {availableProviders.map((provider) => (
                   <option key={provider} value={provider}>
                     {provider.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
@@ -357,13 +359,13 @@ export default function IntegrationFormPage() {
               disabled={loading}
               className="flex-1 px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition disabled:opacity-50"
             >
-              {loading ? 'Saving...' : isEdit ? 'Update Integration' : 'Create Integration'}
+              {loading ? t.integrations.saving : isEdit ? t.integrations.updateIntegration : t.integrations.createIntegrationButton}
             </button>
             <Link
               to="/dashboard/integrations"
               className="px-6 py-3 rounded-lg bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-medium transition"
             >
-              Cancel
+              {t.common.cancel}
             </Link>
           </div>
         </form>

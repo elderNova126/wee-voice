@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/Table'
+import { useTranslation } from '@/lib/translations'
 
 interface AdminSupportTicket {
   id: number
@@ -30,27 +31,28 @@ interface AdminSupportTicket {
   last_response_at?: string | null
 }
 
-const STATUS_OPTIONS = [
-  { value: 'open', label: 'Ouvert' },
-  { value: 'in_progress', label: 'En cours' },
-  { value: 'resolved', label: 'Résolu' },
-  { value: 'closed', label: 'Fermé' },
-]
-
-const PRIORITY_OPTIONS = [
-  { value: 'low', label: 'Faible' },
-  { value: 'medium', label: 'Moyenne' },
-  { value: 'high', label: 'Haute' },
-  { value: 'urgent', label: 'Urgente' },
-]
-
 export default function AdminSupportPage() {
+  const t = useTranslation()
   const [tickets, setTickets] = useState<AdminSupportTicket[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [priorityFilter, setPriorityFilter] = useState('all')
   const [updatingTicketId, setUpdatingTicketId] = useState<number | null>(null)
+
+  const STATUS_OPTIONS = [
+    { value: 'open', label: t.adminSupport.open },
+    { value: 'in_progress', label: t.adminSupport.inProgress },
+    { value: 'resolved', label: t.adminSupport.resolved },
+    { value: 'closed', label: t.adminSupport.closed },
+  ]
+
+  const PRIORITY_OPTIONS = [
+    { value: 'low', label: t.adminSupport.low },
+    { value: 'medium', label: t.adminSupport.medium },
+    { value: 'high', label: t.adminSupport.high },
+    { value: 'urgent', label: t.adminSupport.urgent },
+  ]
 
   useEffect(() => {
     loadTickets()
@@ -68,7 +70,7 @@ export default function AdminSupportPage() {
       setTickets(response.data)
     } catch (error: any) {
       console.error('Failed to load support tickets', error)
-      toast.error(error.response?.data?.detail || 'Impossible de charger les tickets')
+      toast.error(error.response?.data?.detail || t.adminSupport.loadError)
     } finally {
       setLoading(false)
     }
@@ -83,10 +85,10 @@ export default function AdminSupportPage() {
       setUpdatingTicketId(ticket.id)
       const response = await adminAPI.updateSupportTicket(ticket.id, { status })
       updateTicketInState(response.data)
-      toast.success('Statut mis à jour')
+      toast.success(t.adminSupport.statusUpdated)
     } catch (error: any) {
       console.error('Failed to update ticket status', error)
-      toast.error(error.response?.data?.detail || 'Impossible de mettre à jour le statut')
+      toast.error(error.response?.data?.detail || t.adminSupport.updateError)
     } finally {
       setUpdatingTicketId(null)
     }
@@ -97,17 +99,17 @@ export default function AdminSupportPage() {
       setUpdatingTicketId(ticket.id)
       const response = await adminAPI.updateSupportTicket(ticket.id, { priority })
       updateTicketInState(response.data)
-      toast.success('Priorité mise à jour')
+      toast.success(t.adminSupport.priorityUpdated)
     } catch (error: any) {
       console.error('Failed to update ticket priority', error)
-      toast.error(error.response?.data?.detail || 'Impossible de mettre à jour la priorité')
+      toast.error(error.response?.data?.detail || t.adminSupport.updateError)
     } finally {
       setUpdatingTicketId(null)
     }
   }
 
   const handleAddResponse = async (ticket: AdminSupportTicket) => {
-    const message = window.prompt(`Ajouter une réponse au ticket #${ticket.ticket_number}`)
+    const message = window.prompt(t.common.status === 'Statut' ? `Ajouter une réponse au ticket #${ticket.ticket_number}` : `Add a response to ticket #${ticket.ticket_number}`)
     if (!message || !message.trim()) {
       return
     }
@@ -116,10 +118,10 @@ export default function AdminSupportPage() {
       setUpdatingTicketId(ticket.id)
       const response = await adminAPI.updateSupportTicket(ticket.id, { response_message: message.trim() })
       updateTicketInState(response.data)
-      toast.success('Réponse envoyée')
+      toast.success(t.common.status === 'Statut' ? 'Réponse envoyée' : 'Response sent')
     } catch (error: any) {
       console.error('Failed to add response', error)
-      toast.error(error.response?.data?.detail || 'Impossible d\'ajouter une réponse')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Impossible d\'ajouter une réponse' : 'Failed to add response'))
     } finally {
       setUpdatingTicketId(null)
     }
@@ -171,28 +173,28 @@ export default function AdminSupportPage() {
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              Support & Tickets
+              {t.adminSupport.title}
             </h1>
             <p className="mt-2 text-gray-600 dark:text-gray-400">
-              Répondez rapidement aux demandes et assurez un suivi de qualité.
+              {t.adminSupport.subtitle}
             </p>
           </div>
           <Button variant="outline" onClick={loadTickets} icon={<ArrowPathIcon className="w-4 h-4" />}>
-            Actualiser
+            {t.common.status === 'Statut' ? 'Actualiser' : 'Refresh'}
           </Button>
         </div>
 
         {/* Filters */}
         <Card>
           <CardHeader
-            title="Filtres"
-            subtitle="Recherchez et filtrez les tickets support"
+            title={t.common.status === 'Statut' ? 'Filtres' : 'Filters'}
+            subtitle={t.common.status === 'Statut' ? 'Recherchez et filtrez les tickets support' : 'Search and filter support tickets'}
             icon={<LifebuoyIcon className="w-6 h-6" />}
           />
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Input
-                placeholder="Rechercher par sujet, email, numéro..."
+                placeholder={t.adminSupport.searchPlaceholder}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 icon={<MagnifyingGlassIcon className="w-5 h-5" />}
@@ -203,7 +205,7 @@ export default function AdminSupportPage() {
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               >
-                <option value="all">Tous les statuts</option>
+                <option value="all">{t.adminSupport.allStatuses}</option>
                 {STATUS_OPTIONS.map((status) => (
                   <option key={status.value} value={status.value}>
                     {status.label}
@@ -216,7 +218,7 @@ export default function AdminSupportPage() {
                 onChange={(e) => setPriorityFilter(e.target.value)}
                 className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               >
-                <option value="all">Toutes les priorités</option>
+                <option value="all">{t.adminSupport.allPriorities}</option>
                 {PRIORITY_OPTIONS.map((priority) => (
                   <option key={priority.value} value={priority.value}>
                     {priority.label}
@@ -226,7 +228,7 @@ export default function AdminSupportPage() {
 
               {(search || statusFilter !== 'all' || priorityFilter !== 'all') && (
                 <Button variant="outline" onClick={resetFilters}>
-                  Réinitialiser
+                  {t.common.status === 'Statut' ? 'Réinitialiser' : 'Reset'}
                 </Button>
               )}
             </div>
@@ -238,25 +240,25 @@ export default function AdminSupportPage() {
           {loading ? (
             <div className="p-8 text-center">
               <ArrowPathIcon className="w-8 h-8 mx-auto animate-spin text-gray-400" />
-              <p className="mt-2 text-gray-600 dark:text-gray-400">Chargement des tickets...</p>
+              <p className="mt-2 text-gray-600 dark:text-gray-400">{t.common.status === 'Statut' ? 'Chargement des tickets...' : 'Loading tickets...'}</p>
             </div>
           ) : tickets.length === 0 ? (
             <div className="p-10 text-center space-y-3">
               <ChatBubbleLeftRightIcon className="w-12 h-12 mx-auto text-gray-400" />
               <p className="text-gray-600 dark:text-gray-400">
-                Aucun ticket ne correspond à votre filtre.
+                {t.adminSupport.noTickets}
               </p>
             </div>
           ) : (
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeader>Ticket</TableHeader>
-                  <TableHeader>Contact</TableHeader>
-                  <TableHeader>Statut</TableHeader>
-                  <TableHeader>Priorité</TableHeader>
-                  <TableHeader>Activité</TableHeader>
-                  <TableHeader className="text-right">Actions</TableHeader>
+                  <TableHeader>{t.adminSupport.ticketNumber}</TableHeader>
+                  <TableHeader>{t.common.status === 'Statut' ? 'Contact' : 'Contact'}</TableHeader>
+                  <TableHeader>{t.adminSupport.status}</TableHeader>
+                  <TableHeader>{t.adminSupport.priority}</TableHeader>
+                  <TableHeader>{t.common.status === 'Statut' ? 'Activité' : 'Activity'}</TableHeader>
+                  <TableHeader className="text-right">{t.common.status === 'Statut' ? 'Actions' : 'Actions'}</TableHeader>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -268,10 +270,10 @@ export default function AdminSupportPage() {
                           {ticket.subject}
                         </span>
                         <span className="text-sm text-gray-500 dark:text-gray-400">
-                          #{ticket.ticket_number} • Catégorie : {ticket.category.replace('_', ' ')}
+                          #{ticket.ticket_number} • {t.adminSupport.category}: {ticket.category.replace('_', ' ')}
                         </span>
                         <span className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                          Créé le {formatDateTime(ticket.created_at)}
+                          {t.adminSupport.createdAt} {formatDateTime(ticket.created_at)}
                         </span>
                       </div>
                     </TableCell>
@@ -326,10 +328,10 @@ export default function AdminSupportPage() {
                     <TableCell>
                       <div className="flex flex-col">
                         <span className="text-sm text-gray-900 dark:text-white font-medium">
-                          {ticket.responses_count} réponses
+                          {ticket.responses_count} {t.adminSupport.responses}
                         </span>
                         <span className="text-xs text-gray-500 dark:text-gray-400">
-                          {ticket.last_response_at ? `Dernière réponse: ${formatDateTime(ticket.last_response_at)}` : 'Aucune réponse'}
+                          {ticket.last_response_at ? `${t.adminSupport.lastResponse} ${formatDateTime(ticket.last_response_at)}` : t.adminSupport.never}
                         </span>
                       </div>
                     </TableCell>
@@ -342,7 +344,7 @@ export default function AdminSupportPage() {
                         icon={<PaperAirplaneIcon className="w-4 h-4" />}
                         disabled={updatingTicketId === ticket.id}
                       >
-                        Répondre
+                        {t.common.status === 'Statut' ? 'Répondre' : 'Reply'}
                       </Button>
                     </TableCell>
                   </TableRow>

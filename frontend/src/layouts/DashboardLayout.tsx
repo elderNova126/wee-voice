@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import React, { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Menu, Transition } from '@headlessui/react'
 import { Fragment, useState } from 'react'
@@ -29,27 +29,31 @@ import {
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
 import { useThemeStore } from '@/store/themeStore'
+import { useLanguageStore } from '@/store/languageStore'
+import { useTranslation } from '@/lib/translations'
+import LanguageSwitcher from '@/components/LanguageSwitcher'
 
 interface DashboardLayoutProps {
   children: ReactNode
 }
 
-const navigation = [
-  { name: 'Tableau de bord', href: '/dashboard', icon: HomeIcon },
-  { name: 'Agents', href: '/dashboard/agents', icon: MicrophoneIcon },
-  { name: 'Bibliothèques', href: '/dashboard/libraries', icon: BookOpenIcon },
-  { name: 'Appels', href: '/dashboard/calls', icon: ClockIcon },
-  { name: 'Intégrations', href: '/dashboard/integrations', icon: PuzzlePieceIcon },
-  { name: 'Numéros de téléphone', href: '/dashboard/phone-numbers', icon: DevicePhoneMobileIcon },
-  { name: 'Rappels', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
-  { name: 'Clés API', href: '/dashboard/api-keys', icon: KeyIcon },
-  { name: 'Support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
+// Navigation items structure (names will be translated)
+const navigationItems = [
+  { key: 'dashboard', href: '/dashboard', icon: HomeIcon },
+  { key: 'agents', href: '/dashboard/agents', icon: MicrophoneIcon },
+  { key: 'libraries', href: '/dashboard/libraries', icon: BookOpenIcon },
+  { key: 'calls', href: '/dashboard/calls', icon: ClockIcon },
+  { key: 'integrations', href: '/dashboard/integrations', icon: PuzzlePieceIcon },
+  { key: 'phoneNumbers', href: '/dashboard/phone-numbers', icon: DevicePhoneMobileIcon },
+  { key: 'callbacks', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
+  { key: 'apiKeys', href: '/dashboard/api-keys', icon: KeyIcon },
+  { key: 'support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
 ]
 
-const settingsNavigation = [
-  { name: 'Facturation', href: '/dashboard/billing', icon: CreditCardIcon },
-  { name: 'Utilisation', href: '/dashboard/usage', icon: ChartBarIcon },
-  { name: 'Sécurité', href: '/dashboard/security', icon: ShieldCheckIcon },
+const settingsNavigationItems = [
+  { key: 'billing', href: '/dashboard/billing', icon: CreditCardIcon },
+  { key: 'usage', href: '/dashboard/usage', icon: ChartBarIcon },
+  { key: 'security', href: '/dashboard/security', icon: ShieldCheckIcon },
 ]
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
@@ -57,11 +61,29 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
   const { theme, setTheme } = useThemeStore()
+  const { language, setLanguage } = useLanguageStore()
+  const t = useTranslation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => {
     // Auto-expand Settings if user is on a settings page
-    return settingsNavigation.some(item => location.pathname === item.href)
+    return settingsNavigationItems.some(item => location.pathname === item.href)
   })
+
+  // Initialize language on mount
+  React.useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
+
+  // Get navigation items with translated names
+  const navigation = navigationItems.map(item => ({
+    ...item,
+    name: t.nav[item.key as keyof typeof t.nav] || item.key
+  }))
+
+  const settingsNavigation = settingsNavigationItems.map(item => ({
+    ...item,
+    name: t.nav[item.key as keyof typeof t.nav] || item.key
+  }))
 
   // Admin navigation - only show if user is admin
   const adminNavigation = user?.is_superuser
@@ -176,7 +198,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
                 )}
                 <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
-                <span className="truncate flex-1 text-left">Paramètres</span>
+                <span className="truncate flex-1 text-left">{t.settings.title}</span>
                 {settingsOpen ? (
                   <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
                 ) : (
@@ -251,10 +273,21 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                           } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
                         >
                           <UserCircleIcon className="mr-3 h-5 w-5" />
-                          Profil
+                          {t.common.profile}
                         </Link>
                       )}
                     </Menu.Item>
+                  </div>
+                  {/* Language Switcher */}
+                  <div className="p-1">
+                    <div className="px-4 py-2.5">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t.settings.language}
+                        </span>
+                      </div>
+                      <LanguageSwitcher />
+                    </div>
                   </div>
                   {/* Theme Options */}
                   <div className="p-1">
@@ -290,7 +323,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                           } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
                         >
                           <ArrowRightOnRectangleIcon className="mr-3 h-5 w-5" />
-                          Déconnexion
+                          {t.common.logout}
                         </button>
                       )}
                     </Menu.Item>
@@ -384,7 +417,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
                 )}
                 <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
-                <span className="truncate flex-1 text-left">Paramètres</span>
+                <span className="truncate flex-1 text-left">{t.settings.title}</span>
                 {settingsOpen ? (
                   <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
                 ) : (
@@ -457,10 +490,21 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                           } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
                         >
                           <UserCircleIcon className="mr-3 h-5 w-5" />
-                          Profil
+                          {t.common.profile}
                         </Link>
                       )}
                     </Menu.Item>
+                  </div>
+                  {/* Language Switcher */}
+                  <div className="p-1">
+                    <div className="px-4 py-2.5">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t.settings.language}
+                        </span>
+                      </div>
+                      <LanguageSwitcher />
+                    </div>
                   </div>
                   {/* Theme Options */}
                   <div className="p-1">
@@ -496,7 +540,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                           } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
                         >
                           <ArrowRightOnRectangleIcon className="mr-3 h-5 w-5" />
-                          Déconnexion
+                          {t.common.logout}
                         </button>
                       )}
                     </Menu.Item>

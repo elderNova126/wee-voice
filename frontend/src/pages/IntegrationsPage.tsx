@@ -12,6 +12,7 @@ import {
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { integrationsAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface Integration {
   id: number
@@ -26,14 +27,17 @@ interface Integration {
   created_at: string
 }
 
-const INTEGRATION_TYPE_LABELS: Record<string, string> = {
-  calendar: '📅 Calendar',
-  email: '📧 Email',
-  contact_management: '👥 Contacts',
-  database: '💾 Database',
-  crm: '📊 CRM',
-  accounting: '💰 Accounting',
-  other: '🔧 Other',
+const getIntegrationTypeLabel = (type: string, t: any): string => {
+  const labels: Record<string, string> = {
+    calendar: t?.integrations?.typeCalendar || '📅 Calendar',
+    email: t?.integrations?.typeEmail || '📧 Email',
+    contact_management: t?.integrations?.typeContactManagement || '👥 Contacts',
+    database: t?.integrations?.typeDatabase || '💾 Database',
+    crm: t?.integrations?.typeCRM || '📊 CRM',
+    accounting: t?.integrations?.typeAccounting || '💰 Accounting',
+    other: t?.integrations?.typeOther || '🔧 Other',
+  }
+  return labels[type] || type
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -44,6 +48,7 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 export default function IntegrationsPage() {
+  const t = useTranslation()
   const [integrations, setIntegrations] = useState<Integration[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<{
@@ -67,21 +72,21 @@ export default function IntegrationsPage() {
       setIntegrations(response.data)
     } catch (error: any) {
       console.error('Failed to load integrations:', error)
-      toast.error(error.response?.data?.detail || 'Failed to load integrations')
+      toast.error(error.response?.data?.detail || t.integrations.loadError)
     } finally {
       setLoading(false)
     }
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this integration?')) return
+    if (!confirm(t.integrations.deleteConfirm)) return
     try {
       await integrationsAPI.delete(id)
-      toast.success('Integration deleted successfully')
+      toast.success(t.integrations.deleteSuccess)
       loadIntegrations()
     } catch (error: any) {
       console.error('Failed to delete integration:', error)
-      toast.error(error.response?.data?.detail || 'Failed to delete integration')
+      toast.error(error.response?.data?.detail || t.integrations.deleteError)
     }
   }
 
@@ -90,14 +95,14 @@ export default function IntegrationsPage() {
     try {
       const response = await integrationsAPI.test(id)
       if (response.data.success) {
-        toast.success('Connection test successful')
+        toast.success(t.integrations.testSuccess)
       } else {
-        toast.error(response.data.message || 'Connection test failed')
+        toast.error(response.data.message || t.integrations.testError)
       }
       loadIntegrations()
     } catch (error: any) {
       console.error('Test failed:', error)
-      toast.error(error.response?.data?.detail || 'Connection test failed')
+      toast.error(error.response?.data?.detail || t.integrations.testError)
     } finally {
       setTestingIds((prev) => {
         const next = new Set(prev)
@@ -112,14 +117,14 @@ export default function IntegrationsPage() {
     try {
       const response = await integrationsAPI.sync(id)
       if (response.data.success) {
-        toast.success('Sync completed successfully')
+        toast.success(t.integrations.syncSuccess)
       } else {
-        toast.error(response.data.message || 'Sync failed')
+        toast.error(response.data.message || t.integrations.syncError)
       }
       loadIntegrations()
     } catch (error: any) {
       console.error('Sync failed:', error)
-      toast.error(error.response?.data?.detail || 'Sync failed')
+      toast.error(error.response?.data?.detail || t.integrations.syncError)
     } finally {
       setSyncingIds((prev) => {
         const next = new Set(prev)
@@ -132,11 +137,11 @@ export default function IntegrationsPage() {
   const toggleActive = async (id: number, currentStatus: boolean) => {
     try {
       await integrationsAPI.update(id, { is_active: !currentStatus })
-      toast.success(`Integration ${!currentStatus ? 'activated' : 'deactivated'}`)
+      toast.success(t.common.status === 'Statut' ? `Intégration ${!currentStatus ? 'activée' : 'désactivée'}` : `Integration ${!currentStatus ? 'activated' : 'deactivated'}`)
       loadIntegrations()
     } catch (error: any) {
       console.error('Failed to update integration:', error)
-      toast.error(error.response?.data?.detail || 'Failed to update integration')
+      toast.error(error.response?.data?.detail || t.integrations.activateError)
     }
   }
 
@@ -144,9 +149,9 @@ export default function IntegrationsPage() {
     <DashboardLayout>
       <div className="mb-8 flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Integrations</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.integrations.title}</h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Connect your calendar, email, CRM, and other business tools
+            {t.integrations.subtitle}
           </p>
         </div>
         <Link
@@ -154,7 +159,7 @@ export default function IntegrationsPage() {
           className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition"
         >
           <PlusIcon className="h-5 w-5 mr-2" />
-          New Integration
+          {t.integrations.newIntegration}
         </Link>
       </div>
 
@@ -165,10 +170,10 @@ export default function IntegrationsPage() {
           onChange={(e) => setFilter({ ...filter, type: e.target.value || undefined })}
           className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
         >
-          <option value="">All Types</option>
-          {Object.entries(INTEGRATION_TYPE_LABELS).map(([value, label]) => (
+          <option value="">{t?.integrations?.allTypes || 'All Types'}</option>
+          {['calendar', 'email', 'contact_management', 'database', 'crm', 'accounting', 'other'].map((value) => (
             <option key={value} value={value}>
-              {label}
+              {getIntegrationTypeLabel(value, t)}
             </option>
           ))}
         </select>
@@ -177,11 +182,11 @@ export default function IntegrationsPage() {
           onChange={(e) => setFilter({ ...filter, status: e.target.value || undefined })}
           className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
         >
-          <option value="">All Statuses</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-          <option value="error">Error</option>
-          <option value="pending_auth">Pending Auth</option>
+          <option value="">{t.integrations.allStatuses}</option>
+          <option value="active">{t.integrations.active}</option>
+          <option value="inactive">{t.integrations.inactive}</option>
+          <option value="error">{t.integrations.error}</option>
+          <option value="pending_auth">{t.integrations.pendingAuth}</option>
         </select>
       </div>
 
@@ -203,17 +208,17 @@ export default function IntegrationsPage() {
             <PlusIcon className="h-10 w-10 text-blue-600 dark:text-blue-300" />
           </div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            No Integrations Yet
+            {t.integrations.noIntegrations}
           </h3>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-w-sm">
-            Connect your business tools to extend your voice agent capabilities.
+            {t.common.status === 'Statut' ? 'Connectez vos outils métier pour étendre les capacités de votre agent vocal.' : 'Connect your business tools to extend your voice agent capabilities.'}
           </p>
           <Link
             to="/dashboard/integrations/new"
             className="mt-6 inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition"
           >
             <PlusIcon className="h-5 w-5 mr-2" />
-            Create Integration
+            {t.integrations.createIntegration}
           </Link>
         </div>
       ) : (
@@ -227,14 +232,14 @@ export default function IntegrationsPage() {
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
                     <span className="text-2xl">
-                      {INTEGRATION_TYPE_LABELS[integration.integration_type]?.split(' ')[0] || '🔧'}
+                      {getIntegrationTypeLabel(integration.integration_type, t)?.split(' ')[0] || '🔧'}
                     </span>
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                         {integration.name}
                       </h3>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {INTEGRATION_TYPE_LABELS[integration.integration_type]} • {integration.provider.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                        {getIntegrationTypeLabel(integration.integration_type, t)} • {integration.provider.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                       </p>
                     </div>
                   </div>
@@ -259,7 +264,7 @@ export default function IntegrationsPage() {
                     )}
                     {integration.last_sync_at && (
                       <span className="text-xs text-gray-500 dark:text-gray-400">
-                        Last synced: {new Date(integration.last_sync_at).toLocaleString()}
+                        {t.integrations.lastSynced} {new Date(integration.last_sync_at).toLocaleString()}
                       </span>
                     )}
                   </div>
@@ -270,7 +275,7 @@ export default function IntegrationsPage() {
                     onClick={() => handleTest(integration.id)}
                     disabled={testingIds.has(integration.id)}
                     className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition disabled:opacity-50"
-                    title="Test Connection"
+                    title={t.integrations.testConnection}
                   >
                     {testingIds.has(integration.id) ? (
                       <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -282,7 +287,7 @@ export default function IntegrationsPage() {
                     onClick={() => handleSync(integration.id)}
                     disabled={syncingIds.has(integration.id) || !integration.is_active}
                     className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition disabled:opacity-50"
-                    title="Sync Data"
+                    title={t.integrations.syncData}
                   >
                     {syncingIds.has(integration.id) ? (
                       <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -297,7 +302,7 @@ export default function IntegrationsPage() {
                         ? 'bg-green-100 hover:bg-green-200 dark:bg-green-900 dark:hover:bg-green-800 text-green-700 dark:text-green-300'
                         : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300'
                     }`}
-                    title={integration.is_active ? 'Deactivate' : 'Activate'}
+                    title={integration.is_active ? t.integrations.deactivate : t.integrations.activate}
                   >
                     {integration.is_active ? (
                       <CheckCircleIcon className="h-4 w-4" />
@@ -308,14 +313,14 @@ export default function IntegrationsPage() {
                   <Link
                     to={`/dashboard/integrations/${integration.id}/edit`}
                     className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
-                    title="Edit"
+                    title={t.common.edit}
                   >
                     <PencilIcon className="h-4 w-4" />
                   </Link>
                   <button
                     onClick={() => handleDelete(integration.id)}
                     className="p-2 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
-                    title="Delete"
+                    title={t.common.delete}
                   >
                     <TrashIcon className="h-4 w-4" />
                   </button>

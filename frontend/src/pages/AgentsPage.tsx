@@ -13,6 +13,7 @@ import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, VoiceWebSocket } from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface Agent {
   id: number
@@ -25,6 +26,7 @@ interface Agent {
 }
 
 export default function AgentsPage() {
+  const t = useTranslation()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [testingAgent, setTestingAgent] = useState<Agent | null>(null)
@@ -39,21 +41,21 @@ export default function AgentsPage() {
       setAgents(response.data)
     } catch (error) {
       console.error('Failed to load agents:', error)
-      toast.error('Failed to load agents')
+      toast.error(t.agentsPage.loadError)
     } finally {
       setLoading(false)
     }
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this agent?')) return
+    if (!confirm(t.agentsPage.deleteConfirm)) return
     try {
       await agentsAPI.delete(id)
-      toast.success('Agent deleted successfully')
+      toast.success(t.agentsPage.deleteSuccess)
       loadAgents()
     } catch (error) {
       console.error('Failed to delete agent:', error)
-      toast.error('Failed to delete agent')
+      toast.error(t.agentsPage.deleteError)
     }
   }
 
@@ -65,9 +67,9 @@ export default function AgentsPage() {
     <DashboardLayout>
       <div className="mb-8 flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Voice Agents</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.agentsPage.title}</h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Manage, start, and improve your AI voice agents
+            {t.agentsPage.subtitle}
           </p>
         </div>
         <Link
@@ -75,7 +77,7 @@ export default function AgentsPage() {
           className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition"
         >
           <PlusIcon className="h-5 w-5 mr-2" />
-          New Agent
+          {t.agentsPage.newAgent}
         </Link>
       </div>
 
@@ -97,17 +99,17 @@ export default function AgentsPage() {
             <MicrophoneIcon className="h-10 w-10 text-blue-600 dark:text-blue-300" />
           </div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            No Agents Yet
+            {t.agentsPage.noAgentsYet}
           </h3>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-w-sm">
-            You don’t have any voice agents yet. Start by creating your first one below.
+            {t.agentsPage.noAgentsDescription}
           </p>
           <Link
             to="/dashboard/agents/new"
             className="mt-6 inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition"
           >
             <PlusIcon className="h-5 w-5 mr-2" />
-            Create Agent
+            {t.agentsPage.createAgent}
           </Link>
         </div>
       ) : (
@@ -126,7 +128,7 @@ export default function AgentsPage() {
                       : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
                   }`}
                 >
-                  {agent.is_active ? 'Active' : 'Inactive'}
+                  {agent.is_active ? t.agentsPage.active : t.agentsPage.inactive}
                 </span>
               </div>
 
@@ -140,13 +142,13 @@ export default function AgentsPage() {
                   </h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}
-                    {agent.is_public ? 'Public' : 'Private'}
+                    {agent.is_public ? t.agentsPage.public : t.agentsPage.private}
                   </p>
                 </div>
               </div>
 
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 line-clamp-2">
-                {agent.description || 'No description provided.'}
+                {agent.description || t.agentsPage.noDescription}
               </p>
 
               <div className="flex gap-2">
@@ -155,7 +157,7 @@ export default function AgentsPage() {
                   className="flex-1 inline-flex justify-center items-center gap-2 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-950 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 font-medium text-sm py-2 transition"
                 >
                   <PlayIcon className="h-4 w-4" />
-                  Start
+                  {t.agentsPage.test}
                 </button>
                 <Link
                   to={`/dashboard/agents/${agent.id}/embed`}
@@ -167,14 +169,14 @@ export default function AgentsPage() {
                 <Link
                   to={`/dashboard/agents/${agent.id}/edit`}
                   className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
-                  title="Edit Agent"
+                  title={t.agentsPage.edit}
                 >
                   <PencilIcon className="h-4 w-4" />
                 </Link>
                 <button
                   onClick={() => handleDelete(agent.id)}
                   className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
-                  title="Delete Agent"
+                  title={t.agentsPage.delete}
                 >
                   <TrashIcon className="h-4 w-4" />
                 </button>

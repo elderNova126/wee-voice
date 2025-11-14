@@ -13,6 +13,8 @@ import { api } from '../lib/api'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
+import { useTranslation } from '../lib/translations'
+import toast from 'react-hot-toast'
 
 interface Document {
   id: number
@@ -37,6 +39,7 @@ interface Agent {
 }
 
 export default function AgentDocumentsPage() {
+  const t = useTranslation()
   const { agentId } = useParams<{ agentId: string }>()
   const navigate = useNavigate()
   
@@ -68,7 +71,7 @@ export default function AgentDocumentsPage() {
       
     } catch (err: any) {
       console.error('Error loading data:', err)
-      setError(err.response?.data?.detail || 'Failed to load data')
+      setError(err.response?.data?.detail || t.agentDocuments.loadError)
     } finally {
       setLoading(false)
     }
@@ -80,20 +83,20 @@ export default function AgentDocumentsPage() {
 
     // Validate file type
     if (!file.name.endsWith('.pdf')) {
-      setError('Only PDF files are supported')
+      setError(t.agentDocuments.onlyPdfSupported)
       return
     }
 
     // Validate file size (10MB max)
     if (file.size > 10 * 1024 * 1024) {
-      setError('File size must be less than 10MB')
+      setError(t.agentDocuments.fileSizeLimit)
       return
     }
 
     try {
       setUploading(true)
       setError('')
-      setUploadProgress('Uploading file...')
+      setUploadProgress(t.agentDocuments.uploadingFile)
 
       const formData = new FormData()
       formData.append('file', file)
@@ -104,32 +107,34 @@ export default function AgentDocumentsPage() {
         },
       })
 
-      setUploadProgress('Processing and generating embeddings...')
+      setUploadProgress(t.agentDocuments.processingEmbeddings)
       
       // Reload documents after a short delay
       setTimeout(() => {
         loadData()
         setUploadProgress('')
         setUploading(false)
+        toast.success(t.agentDocuments.uploadSuccess)
       }, 2000)
 
     } catch (err: any) {
       console.error('Error uploading document:', err)
-      setError(err.response?.data?.detail || 'Failed to upload document')
+      setError(err.response?.data?.detail || t.agentDocuments.uploadError)
       setUploading(false)
       setUploadProgress('')
     }
   }
 
   const handleDeleteDocument = async (documentId: number) => {
-    if (!confirm('Are you sure you want to delete this document?')) return
+    if (!confirm(t.agentDocuments.deleteConfirm)) return
 
     try {
       await api.delete(`/agents/${agentId}/documents/${documentId}`)
       await loadData()
+      toast.success(t.agentDocuments.deleteSuccess)
     } catch (err: any) {
       console.error('Error deleting document:', err)
-      setError(err.response?.data?.detail || 'Failed to delete document')
+      setError(err.response?.data?.detail || t.agentDocuments.deleteError)
     }
   }
 
@@ -150,7 +155,7 @@ export default function AgentDocumentsPage() {
       console.log('RAG successfully toggled to:', enabled)
     } catch (err: any) {
       console.error('Error toggling RAG:', err)
-      setError(err.response?.data?.detail || 'Failed to toggle RAG')
+      setError(err.response?.data?.detail || t.agentDocuments.toggleRAGError)
       // Reload data even on error to show current state
       await loadData()
     }
@@ -158,7 +163,7 @@ export default function AgentDocumentsPage() {
 
   const handleScrapeWebsite = async () => {
     if (!websiteUrl) {
-      setError('Please enter a website URL')
+      setError(t.agentDocuments.enterWebsiteUrl)
       return
     }
 
@@ -166,20 +171,20 @@ export default function AgentDocumentsPage() {
     try {
       new URL(websiteUrl)
     } catch {
-      setError('Please enter a valid URL (e.g., https://example.com)')
+      setError(t.agentDocuments.enterValidUrl)
       return
     }
 
     try {
       setScrapingWebsite(true)
       setError('')
-      setUploadProgress('Scraping website...')
+      setUploadProgress(t.agentDocuments.scrapingWebsite)
 
       await api.post(`/agents/${agentId}/documents/website`, {
         url: websiteUrl
       })
 
-      setUploadProgress('Processing and generating embeddings...')
+      setUploadProgress(t.agentDocuments.processingEmbeddings)
       
       // Reload documents after a short delay
       setTimeout(() => {
@@ -187,11 +192,12 @@ export default function AgentDocumentsPage() {
         setUploadProgress('')
         setScrapingWebsite(false)
         setWebsiteUrl('')
+        toast.success(t.agentDocuments.uploadSuccess)
       }, 2000)
 
     } catch (err: any) {
       console.error('Error scraping website:', err)
-      setError(err.response?.data?.detail || 'Failed to scrape website')
+      setError(err.response?.data?.detail || t.agentDocuments.uploadError)
       setScrapingWebsite(false)
       setUploadProgress('')
     }
@@ -224,13 +230,13 @@ export default function AgentDocumentsPage() {
   const getStatusBadge = (status: Document['status']) => {
     switch (status) {
       case 'completed':
-        return <Badge variant="success">Completed</Badge>
+        return <Badge variant="success">{t.agentDocuments.completed}</Badge>
       case 'processing':
-        return <Badge variant="warning">Processing</Badge>
+        return <Badge variant="warning">{t.agentDocuments.processing}</Badge>
       case 'failed':
-        return <Badge variant="error">Failed</Badge>
+        return <Badge variant="error">{t.agentDocuments.failed}</Badge>
       default:
-        return <Badge variant="default">Pending</Badge>
+        return <Badge variant="default">{t.agentDocuments.pending}</Badge>
     }
   }
 
@@ -264,22 +270,22 @@ export default function AgentDocumentsPage() {
           className="flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 mb-4"
         >
           <ArrowLeftIcon className="w-4 h-4 mr-2" />
-          Back to Agents
+          {t.agentDocuments.backToAgents}
         </button>
         
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              RAG Documents
+              {t.agentDocuments.title}
             </h1>
             <p className="text-gray-600 dark:text-gray-400 mt-1">
-              Agent: {agent?.name}
+              {t.agentDocuments.agent} {agent?.name}
             </p>
           </div>
           
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600 dark:text-gray-400">RAG Enabled:</span>
+              <span className="text-sm text-gray-600 dark:text-gray-400">{t.agentDocuments.ragEnabled}</span>
               <button
                 onClick={() => handleToggleRAG(!agent?.rag_enabled)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
@@ -308,13 +314,13 @@ export default function AgentDocumentsPage() {
       <Card className="mb-6">
         <div className="p-6">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            Add Knowledge Sources
+            {t.agentDocuments.addKnowledgeSources}
           </h2>
           
           {/* PDF Upload */}
           <div className="mb-6">
             <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-              📄 Upload PDF Document
+              {t.agentDocuments.uploadPdfDocument}
             </h3>
             <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center">
               {uploading ? (
@@ -326,10 +332,10 @@ export default function AgentDocumentsPage() {
                 <>
                   <CloudArrowUpIcon className="w-10 h-10 text-gray-400 mx-auto mb-3" />
                   <p className="text-gray-600 dark:text-gray-400 mb-2">
-                    Click to upload or drag and drop
+                    {t.agentDocuments.clickToUpload}
                   </p>
                   <p className="text-sm text-gray-500 dark:text-gray-500 mb-3">
-                    PDF files only, max 10MB (supports scanned PDFs)
+                    {t.agentDocuments.pdfFilesOnly}
                   </p>
                   <label className="cursor-pointer">
                     <input
@@ -340,7 +346,7 @@ export default function AgentDocumentsPage() {
                       disabled={uploading}
                     />
                     <Button variant="primary" disabled={uploading}>
-                      Choose File
+                      {t.agentDocuments.chooseFile}
                     </Button>
                   </label>
                 </>
@@ -351,7 +357,7 @@ export default function AgentDocumentsPage() {
           {/* Website Scraping */}
           <div>
             <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-              🌐 Scrape Website
+              {t.agentDocuments.scrapeWebsite}
             </h3>
             <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6">
               {scrapingWebsite ? (
@@ -365,7 +371,7 @@ export default function AgentDocumentsPage() {
                     type="url"
                     value={websiteUrl}
                     onChange={(e) => setWebsiteUrl(e.target.value)}
-                    placeholder="https://example.com/documentation"
+                    placeholder={t.agentDocuments.websiteUrlPlaceholder}
                     className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-600"
                     disabled={scrapingWebsite}
                   />
@@ -374,7 +380,7 @@ export default function AgentDocumentsPage() {
                     onClick={handleScrapeWebsite}
                     disabled={scrapingWebsite || !websiteUrl}
                   >
-                    Scrape
+                    {t.agentDocuments.scrape}
                   </Button>
                 </div>
               )}
@@ -383,8 +389,7 @@ export default function AgentDocumentsPage() {
           
           <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
             <p className="text-sm text-blue-800 dark:text-blue-300">
-              <strong>How it works:</strong> Add PDF documents or website URLs to give your agent knowledge. 
-              Content will be processed, chunked, and embedded for semantic search during conversations.
+              <strong>{t.agentDocuments.howItWorks}</strong> {t.agentDocuments.howItWorksDesc}
             </p>
           </div>
         </div>
@@ -394,14 +399,14 @@ export default function AgentDocumentsPage() {
       <Card>
         <div className="p-6">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            Uploaded Documents ({documents.length})
+            {t.agentDocuments.uploadedDocuments} ({documents.length})
           </h2>
 
           {documents.length === 0 ? (
             <div className="text-center py-12">
               <DocumentTextIcon className="w-12 h-12 text-gray-400 mx-auto mb-4" />
               <p className="text-gray-600 dark:text-gray-400">
-                No documents uploaded yet
+                {t.agentDocuments.noDocumentsUploaded}
               </p>
             </div>
           ) : (
@@ -428,10 +433,10 @@ export default function AgentDocumentsPage() {
                             <span>{getSourceIcon(doc.source_type)}</span>
                             <span className="font-medium capitalize">{doc.source_type}</span>
                             {doc.source_type === 'pdf' && (
-                              <span>• Size: {formatFileSize(doc.file_size)}</span>
+                              <span>• {t.agentDocuments.size}: {formatFileSize(doc.file_size)}</span>
                             )}
-                            {doc.total_pages && ` • Pages: ${doc.total_pages}`}
-                            {doc.status === 'completed' && ` • Chunks: ${doc.total_chunks}`}
+                            {doc.total_pages && ` • ${t.agentDocuments.pages}: ${doc.total_pages}`}
+                            {doc.status === 'completed' && ` • ${t.agentDocuments.chunks}: ${doc.total_chunks}`}
                           </p>
                           {doc.source_url && (
                             <p className="truncate">
@@ -445,13 +450,13 @@ export default function AgentDocumentsPage() {
                               </a>
                             </p>
                           )}
-                          <p>Added: {formatDate(doc.created_at)}</p>
+                          <p>{t.agentDocuments.added} {formatDate(doc.created_at)}</p>
                           {doc.processed_at && (
-                            <p>Processed: {formatDate(doc.processed_at)}</p>
+                            <p>{t.agentDocuments.processed} {formatDate(doc.processed_at)}</p>
                           )}
                           {doc.error_message && (
                             <p className="text-red-600 dark:text-red-400">
-                              Error: {doc.error_message}
+                              {t.agentDocuments.failed}: {doc.error_message}
                             </p>
                           )}
                         </div>
@@ -461,7 +466,7 @@ export default function AgentDocumentsPage() {
                     <button
                       onClick={() => handleDeleteDocument(doc.id)}
                       className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                      title="Delete document"
+                      title={t.agentDocuments.deleteDocument}
                     >
                       <TrashIcon className="w-5 h-5" />
                     </button>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { adminAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 import {
   UsersIcon,
   MicrophoneIcon,
@@ -76,6 +77,7 @@ interface AdminOverviewData {
 }
 
 export default function AdminOverviewPage() {
+  const t = useTranslation()
   const [data, setData] = useState<AdminOverviewData | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -90,7 +92,7 @@ export default function AdminOverviewPage() {
       setData(response.data)
     } catch (error: any) {
       console.error('Failed to load admin overview', error)
-      toast.error(error.response?.data?.detail || 'Impossible de charger le tableau de bord admin')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Impossible de charger le tableau de bord admin' : 'Failed to load admin overview'))
     } finally {
       setLoading(false)
     }
@@ -108,10 +110,10 @@ export default function AdminOverviewPage() {
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              Admin Overview
+              {t.admin.overviewTitle}
             </h1>
             <p className="mt-2 text-gray-600 dark:text-gray-400">
-              Vue d&apos;ensemble de la plateforme : utilisateurs, agents, appels et support.
+              {t.admin.overviewSubtitle}
             </p>
           </div>
         </div>
@@ -119,32 +121,32 @@ export default function AdminOverviewPage() {
         {/* Totals */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <StatCard
-            title="Utilisateurs"
+            title={t.admin.totalUsers}
             value={data ? data.totals.total_users : '--'}
-            subtitle={`${data?.totals.active_users ?? '--'} actifs • ${data?.totals.pending_users ?? '--'} en attente`}
+            subtitle={`${data?.totals.active_users ?? '--'} ${t.admin.activeUsers} • ${data?.totals.pending_users ?? '--'} ${t.admin.pendingUsers}`}
             icon={<UsersIcon className="w-5 h-5" />}
             loading={loading}
           />
           <StatCard
-            title="Agents"
+            title={t.admin.totalAgents}
             value={data ? data.totals.total_agents : '--'}
-            subtitle={`${data?.totals.active_agents ?? '--'} actifs • ${data?.totals.public_agents ?? '--'} publics`}
+            subtitle={`${data?.totals.active_agents ?? '--'} ${t.admin.activeAgents} • ${data?.totals.public_agents ?? '--'} ${t.admin.publicAgents}`}
             icon={<MicrophoneIcon className="w-5 h-5" />}
             iconColor="from-purple-500 to-pink-500"
             loading={loading}
           />
           <StatCard
-            title="Appels (30j)"
+            title={t.admin.totalCalls}
             value={data ? data.usage.calls_last_30_days : '--'}
-            subtitle={`${data?.usage.calls_last_24_hours ?? '--'} sur les 24 dernières heures`}
+            subtitle={`${data?.usage.calls_last_24_hours ?? '--'} ${t.common.status === 'Statut' ? 'sur les 24 dernières heures' : 'in the last 24 hours'}`}
             icon={<PhoneIcon className="w-5 h-5" />}
             iconColor="from-indigo-500 to-cyan-500"
             loading={loading}
           />
           <StatCard
-            title="Tickets ouverts"
+            title={t.admin.openTickets}
             value={data ? data.totals.open_tickets : '--'}
-            subtitle={`${data?.totals.total_calls ?? '--'} appels au total`}
+            subtitle={`${data?.totals.total_calls ?? '--'} ${t.common.status === 'Statut' ? 'appels au total' : 'total calls'}`}
             icon={<TicketIcon className="w-5 h-5" />}
             iconColor="from-amber-500 to-orange-500"
             loading={loading}
@@ -155,31 +157,31 @@ export default function AdminOverviewPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card>
             <CardHeader
-              title="Utilisation"
-              subtitle="Minutes et appels consommés sur la plateforme"
+              title={t.admin.usage}
+              subtitle={t.common.status === 'Statut' ? 'Minutes et appels consommés sur la plateforme' : 'Minutes and calls consumed on the platform'}
               icon={<MicrophoneIcon className="w-6 h-6" />}
             />
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Minutes totales</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Minutes totales' : 'Total Minutes'}</p>
                   <p className="text-2xl font-semibold text-gray-900 dark:text-white">
-                    {data ? data.usage.minutes_total.toFixed(1) : '--'} min
+                    {data ? data.usage.minutes_total.toFixed(1) : '--'} {t.common.status === 'Statut' ? 'min' : 'min'}
                   </p>
                 </div>
                 <Badge variant="info" size="sm">
-                  + {data ? data.usage.minutes_last_30_days.toFixed(1) : '--'} min (30j)
+                  + {data ? data.usage.minutes_last_30_days.toFixed(1) : '--'} {t.common.status === 'Statut' ? 'min (30j)' : 'min (30d)'}
                 </Badge>
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Appels 30 derniers jours</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Appels 30 derniers jours' : 'Calls last 30 days'}</p>
                   <p className="text-lg font-medium text-gray-900 dark:text-white">
                     {data ? data.usage.calls_last_30_days : '--'}
                   </p>
                 </div>
                 <Badge variant="default" size="sm">
-                  {data ? data.usage.calls_last_24_hours : '--'} sur 24h
+                  {data ? data.usage.calls_last_24_hours : '--'} {t.common.status === 'Statut' ? 'sur 24h' : 'in 24h'}
                 </Badge>
               </div>
             </CardContent>
@@ -187,20 +189,20 @@ export default function AdminOverviewPage() {
 
           <Card>
             <CardHeader
-              title="Revenus"
-              subtitle="Transactions réussies estimées"
+              title={t.admin.revenue}
+              subtitle={t.common.status === 'Statut' ? 'Transactions réussies estimées' : 'Estimated successful transactions'}
               icon={<CurrencyDollarIcon className="w-6 h-6" />}
             />
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Revenus cumulés</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Revenus cumulés' : 'Total Revenue'}</p>
                   <p className="text-2xl font-semibold text-gray-900 dark:text-white">
                     ${data ? data.financial.revenue_total.toFixed(2) : '--'}
                   </p>
                 </div>
                 <Badge variant="success" size="sm">
-                  ${data ? data.financial.revenue_last_30_days.toFixed(2) : '--'} / 30j
+                  ${data ? data.financial.revenue_last_30_days.toFixed(2) : '--'} / {t.common.status === 'Statut' ? '30j' : '30d'}
                 </Badge>
               </div>
             </CardContent>
@@ -211,8 +213,8 @@ export default function AdminOverviewPage() {
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           <Card>
             <CardHeader
-              title="Nouveaux utilisateurs"
-              subtitle="5 dernières inscriptions"
+              title={t.admin.recentUsers}
+              subtitle={t.common.status === 'Statut' ? '5 dernières inscriptions' : '5 latest registrations'}
               icon={<UsersIcon className="w-6 h-6" />}
             />
             <CardContent className="space-y-4">
@@ -227,7 +229,7 @@ export default function AdminOverviewPage() {
                 </div>
               )}
               {!loading && data && data.recent.users.length === 0 && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">Aucune inscription récente.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Aucune inscription récente.' : 'No recent registrations.'}</p>
               )}
               {!loading && data && data.recent.users.map((user) => (
                 <div key={user.id} className="flex items-start justify-between gap-3">
@@ -243,7 +245,7 @@ export default function AdminOverviewPage() {
                     </p>
                   </div>
                   <Badge variant={user.is_approved ? 'success' : 'warning'} size="sm">
-                    {user.is_approved ? 'Approuvé' : 'En attente'}
+                    {user.is_approved ? t.admin.approved : t.admin.pending}
                   </Badge>
                 </div>
               ))}
@@ -252,8 +254,8 @@ export default function AdminOverviewPage() {
 
           <Card>
             <CardHeader
-              title="Agents récents"
-              subtitle="5 derniers agents créés"
+              title={t.admin.recentAgents}
+              subtitle={t.common.status === 'Statut' ? '5 derniers agents créés' : '5 latest agents created'}
               icon={<MicrophoneIcon className="w-6 h-6" />}
             />
             <CardContent className="space-y-4">
@@ -268,7 +270,7 @@ export default function AdminOverviewPage() {
                 </div>
               )}
               {!loading && data && data.recent.agents.length === 0 && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">Aucun agent créé récemment.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Aucun agent créé récemment.' : 'No agents created recently.'}</p>
               )}
               {!loading && data && data.recent.agents.map((agent) => (
                 <div key={agent.id} className="flex items-start justify-between gap-3">
@@ -285,10 +287,10 @@ export default function AdminOverviewPage() {
                   </div>
                   <div className="flex flex-col gap-1 items-end">
                     <Badge variant={agent.is_active ? 'success' : 'danger'} size="sm">
-                      {agent.is_active ? 'Actif' : 'Inactif'}
+                      {agent.is_active ? t.admin.active : t.admin.inactive}
                     </Badge>
                     <Badge variant={agent.is_public ? 'purple' : 'default'} size="sm">
-                      {agent.is_public ? 'Public' : 'Privé'}
+                      {agent.is_public ? t.admin.public : t.admin.private}
                     </Badge>
                   </div>
                 </div>
@@ -298,8 +300,8 @@ export default function AdminOverviewPage() {
 
           <Card>
             <CardHeader
-              title="Tickets récents"
-              subtitle="5 derniers tickets support"
+              title={t.admin.recentTickets}
+              subtitle={t.common.status === 'Statut' ? '5 derniers tickets support' : '5 latest support tickets'}
               icon={<ClipboardDocumentListIcon className="w-6 h-6" />}
             />
             <CardContent className="space-y-4">
@@ -314,7 +316,7 @@ export default function AdminOverviewPage() {
                 </div>
               )}
               {!loading && data && data.recent.tickets.length === 0 && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">Aucun ticket pour le moment.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Aucun ticket pour le moment.' : 'No tickets at the moment.'}</p>
               )}
               {!loading && data && data.recent.tickets.map((ticket) => (
                 <div key={ticket.id} className="flex items-start justify-between gap-3">
