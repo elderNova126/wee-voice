@@ -24,6 +24,7 @@ import { useThemeStore } from '../store/themeStore'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useTranslation } from '../lib/translations'
+import LanguageSwitcher from '../components/LanguageSwitcher'
 
 export default function LandingPage() {
   const t = useTranslation()
@@ -131,18 +132,28 @@ interface PublicAgent {
             </span>
           </Link>
           <div className="flex items-center gap-3">
+            {/* Public Agents Button - Highlighted */}
             <a
               href="#public-agents"
-              className="hidden sm:inline-flex text-gray-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors font-medium"
+              className="hidden sm:inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
             >
+              <MicrophoneIcon className="w-4 h-4" />
               {t.landing.agentsPublics}
             </a>
+            
+            {/* Demo Button - Highlighted */}
             <Link
               to="/demo"
-              className="hidden sm:inline-flex text-gray-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors font-medium"
+              className="hidden sm:inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
             >
+              <PhoneIcon className="w-4 h-4" />
               {t.landing.demo}
             </Link>
+
+            {/* Language Switcher */}
+            <div className="hidden sm:block">
+              <LanguageSwitcher />
+            </div>
 
             {/* Theme Dropdown */}
             <Menu as="div" className="relative">
