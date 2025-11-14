@@ -5,24 +5,18 @@ import { Fragment, useState } from 'react'
 import {
   HomeIcon,
   MicrophoneIcon,
-  PhoneIcon,
   KeyIcon,
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
   Bars3Icon,
   XMarkIcon,
-  CreditCardIcon,
-  ChartBarIcon,
-  ShieldCheckIcon,
   ChatBubbleLeftRightIcon,
   SunIcon,
   MoonIcon,
   ComputerDesktopIcon,
   ChevronUpIcon,
-  ChevronDownIcon,
   Cog6ToothIcon,
   PuzzlePieceIcon,
-  UserGroupIcon,
   BookOpenIcon,
   ClockIcon,
   DevicePhoneMobileIcon
@@ -46,14 +40,7 @@ const navigationItems = [
   { key: 'integrations', href: '/dashboard/integrations', icon: PuzzlePieceIcon },
   { key: 'phoneNumbers', href: '/dashboard/phone-numbers', icon: DevicePhoneMobileIcon },
   { key: 'callbacks', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
-  { key: 'apiKeys', href: '/dashboard/api-keys', icon: KeyIcon },
   { key: 'support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
-]
-
-const settingsNavigationItems = [
-  { key: 'billing', href: '/dashboard/billing', icon: CreditCardIcon },
-  { key: 'usage', href: '/dashboard/usage', icon: ChartBarIcon },
-  { key: 'security', href: '/dashboard/security', icon: ShieldCheckIcon },
 ]
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
@@ -61,13 +48,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
   const { theme, setTheme } = useThemeStore()
-  const { language, setLanguage } = useLanguageStore()
+  const { language } = useLanguageStore()
   const t = useTranslation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(() => {
-    // Auto-expand Settings if user is on a settings page
-    return settingsNavigationItems.some(item => location.pathname === item.href)
-  })
 
   // Initialize language on mount
   React.useEffect(() => {
@@ -76,11 +59,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   // Get navigation items with translated names
   const navigation = navigationItems.map(item => ({
-    ...item,
-    name: t.nav[item.key as keyof typeof t.nav] || item.key
-  }))
-
-  const settingsNavigation = settingsNavigationItems.map(item => ({
     ...item,
     name: t.nav[item.key as keyof typeof t.nav] || item.key
   }))
@@ -103,7 +81,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { name: 'System', value: 'system' as const, icon: ComputerDesktopIcon },
   ]
 
-  const isSettingsActive = settingsNavigation.some(item => location.pathname === item.href)
+  const isSettingsActive = location.pathname.startsWith('/dashboard/settings')
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-200">
@@ -180,56 +158,23 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             )}
             
             {/* Settings Section */}
-            <div>
-              <button
-                onClick={() => setSettingsOpen(!settingsOpen)}
-                className={`
-                  group flex items-center w-full px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
-                  ${isSettingsActive
-                    ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
-                  }
-                `}
-              >
-                {isSettingsActive && (
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
-                )}
-                <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
-                <span className="truncate flex-1 text-left">{t.settings.title}</span>
-                {settingsOpen ? (
-                  <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
-                ) : (
-                  <ChevronDownIcon className="h-4 w-4 flex-shrink-0" />
-                )}
-              </button>
-              {settingsOpen && (
-                <div className="mt-1 space-y-1 ml-4">
-                  {settingsNavigation.map((item) => {
-                    const isActive = location.pathname === item.href
-                    return (
-                      <Link
-                        key={item.name}
-                        to={item.href}
-                        onClick={() => setSidebarOpen(false)}
-                        className={`
-                          group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 relative
-                          ${isActive
-                            ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400'
-                            : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/50'
-                          }
-                        `}
-                      >
-                        {isActive && (
-                          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
-                        )}
-                        <item.icon className={`mr-3 h-4 w-4 flex-shrink-0 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
-                        <span className="truncate">{item.name}</span>
-                      </Link>
-                    )
-                  })}
-                </div>
+            <Link
+              to="/dashboard/settings"
+              onClick={() => setSidebarOpen(false)}
+              className={`
+                group flex items-center w-full px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
+                ${isSettingsActive
+                  ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
+                }
+              `}
+            >
+              {isSettingsActive && (
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
               )}
-            </div>
+              <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
+              <span className="truncate flex-1 text-left">{t.nav.settings}</span>
+            </Link>
           </nav>
           <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-gray-50/50 dark:bg-gray-900/50">
             {/* User Menu */}
@@ -399,55 +344,22 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             )}
             
             {/* Settings Section */}
-            <div>
-              <button
-                onClick={() => setSettingsOpen(!settingsOpen)}
-                className={`
-                  group flex items-center w-full px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
-                  ${isSettingsActive
-                    ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
-                  }
-                `}
-              >
-                {isSettingsActive && (
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
-                )}
-                <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
-                <span className="truncate flex-1 text-left">{t.settings.title}</span>
-                {settingsOpen ? (
-                  <ChevronUpIcon className="h-4 w-4 flex-shrink-0" />
-                ) : (
-                  <ChevronDownIcon className="h-4 w-4 flex-shrink-0" />
-                )}
-              </button>
-              {settingsOpen && (
-                <div className="mt-1 space-y-1 ml-4">
-                  {settingsNavigation.map((item) => {
-                    const isActive = location.pathname === item.href
-                    return (
-                      <Link
-                        key={item.name}
-                        to={item.href}
-                        className={`
-                          group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 relative
-                          ${isActive
-                            ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400'
-                            : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/50'
-                          }
-                        `}
-                      >
-                        {isActive && (
-                          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
-                        )}
-                        <item.icon className={`mr-3 h-4 w-4 flex-shrink-0 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
-                        <span className="truncate">{item.name}</span>
-                      </Link>
-                    )
-                  })}
-                </div>
+            <Link
+              to="/dashboard/settings"
+              className={`
+                group flex items-center w-full px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 relative
+                ${isSettingsActive
+                  ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/50'
+                }
+              `}
+            >
+              {isSettingsActive && (
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 dark:bg-indigo-400 rounded-r-full" />
               )}
-            </div>
+              <Cog6ToothIcon className={`mr-3 h-5 w-5 flex-shrink-0 ${isSettingsActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300'}`} />
+              <span className="truncate flex-1 text-left">{t.nav.settings}</span>
+            </Link>
           </nav>
           <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-gray-50/50 dark:bg-gray-900/50">
             {/* User Menu */}

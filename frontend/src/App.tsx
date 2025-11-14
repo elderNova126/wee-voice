@@ -13,9 +13,6 @@ import CallsPage from './pages/CallsPage'
 import APIKeysPage from './pages/ApiKeysPage'
 import DemoPage from './pages/DemoPage'
 import PublicAgentPage from './pages/PublicAgentPage'
-import BillingPage from './pages/BillingPage'
-import UsagePage from './pages/UsagePage'
-import SecurityPage from './pages/SecurityPage'
 import ProfilePage from './pages/ProfilePage'
 import SupportPage from './pages/SupportPage'
 import IntegrationsPage from './pages/IntegrationsPage'
@@ -25,6 +22,7 @@ import { CallbacksPage } from './pages/CallbacksPage'
 import { AgentEmbedPage } from './pages/AgentEmbedPage'
 import AdminPage from './pages/AdminPage'
 import LibrariesPage from './pages/LibrariesPage'
+import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -92,24 +90,9 @@ function App() {
             <CallsPage />
           </ProtectedRoute>
         } />
-        <Route path="/dashboard/api-keys" element={
+        <Route path="/dashboard/settings" element={
           <ProtectedRoute>
-            <APIKeysPage />
-          </ProtectedRoute>
-        } />
-        <Route path="/dashboard/billing" element={
-          <ProtectedRoute>
-            <BillingPage />
-          </ProtectedRoute>
-        } />
-        <Route path="/dashboard/usage" element={
-          <ProtectedRoute>
-            <UsagePage />
-          </ProtectedRoute>
-        } />
-        <Route path="/dashboard/security" element={
-          <ProtectedRoute>
-            <SecurityPage />
+            <SettingsPage />
           </ProtectedRoute>
         } />
         <Route path="/dashboard/profile" element={

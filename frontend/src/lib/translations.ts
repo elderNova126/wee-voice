@@ -49,10 +49,11 @@ export interface Translations {
     callbacks: string
     apiKeys: string
     support: string
+    settings: string
+    admin: string
     billing: string
     usage: string
     security: string
-    admin: string
   }
 
   // Dashboard
@@ -993,10 +994,11 @@ const translations: Record<Language, Translations> = {
       callbacks: 'Rappels',
       apiKeys: 'Clés API',
       support: 'Support',
+      settings: 'Paramètres',
+      admin: 'Administration',
       billing: 'Facturation',
       usage: 'Utilisation',
       security: 'Sécurité',
-      admin: 'Administration',
     },
     dashboard: {
       title: 'Tableau de bord',
@@ -1894,10 +1896,11 @@ const translations: Record<Language, Translations> = {
       callbacks: 'Callbacks',
       apiKeys: 'API Keys',
       support: 'Support',
+      settings: 'Settings',
+      admin: 'Administration',
       billing: 'Billing',
       usage: 'Usage',
       security: 'Security',
-      admin: 'Administration',
     },
     dashboard: {
       title: 'Dashboard',
