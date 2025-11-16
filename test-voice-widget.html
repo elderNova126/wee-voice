@@ -103,35 +103,36 @@
         </ol>
     </div>
 
-    <!-- ==========================================
-         VOICE AGENT WIDGET
-         Load the widget JavaScript
-         ========================================== -->
-    <script src="http://localhost:8000/static/js/voice-widget.js"></script>
-    
+
+    <!-- WeeVoice Agent Widget -->
     <script>
-        // Initialize the widget when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get agent ID from URL parameter or use default
-            const urlParams = new URLSearchParams(window.location.search);
-            const agentId = urlParams.get('agent') || '1';
-            
-            // Update display
-            document.getElementById('agent-id').textContent = agentId;
-            
-            // Initialize the voice widget
-            WeeVoiceWidget.init({
-                agentId: agentId,
-                apiUrl: 'http://localhost:8000',
-                position: 'bottom-right',
-                color: '#667eea',
-                agentName: 'Voice Assistant',
-                greeting: 'Hi! Click "Start Voice Call" to begin talking.'
-            });
-            
-            console.log('✅ Voice widget initialized for agent:', agentId);
-        });
+        (function() {
+        var config = {
+            agentId: 5,
+            apiUrl: 'http://localhost:8000',
+            color: '#4F46E5',
+            position: 'bottom-right',
+            greeting: 'Hi! I am Test. How can I help you?',
+            agentName: 'Test'
+        };
+        
+        var script = document.createElement('script');
+        script.src = 'http://localhost:8000/static/js/voice-widget.js';
+        script.async = true;
+        script.onload = function() {
+            if (window.WeeVoiceWidget) {
+            window.WeeVoiceWidget.init(config);
+            }
+        };
+        document.head.appendChild(script);
+        
+        var styles = document.createElement('link');
+        styles.rel = 'stylesheet';
+        styles.href = 'http://localhost:8000/static/css/voice-widget.css';
+        document.head.appendChild(styles);
+        })();
     </script>
+    <!-- End WeeVoice Agent Widget -->
 </body>
 </html>
 

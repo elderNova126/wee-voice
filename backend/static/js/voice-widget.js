@@ -10,9 +10,13 @@
     config: null,
     isOpen: false,
     isConnected: false,
+    audioQueue: [],  // Queue for smooth audio playback
+    nextPlayTime: 0,  // Track next scheduled play time for seamless playback
     
     init: function(config) {
       this.config = config;
+      this.audioQueue = [];
+      this.nextPlayTime = 0;
       this.createWidget();
       this.attachEventListeners();
     },
@@ -127,32 +131,37 @@
       // Connect to the WebSocket endpoint
       const wsUrl = `${this.config.apiUrl.replace('http', 'ws')}/api/v1/ws/voice/${this.config.agentId}`;
       
-      console.log('Connecting to:', wsUrl);
       this.ws = new WebSocket(wsUrl);
       
       this.ws.onopen = () => {
-        console.log('Connected to voice agent');
         this.isConnected = true;
         this.startAudioCapture();
       };
       
       this.ws.onmessage = (event) => {
-        // Check if data is binary (Blob/ArrayBuffer) or text (JSON)
+        // Track message count for diagnostics
+        if (!this._wsMessageCount) this._wsMessageCount = 0;
+        this._wsMessageCount++;
+        
+        // Check if data is binary (Blob) or text (JSON)
         if (event.data instanceof Blob) {
-          // Handle binary audio data
+          // Handle binary audio data (raw PCM from Gemini)
+          if (this._wsMessageCount <= 5) {
+            console.log(`📨 WS Message #${this._wsMessageCount}: Blob audio (${event.data.size} bytes)`);
+          }
           this.playAudio(event.data);
         } else if (typeof event.data === 'string') {
-          // Handle JSON messages
+          // Handle JSON messages (session_started, error, etc.)
           try {
             const data = JSON.parse(event.data);
             
-            if (data.type === 'transcript') {
-              this.updateTranscript(data.text);
-            } else if (data.type === 'audio') {
-              this.playAudio(data.data);
+            if (data.type === 'session_started') {
+              console.log('✓ Session started');
             } else if (data.type === 'error') {
+              console.error('Backend error:', data.message);
               this.showError(data.message || 'An error occurred');
             }
+            // Note: Transcript and audio come as separate Blob messages, not in JSON
           } catch (error) {
             console.error('Error parsing WebSocket message:', error);
           }
@@ -165,46 +174,62 @@
       };
       
       this.ws.onclose = () => {
-        console.log('Disconnected from voice agent');
         this.isConnected = false;
         this.stopAudioCapture();
       };
     },
     
     startAudioCapture: function() {
-      navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 16000,
-          channelCount: 1
-        }
-      })
+      // CRITICAL: Use simple audio constraint matching DemoPage.tsx exactly
+      navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
           this.audioStream = stream;
+          
+          // Clear audio queue and reset timing (matching DemoPage)
+          this.audioQueue = [];
+          this.nextPlayTime = 0;
+          
+          // Set up audio context for recording
           this.audioContext = new AudioContext({ sampleRate: 16000 });
           const source = this.audioContext.createMediaStreamSource(stream);
           
-          // Note: ScriptProcessorNode is deprecated but still works
-          // For production, consider migrating to AudioWorkletNode
-          this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+          // Create processor for audio chunks
+          this.processor = this.audioContext.createScriptProcessor(2048, 1, 1);
           
-          // Don't connect processor to destination to avoid echo
+          // Connect audio graph (MUST match working apps exactly)
           source.connect(this.processor);
-          // this.processor.connect(this.audioContext.destination); // REMOVED to prevent echo
+          this.processor.connect(this.audioContext.destination);
           
           this.processor.onaudioprocess = (e) => {
             if (this.isConnected && this.ws.readyState === WebSocket.OPEN) {
               const inputData = e.inputBuffer.getChannelData(0);
-              const pcmData = this.floatTo16BitPCM(inputData);
+              const int16Array = new Int16Array(inputData.length);
+              
+              // Convert float32 to int16 (matching DemoPage exactly)
+              for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              }
               
               // Send as binary data
-              this.ws.send(pcmData);
+              this.ws.send(int16Array.buffer);
             }
           };
           
-          console.log('✓ Microphone connected');
+          // Set up audio player for responses (BEFORE WebSocket)
+          // DON'T force 24kHz - let browser use native rate and resample automatically
+          this.playbackAudioContext = new AudioContext();
+          
+          // Check browser's native sample rate
+          const actualRate = this.playbackAudioContext.sampleRate;
+          
+          // if (actualRate !== 24000) {
+          //   console.log(`   ℹ️ This is NORMAL and should work correctly`);
+          // } else {
+          //   console.log('   ✓ Rates match perfectly!');
+          // }
+          
+          this._actualSampleRate = actualRate;
         })
         .catch(error => {
           console.error('Error accessing microphone:', error);
@@ -233,6 +258,10 @@
         this.playbackAudioContext.close();
         this.playbackAudioContext = null;
       }
+      
+      // Clear audio queue and reset timing
+      this.audioQueue = [];
+      this.nextPlayTime = 0;
     },
     
     floatTo16BitPCM: function(float32Array) {
@@ -249,17 +278,24 @@
     },
     
     playAudio: function(audioData) {
-      console.log('Audio received from agent');
-      
-      // Initialize audio context if not already done
-      if (!this.playbackAudioContext) {
-        this.playbackAudioContext = new AudioContext({ sampleRate: 24000 });
+      // Ensure audio context is running (required for playback)
+      if (this.playbackAudioContext && this.playbackAudioContext.state === 'suspended') {
+        console.warn('⚠️ AudioContext suspended, resuming...');
+        this.playbackAudioContext.resume().then(() => {
+          this.processAudioData(audioData);
+        });
+      } else {
+        this.processAudioData(audioData);
       }
-      
+    },
+    
+    processAudioData: function(audioData) {
       // Handle Blob audio data (raw PCM from Gemini)
       if (audioData instanceof Blob) {
         audioData.arrayBuffer().then(buffer => {
           this.playRawPCM(buffer);
+        }).catch(error => {
+          console.error('❌ Error converting Blob to ArrayBuffer:', error);
         });
       } else if (audioData instanceof ArrayBuffer) {
         this.playRawPCM(audioData);
@@ -267,42 +303,47 @@
     },
     
     playRawPCM: function(arrayBuffer) {
-      // Skip if buffer is too small (might be noise)
-      if (arrayBuffer.byteLength < 100) {
-        console.log('Skipping tiny audio chunk');
+      // Skip if buffer is too small (might be noise/silence)
+      if (arrayBuffer.byteLength < 200) {
         return;
       }
       
-      // Convert raw PCM16 to playable audio
+      // Verify playback context exists
+      if (!this.playbackAudioContext) {
+        console.error('❌ Playback context not initialized!');
+        return;
+      }
+      
+      // Initialize chunk counter
+      if (!this._audioChunkCount) {
+        this._audioChunkCount = 0;
+      }
+      this._audioChunkCount++;
+      
+      // Convert raw PCM16 to Float32
+      // Int16Array reads little-endian by default (matches backend output)
       const int16Array = new Int16Array(arrayBuffer);
       const float32Array = new Float32Array(int16Array.length);
       
-      // Convert Int16 PCM to Float32 for Web Audio API
+      // Convert Int16 PCM to Float32 (range -1 to 1)
       for (let i = 0; i < int16Array.length; i++) {
         float32Array[i] = int16Array[i] / 32768.0;
       }
       
-      // Create audio buffer
-      const audioBuffer = this.playbackAudioContext.createBuffer(
-        1, // mono
-        float32Array.length,
-        24000 // sample rate (Gemini uses 24kHz)
-      );
+      // Log first few chunks for debugging
+      if (this._audioChunkCount <= 3) {
+        if (this._audioChunkCount === 1) {
+          let sum = 0;
+          for (let i = 0; i < Math.min(1000, float32Array.length); i++) {
+            sum += float32Array[i] * float32Array[i];
+          }
+          const rms = Math.sqrt(sum / Math.min(1000, float32Array.length));
+        }
+      }
       
-      // Copy data to buffer
-      audioBuffer.getChannelData(0).set(float32Array);
-      
-      // Create and play source
-      const source = this.playbackAudioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      
-      // Add a gain node to control volume
-      const gainNode = this.playbackAudioContext.createGain();
-      gainNode.gain.value = 0.8; // Slightly reduce volume to prevent clipping
-      
-      source.connect(gainNode);
-      gainNode.connect(this.playbackAudioContext.destination);
-      source.start(0);
+      // Add to queue and schedule immediately
+      this.audioQueue.push(float32Array);
+      this.playAudioQueue();
       
       // Update UI
       const transcript = document.getElementById('weevoice-transcript');
@@ -310,16 +351,65 @@
         transcript.textContent = 'Agent is speaking...';
         transcript.style.color = '#10b981'; // green
       }
+    },
+    
+    playAudioQueue: function() {
+      if (!this.playbackAudioContext || this.audioQueue.length === 0) {
+        return;
+      }
       
-      // Reset after audio finishes
-      source.onended = () => {
-        if (transcript) {
-          transcript.textContent = 'Listening...';
-          transcript.style.color = '#6b7280'; // gray
+      const audioContext = this.playbackAudioContext;
+      const currentTime = audioContext.currentTime;
+      
+      // Initialize next play time if not set or if it's in the past
+      if (this.nextPlayTime < currentTime) {
+        this.nextPlayTime = currentTime;
+      }
+      
+      // Schedule all queued chunks
+      let chunkCount = 0;
+      while (this.audioQueue.length > 0) {
+        const audioData = this.audioQueue.shift();
+        chunkCount++;
+        
+        try {
+          // CRITICAL: Always create buffer at 24000 Hz (Gemini's actual output)
+          // If context is different, browser will resample automatically
+          const audioBuffer = audioContext.createBuffer(1, audioData.length, 24000);
+          audioBuffer.getChannelData(0).set(audioData);
+          
+          // Log buffer creation details for first few chunks
+          if (chunkCount <= 2) {
+            if (audioContext.sampleRate !== 24000) {
+              console.log(`   Browser resamples: 24kHz → ${audioContext.sampleRate}Hz (automatic)`);
+            }
+          }
+          
+          // Create source
+          const source = audioContext.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioContext.destination);
+          
+          // Schedule to start exactly when the previous chunk ends
+          source.start(this.nextPlayTime);
+          
+          // Update next play time (add duration of this chunk)
+          this.nextPlayTime += audioBuffer.duration;
+          
+          // Reset transcript when last chunk finishes
+          if (this.audioQueue.length === 0) {
+            source.onended = () => {
+              const transcript = document.getElementById('weevoice-transcript');
+              if (transcript) {
+                transcript.textContent = 'Listening...';
+                transcript.style.color = '#6b7280'; // gray
+              }
+            };
+          }
+        } catch (error) {
+          console.error('Error scheduling audio chunk:', error, error.stack);
         }
-      };
-      
-      console.log('🔊 Playing audio response');
+      }
     },
     
     updateTranscript: function(text) {
