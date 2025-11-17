@@ -17,6 +17,8 @@ class AgentCreate(BaseModel):
     voice_gender: str = "male"  # Voice gender: male, female, neutral
     system_prompt: str
     greeting: Optional[str] = None
+    email_request_enabled: bool = False
+    email_request_message: Optional[str] = None
     tools_enabled: List[str] = []
     crm_webhook_url: Optional[str] = None
     crm_enabled: bool = False
@@ -31,6 +33,8 @@ class AgentUpdate(BaseModel):
     voice_gender: Optional[str] = None
     system_prompt: Optional[str] = None
     greeting: Optional[str] = None
+    email_request_enabled: Optional[bool] = None
+    email_request_message: Optional[str] = None
     tools_enabled: Optional[List[str]] = None
     crm_webhook_url: Optional[str] = None
     crm_enabled: Optional[bool] = None
@@ -47,6 +51,8 @@ class AgentResponse(BaseModel):
     voice_gender: str
     system_prompt: str
     greeting: Optional[str] = None
+    email_request_enabled: bool = False
+    email_request_message: Optional[str] = None
     tools_enabled: List[str] = Field(default_factory=list)
     is_active: bool
     is_public: bool
@@ -79,6 +85,8 @@ def _serialize_agent(agent: VoiceAgent) -> AgentResponse:
         voice_gender=agent.voice_gender,
         system_prompt=agent.system_prompt,
         greeting=agent.greeting,
+        email_request_enabled=agent.email_request_enabled or False,
+        email_request_message=agent.email_request_message,
         tools_enabled=agent.tools_enabled or [],
         is_active=agent.is_active,
         is_public=agent.is_public,

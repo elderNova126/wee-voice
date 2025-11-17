@@ -19,6 +19,8 @@ class VoiceAgent(Base):
     voice_gender = Column(String, default="male")  # Voice gender: male, female, neutral
     system_prompt = Column(Text, nullable=False)
     greeting = Column(Text, nullable=True)  # Custom greeting message for the agent
+    email_request_enabled = Column(Boolean, default=False)  # Request email after greeting
+    email_request_message = Column(Text, nullable=True)  # Custom email request message
     
     # LangGraph configuration
     agent_config = Column(JSON, nullable=True)  # Store LangGraph workflow config

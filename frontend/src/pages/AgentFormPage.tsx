@@ -19,6 +19,8 @@ interface AgentFormData {
   voice_gender: string
   system_prompt: string
   greeting?: string
+  email_request_enabled?: boolean
+  email_request_message?: string
   is_public: boolean
   is_active: boolean
   rag_enabled?: boolean
@@ -48,6 +50,8 @@ export default function AgentFormPage() {
     voice_gender: 'male',
     system_prompt: '',
     greeting: '',
+    email_request_enabled: false,
+    email_request_message: 'Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?',
     is_public: false,
     is_active: true,
     rag_enabled: false
@@ -71,6 +75,8 @@ export default function AgentFormPage() {
         voice_gender: agent.voice_gender || 'male',
         system_prompt: agent.system_prompt || '',
         greeting: agent.greeting || '',
+        email_request_enabled: agent.email_request_enabled ?? false,
+        email_request_message: agent.email_request_message || 'Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?',
         is_public: agent.is_public ?? false,
         is_active: agent.is_active ?? true,
         rag_enabled: agent.rag_enabled ?? false
@@ -113,6 +119,8 @@ export default function AgentFormPage() {
         voice_gender: library.voice_gender || 'male',
         system_prompt: library.system_prompt || '',
         greeting: library.greeting || '',
+        email_request_enabled: library.email_request_enabled ?? false,
+        email_request_message: library.email_request_message || 'Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?',
         is_public: false,
         is_active: true,
         rag_enabled: library.rag_enabled ?? false
@@ -360,6 +368,42 @@ export default function AgentFormPage() {
               <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                 {t.agentForm.greetingPlaceholder.includes('Bonjour') ? 'Premier message que l\'agent dira au début d\'une conversation.' : 'First message the agent will say when starting a conversation.'}
               </p>
+            </div>
+
+            {/* Email Request */}
+            <div className="space-y-3">
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="email_request_enabled"
+                  checked={formData.email_request_enabled}
+                  onChange={handleChange}
+                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.common.status === 'Statut' ? 'Demander l\'adresse email après le message d\'accueil' : 'Request email address after greeting'}
+                </span>
+              </label>
+              
+              {formData.email_request_enabled && (
+                <div>
+                  <label htmlFor="email_request_message" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {t.common.status === 'Statut' ? 'Message de demande d\'email' : 'Email request message'}
+                  </label>
+                  <textarea
+                    id="email_request_message"
+                    name="email_request_message"
+                    rows={2}
+                    value={formData.email_request_message}
+                    onChange={handleChange}
+                    placeholder="Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?"
+                    className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all resize-none"
+                  />
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    {t.common.status === 'Statut' ? 'Message qui sera dit après le message d\'accueil pour demander l\'adresse email.' : 'Message that will be said after the greeting to request the email address.'}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Language */}

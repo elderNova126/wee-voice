@@ -126,8 +126,18 @@ CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini
         safe_greeting = ""
         if self.agent.greeting:
             safe_greeting = self.agent.greeting.replace('"', '\\"')
-        safe_greeting += "Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?"
-        greeting_instruction = f"""
+        
+        # Add email request after greeting if enabled
+        if self.agent.email_request_enabled:
+            email_request_msg = self.agent.email_request_message or "Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?"
+            safe_email_request = email_request_msg.replace('"', '\\"')
+            if safe_greeting:
+                safe_greeting += " " + safe_email_request
+            else:
+                safe_greeting = safe_email_request
+        
+        if safe_greeting:
+            greeting_instruction = f"""
 INITIAL_GREETING PROTOCOL:
 - When the conversation begins you will receive the marker "<CALL_START>".
 - Immediately respond to "<CALL_START>" by speaking this exact sentence, in a natural tone, before anything else: "{safe_greeting}"

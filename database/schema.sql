@@ -155,6 +155,8 @@ CREATE TABLE voice_agents (
     voice_gender VARCHAR(20) DEFAULT 'male',
     system_prompt TEXT NOT NULL,
     greeting TEXT,
+    email_request_enabled BOOLEAN DEFAULT FALSE,
+    email_request_message TEXT,
     
     -- LangGraph configuration
     agent_config JSONB,
