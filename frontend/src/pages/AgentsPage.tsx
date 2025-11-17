@@ -6,8 +6,9 @@ import {
   PencilIcon,
   TrashIcon,
   PlayIcon,
-  DocumentTextIcon,
   CodeBracketIcon,
+  UserGroupIcon,
+  UserIcon,
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, VoiceWebSocket } from '@/lib/api'
@@ -28,11 +29,14 @@ interface Agent {
   permissions?: string[]
 }
 
+type FilterType = 'all' | 'my' | 'team'
+
 export default function AgentsPage() {
   const t = useTranslation()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [testingAgent, setTestingAgent] = useState<Agent | null>(null)
+  const [filter, setFilter] = useState<FilterType>('all')
 
   useEffect(() => {
     loadAgents()
@@ -66,6 +70,16 @@ export default function AgentsPage() {
     setTestingAgent(agent)
   }
 
+  // Filter agents based on selected filter
+  const filteredAgents = agents.filter((agent) => {
+    if (filter === 'my') return agent.is_owner
+    if (filter === 'team') return agent.role === 'collaborator'
+    return true // 'all'
+  })
+
+  const myAgents = agents.filter((a) => a.is_owner)
+  const teamAgents = agents.filter((a) => a.role === 'collaborator')
+
   return (
     <DashboardLayout>
       <div className="mb-8 flex justify-between items-center">
@@ -84,6 +98,46 @@ export default function AgentsPage() {
         </Link>
       </div>
 
+      {/* Filter Tabs */}
+      {agents.length > 0 && (
+        <div className="mb-6 flex gap-2 border-b border-gray-200 dark:border-gray-700">
+          <button
+            onClick={() => setFilter('all')}
+            className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 ${
+              filter === 'all'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+            }`}
+          >
+            All ({agents.length})
+          </button>
+          <button
+            onClick={() => setFilter('my')}
+            className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 flex items-center gap-2 ${
+              filter === 'my'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+            }`}
+          >
+            <UserIcon className="h-4 w-4" />
+            My Agents ({myAgents.length})
+          </button>
+          {teamAgents.length > 0 && (
+            <button
+              onClick={() => setFilter('team')}
+              className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 flex items-center gap-2 ${
+                filter === 'team'
+                  ? 'border-purple-600 text-purple-600 dark:text-purple-400'
+                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
+            >
+              <UserGroupIcon className="h-4 w-4" />
+              Team Agents ({teamAgents.length})
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Loading Skeleton */}
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -96,37 +150,54 @@ export default function AgentsPage() {
             </div>
           ))}
         </div>
-      ) : agents.length === 0 ? (
+      ) : filteredAgents.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 px-6 text-center bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm">
           <div className="bg-blue-100 dark:bg-blue-900 p-4 rounded-full mb-4">
             <MicrophoneIcon className="h-10 w-10 text-blue-600 dark:text-blue-300" />
           </div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            {t.agentsPage.noAgentsYet}
+            {filter === 'team' ? 'No Team Agents' : filter === 'my' ? 'No Agents Yet' : t.agentsPage.noAgentsYet}
           </h3>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-w-sm">
-            {t.agentsPage.noAgentsDescription}
+            {filter === 'team' 
+              ? 'You are not a collaborator on any agents yet.' 
+              : filter === 'my'
+              ? 'Create your first agent to get started.'
+              : t.agentsPage.noAgentsDescription}
           </p>
-          <Link
-            to="/dashboard/agents/new"
-            className="mt-6 inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition"
-          >
-            <PlusIcon className="h-5 w-5 mr-2" />
-            {t.agentsPage.createAgent}
-          </Link>
+          {filter !== 'team' && (
+            <Link
+              to="/dashboard/agents/new"
+              className="mt-6 inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition"
+            >
+              <PlusIcon className="h-5 w-5 mr-2" />
+              {t.agentsPage.createAgent}
+            </Link>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {agents.map((agent) => (
+          {filteredAgents.map((agent) => (
             <div
               key={agent.id}
-              className="relative bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm hover:shadow-lg transition-all"
+              className={`relative bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm hover:shadow-lg transition-all ${
+                agent.role === 'collaborator'
+                  ? 'border-2 border-purple-200 dark:border-purple-800'
+                  : 'border border-gray-200 dark:border-gray-700'
+              }`}
             >
               {/* Status and Role Badges */}
-              <div className="absolute top-4 right-4 flex gap-2">
+              <div className="absolute top-4 right-4 flex gap-2 flex-wrap justify-end max-w-[50%]">
                 {agent.role === 'collaborator' && (
-                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">
+                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 flex items-center gap-1">
+                    <UserGroupIcon className="h-3 w-3" />
                     {t.common.status === 'Statut' ? 'Équipe' : 'Team'}
+                  </span>
+                )}
+                {agent.is_owner && (
+                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 flex items-center gap-1">
+                    <UserIcon className="h-3 w-3" />
+                    Owner
                   </span>
                 )}
                 <span
@@ -154,6 +225,20 @@ export default function AgentsPage() {
                   </p>
                 </div>
               </div>
+
+              {/* Permissions for team agents */}
+              {agent.role === 'collaborator' && agent.permissions && agent.permissions.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {agent.permissions.map((perm) => (
+                    <span
+                      key={perm}
+                      className="px-2 py-0.5 text-xs font-medium rounded bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400"
+                    >
+                      {perm}
+                    </span>
+                  ))}
+                </div>
+              )}
 
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 line-clamp-2">
                 {agent.description || t.agentsPage.noDescription}
