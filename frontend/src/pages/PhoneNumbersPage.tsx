@@ -838,7 +838,7 @@ export const PhoneNumbersPage: React.FC = () => {
                         {t?.phoneNumbers?.pbxRequiresZadarma || 'PBX configuration requires Zadarma number'}
                       </div>
                     )}
-                    {number.agent_id && (
+                    {/* {number.agent_id && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -847,7 +847,7 @@ export const PhoneNumbersPage: React.FC = () => {
                         <PlayCircleIcon className="mr-2 h-3.5 w-3.5" />
                         {t?.phoneNumbers?.testCall || 'Test Call'}
                       </Button>
-                    )}
+                    )} */}
                   </div>
                 </div>
               </div>
