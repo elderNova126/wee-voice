@@ -23,6 +23,9 @@ interface Agent {
   is_active: boolean
   is_public: boolean
   created_at: string
+  is_owner?: boolean
+  role?: string
+  permissions?: string[]
 }
 
 export default function AgentsPage() {
@@ -119,8 +122,13 @@ export default function AgentsPage() {
               key={agent.id}
               className="relative bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm hover:shadow-lg transition-all"
             >
-              {/* Status Badge */}
-              <div className="absolute top-4 right-4">
+              {/* Status and Role Badges */}
+              <div className="absolute top-4 right-4 flex gap-2">
+                {agent.role === 'collaborator' && (
+                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">
+                    {t.common.status === 'Statut' ? 'Équipe' : 'Team'}
+                  </span>
+                )}
                 <span
                   className={`px-2.5 py-1 text-xs font-medium rounded-full ${
                     agent.is_active
@@ -159,27 +167,33 @@ export default function AgentsPage() {
                   <PlayIcon className="h-4 w-4" />
                   {t.agentsPage.test}
                 </button>
-                <Link
-                  to={`/dashboard/agents/${agent.id}/embed`}
-                  className="p-2.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition"
-                  title="Embed Widget"
-                >
-                  <CodeBracketIcon className="h-4 w-4" />
-                </Link>
-                <Link
-                  to={`/dashboard/agents/${agent.id}/edit`}
-                  className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
-                  title={t.agentsPage.edit}
-                >
-                  <PencilIcon className="h-4 w-4" />
-                </Link>
-                <button
-                  onClick={() => handleDelete(agent.id)}
-                  className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
-                  title={t.agentsPage.delete}
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
+                {(agent.is_owner || agent.permissions?.includes('edit')) && (
+                  <Link
+                    to={`/dashboard/agents/${agent.id}/embed`}
+                    className="p-2.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition"
+                    title="Embed Widget"
+                  >
+                    <CodeBracketIcon className="h-4 w-4" />
+                  </Link>
+                )}
+                {(agent.is_owner || agent.permissions?.includes('edit')) && (
+                  <Link
+                    to={`/dashboard/agents/${agent.id}/edit`}
+                    className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
+                    title={t.agentsPage.edit}
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                  </Link>
+                )}
+                {(agent.is_owner || agent.permissions?.includes('delete')) && (
+                  <button
+                    onClick={() => handleDelete(agent.id)}
+                    className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
+                    title={t.agentsPage.delete}
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             </div>
           ))}

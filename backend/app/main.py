@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators
 
 # Set up logging
 logging.basicConfig(
@@ -94,6 +94,7 @@ app.include_router(embed.router, prefix=f"{settings.API_V1_STR}/embed", tags=["E
 app.include_router(zadarma_webhook.router, prefix=f"{settings.API_V1_STR}/zadarma", tags=["Zadarma Webhooks"])
 app.include_router(admin.router, prefix=f"{settings.API_V1_STR}/admin", tags=["Admin"])
 app.include_router(libraries.router, prefix=f"{settings.API_V1_STR}/libraries", tags=["Agent Libraries"])
+app.include_router(collaborators.router, prefix=f"{settings.API_V1_STR}", tags=["Collaborators"])
 
 
 # Global exception handler

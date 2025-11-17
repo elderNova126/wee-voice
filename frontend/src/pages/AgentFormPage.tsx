@@ -6,7 +6,9 @@ import {
   CloudArrowUpIcon, 
   DocumentTextIcon,
   TrashIcon,
-  CheckCircleIcon 
+  CheckCircleIcon,
+  UserPlusIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, api, librariesAPI } from '@/lib/api'
@@ -64,6 +66,25 @@ export default function AgentFormPage() {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([])
   const [websiteUrl, setWebsiteUrl] = useState('')
   const [uploading, setUploading] = useState(false)
+  
+  // Collaborators state
+  const [collaborators, setCollaborators] = useState<any[]>([])
+  const [loadingCollaborators, setLoadingCollaborators] = useState(false)
+  const [collaboratorEmail, setCollaboratorEmail] = useState('')
+  const [collaboratorPermissions, setCollaboratorPermissions] = useState('view,edit')
+  const [userPermissions, setUserPermissions] = useState<any>(null)
+
+  const loadCollaborators = useCallback(async (agentId: number) => {
+    try {
+      setLoadingCollaborators(true)
+      const { data } = await api.get(`/agents/${agentId}/collaborators`)
+      setCollaborators(data)
+    } catch (err: any) {
+      console.error('Failed to load collaborators:', err)
+    } finally {
+      setLoadingCollaborators(false)
+    }
+  }, [])
 
   const loadAgent = useCallback(async (agentId: number) => {
     try {
@@ -91,13 +112,26 @@ export default function AgentFormPage() {
           console.log('No documents found or RAG not set up yet')
         }
       }
+      
+      // Load user permissions and collaborators if user can manage
+      try {
+        const { data: perms } = await api.get(`/agents/${agentId}/my-permissions`)
+        setUserPermissions(perms)
+        
+        // Load collaborators if user can manage them
+        if (perms.is_owner || (perms.permissions && perms.permissions.includes('manage_collaborators'))) {
+          await loadCollaborators(agentId)
+        }
+      } catch (err) {
+        console.log('Could not load permissions')
+      }
     } catch (err) {
       toast.error('Failed to load agent.')
       navigate('/dashboard/agents')
     } finally {
       setLoadingAgent(false)
     }
-  }, [navigate])
+  }, [navigate, loadCollaborators])
 
   useEffect(() => {
     if (isEdit && id) {
@@ -273,6 +307,55 @@ export default function AgentFormPage() {
       setDocuments(docs => docs.filter(d => d.id !== docId))
     } catch (err: any) {
       toast.error('Failed to delete document')
+    }
+  }
+
+  const handleAddCollaborator = async () => {
+    if (!id || !collaboratorEmail) return
+    
+    try {
+      await api.post(`/agents/${id}/collaborators`, {
+        email: collaboratorEmail,
+        permissions: collaboratorPermissions
+      })
+      toast.success(t.common.status === 'Statut' ? 'Collaborateur ajouté' : 'Collaborator added')
+      setCollaboratorEmail('')
+      setCollaboratorPermissions('view,edit')
+      if (id) {
+        await loadCollaborators(parseInt(id))
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to add collaborator')
+    }
+  }
+
+  const handleRemoveCollaborator = async (collaboratorId: number) => {
+    if (!id || !confirm(t.common.status === 'Statut' ? 'Retirer ce collaborateur ?' : 'Remove this collaborator?')) return
+    
+    try {
+      await api.delete(`/agents/${id}/collaborators/${collaboratorId}`)
+      toast.success(t.common.status === 'Statut' ? 'Collaborateur retiré' : 'Collaborator removed')
+      if (id) {
+        await loadCollaborators(parseInt(id))
+      }
+    } catch (err: any) {
+      toast.error('Failed to remove collaborator')
+    }
+  }
+
+  const handleUpdateCollaboratorPermissions = async (collaboratorId: number, permissions: string) => {
+    if (!id) return
+    
+    try {
+      await api.put(`/agents/${id}/collaborators/${collaboratorId}`, {
+        permissions: permissions
+      })
+      toast.success(t.common.status === 'Statut' ? 'Permissions mises à jour' : 'Permissions updated')
+      if (id) {
+        await loadCollaborators(parseInt(id))
+      }
+    } catch (err: any) {
+      toast.error('Failed to update permissions')
     }
   }
 
@@ -624,6 +707,100 @@ export default function AgentFormPage() {
                 💡 <strong>Tip:</strong> Save the agent first, then you can upload PDFs and add websites to the knowledge base.
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Collaborators Section */}
+        {isEdit && id && userPermissions && (userPermissions.is_owner || userPermissions.permissions.includes('manage_collaborators')) && (
+          <div className="mt-8 border-t border-gray-200 dark:border-gray-700/60 pt-8">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              👥 {t.common.status === 'Statut' ? 'Collaborateurs' : 'Collaborators'}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+              {t.common.status === 'Statut' ? 'Invitez d\'autres utilisateurs à collaborer sur cet agent avec des permissions spécifiques.' : 'Invite other users to collaborate on this agent with specific permissions.'}
+            </p>
+
+            {/* Add Collaborator */}
+            <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700">
+              <div className="flex gap-3 mb-3">
+                <input
+                  type="email"
+                  value={collaboratorEmail}
+                  onChange={(e) => setCollaboratorEmail(e.target.value)}
+                  placeholder={t.common.status === 'Statut' ? 'Email du collaborateur' : 'Collaborator email'}
+                  className="flex-1 px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700 text-sm"
+                />
+                <select
+                  value={collaboratorPermissions}
+                  onChange={(e) => setCollaboratorPermissions(e.target.value)}
+                  className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700 text-sm"
+                >
+                  <option value="view">{t.common.status === 'Statut' ? 'Voir uniquement' : 'View only'}</option>
+                  <option value="view,edit">{t.common.status === 'Statut' ? 'Voir et modifier' : 'View and Edit'}</option>
+                  <option value="view,edit,delete">{t.common.status === 'Statut' ? 'Voir, modifier et supprimer' : 'View, Edit and Delete'}</option>
+                  <option value="view,edit,delete,manage_collaborators">{t.common.status === 'Statut' ? 'Toutes les permissions' : 'All permissions'}</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={handleAddCollaborator}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition"
+                >
+                  <UserPlusIcon className="w-4 h-4" />
+                  {t.common.status === 'Statut' ? 'Ajouter' : 'Add'}
+                </button>
+              </div>
+            </div>
+
+            {/* Collaborators List */}
+            {loadingCollaborators ? (
+              <div className="text-center py-4 text-gray-500 dark:text-gray-400 text-sm">
+                {t.common.status === 'Statut' ? 'Chargement...' : 'Loading...'}
+              </div>
+            ) : collaborators.length > 0 ? (
+              <div className="space-y-2">
+                {collaborators.map((collab) => (
+                  <div
+                    key={collab.id}
+                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700"
+                  >
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
+                        {collab.user_name} ({collab.user_email})
+                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <select
+                          value={collab.permissions}
+                          onChange={(e) => handleUpdateCollaboratorPermissions(collab.id, e.target.value)}
+                          className="text-xs px-2 py-1 border rounded dark:bg-gray-800 dark:border-gray-700"
+                        >
+                          <option value="view">{t.common.status === 'Statut' ? 'Voir' : 'View'}</option>
+                          <option value="view,edit">{t.common.status === 'Statut' ? 'Voir + Modifier' : 'View + Edit'}</option>
+                          <option value="view,edit,delete">{t.common.status === 'Statut' ? 'Voir + Modifier + Supprimer' : 'View + Edit + Delete'}</option>
+                          <option value="view,edit,delete,manage_collaborators">{t.common.status === 'Statut' ? 'Toutes' : 'All'}</option>
+                        </select>
+                        {!collab.is_active && (
+                          <span className="text-xs text-gray-500 dark:text-gray-400">
+                            ({t.common.status === 'Statut' ? 'Inactif' : 'Inactive'})
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCollaborator(collab.id)}
+                      className="ml-3 p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition"
+                      title={t.common.status === 'Statut' ? 'Retirer' : 'Remove'}
+                    >
+                      <XMarkIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
+                {t.common.status === 'Statut' ? 'Aucun collaborateur. Ajoutez-en un ci-dessus.' : 'No collaborators. Add one above.'}
+              </div>
+            )}
           </div>
         )}
 

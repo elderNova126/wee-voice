@@ -10,6 +10,7 @@ from app.models.integration import Integration, IntegrationType, IntegrationProv
 from app.models.document import Document, DocumentChunk
 from app.models.zadarma import PhoneNumber, PhoneNumberStatus, VerificationDocument, DocumentType, VerificationStatus, CallbackRequest
 from app.models.agent_library import AgentLibrary, LibraryCategory
+from app.models.agent_collaborator import AgentCollaborator, CollaboratorPermission
 
 __all__ = [
     "Base",
@@ -48,5 +49,7 @@ __all__ = [
     "CallbackRequest",
     "AgentLibrary",
     "LibraryCategory",
+    "AgentCollaborator",
+    "CollaboratorPermission",
 ]
 

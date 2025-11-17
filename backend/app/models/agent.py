@@ -58,6 +58,7 @@ class VoiceAgent(Base):
     
     # Relationships
     user = relationship("User", back_populates="agents")
+    collaborators = relationship("AgentCollaborator", back_populates="agent", cascade="all, delete-orphan")
     calls = relationship("Call", back_populates="agent", cascade="all, delete-orphan")
     usage_records = relationship("UsageRecord", back_populates="agent", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="agent", cascade="all, delete-orphan")

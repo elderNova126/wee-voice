@@ -202,6 +202,28 @@ CREATE INDEX idx_agents_user_active ON voice_agents(user_id, is_active);
 CREATE INDEX idx_agents_tools ON voice_agents USING GIN (tools_enabled);
 
 -- ===================================================================
+-- AGENT COLLABORATORS TABLE
+-- ===================================================================
+
+CREATE TABLE agent_collaborators (
+    id SERIAL PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    permissions VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    invited_by INTEGER REFERENCES users(id),
+    
+    -- Ensure unique collaboration per agent-user pair
+    UNIQUE(agent_id, user_id)
+);
+
+CREATE INDEX idx_agent_collaborators_agent_id ON agent_collaborators(agent_id);
+CREATE INDEX idx_agent_collaborators_user_id ON agent_collaborators(user_id);
+CREATE INDEX idx_agent_collaborators_active ON agent_collaborators(agent_id, user_id, is_active);
+
+-- ===================================================================
 -- INTEGRATIONS TABLE
 -- ===================================================================
 
