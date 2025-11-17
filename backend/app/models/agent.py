@@ -51,6 +51,7 @@ class VoiceAgent(Base):
     embed_widget_color = Column(String, default="#4F46E5")  # Primary color for widget
     embed_position = Column(String, default="bottom-right")  # "bottom-right", "bottom-left"
     embed_greeting_message = Column(Text, nullable=True)
+    embed_language = Column(String, default="en")  # UI language: en, fr, es, etc.
     allowed_domains = Column(JSON, default=list)  # List of domains where embed is allowed
     
     # Relationships

@@ -179,6 +179,7 @@ CREATE TABLE voice_agents (
     embed_widget_color VARCHAR(20) DEFAULT '#4F46E5',
     embed_position VARCHAR(20) DEFAULT 'bottom-right',
     embed_greeting_message TEXT,
+    embed_language VARCHAR(10) DEFAULT 'en',
     allowed_domains JSONB,
     
     -- Status

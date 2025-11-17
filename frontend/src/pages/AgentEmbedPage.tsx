@@ -13,6 +13,7 @@ interface EmbedConfig {
   embed_widget_color: string;
   embed_position: string;
   embed_greeting_message: string;
+  embed_language: string;
   allowed_domains: string[];
 }
 
@@ -31,6 +32,7 @@ export const AgentEmbedPage: React.FC = () => {
     embed_widget_color: '#4F46E5',
     embed_position: 'bottom-right',
     embed_greeting_message: '',
+    embed_language: 'en',
     allowed_domains: []
   });
   const [embedCode, setEmbedCode] = useState<string>('');
@@ -227,6 +229,31 @@ export const AgentEmbedPage: React.FC = () => {
               <option value="top-right">{t.agentEmbed.topRight}</option>
               <option value="top-left">{t.agentEmbed.topLeft}</option>
             </select>
+          </div>
+
+          {/* Widget Language */}
+          <div>
+            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+              {t.common.status === 'Statut' ? 'Langue de l\'interface' : 'UI Language'}
+            </label>
+            <select
+              value={config.embed_language}
+              onChange={(e) => setConfig({ ...config, embed_language: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+            >
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+              <option value="es">Español</option>
+              <option value="de">Deutsch</option>
+              <option value="it">Italiano</option>
+              <option value="pt">Português</option>
+              <option value="zh">中文</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+            </select>
+            <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+              {t.common.status === 'Statut' ? 'Sélectionnez la langue de l\'interface utilisateur du widget' : 'Select the language for the widget user interface'}
+            </p>
           </div>
 
           {/* Greeting Message */}

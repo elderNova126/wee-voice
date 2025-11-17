@@ -20,6 +20,7 @@ class EmbedConfigUpdate(BaseModel):
     embed_widget_color: Optional[str] = "#4F46E5"
     embed_position: Optional[str] = "bottom-right"
     embed_greeting_message: Optional[str] = None
+    embed_language: Optional[str] = "en"
     allowed_domains: Optional[list] = []
 
 
@@ -53,6 +54,7 @@ async def get_embed_config(
         "embed_widget_color": agent.embed_widget_color,
         "embed_position": agent.embed_position,
         "embed_greeting_message": agent.embed_greeting_message,
+        "embed_language": agent.embed_language or "en",
         "allowed_domains": agent.allowed_domains or []
     }
 
@@ -81,6 +83,7 @@ async def update_embed_config(
     agent.embed_widget_color = config.embed_widget_color
     agent.embed_position = config.embed_position
     agent.embed_greeting_message = config.embed_greeting_message
+    agent.embed_language = config.embed_language or "en"
     agent.allowed_domains = config.allowed_domains or []
     
     db.commit()
@@ -129,7 +132,8 @@ async def generate_embed_code(
       color: '{agent.embed_widget_color}',
       position: '{agent.embed_position}',
       greeting: '{agent.embed_greeting_message or f"Hi! I'm {agent.name}. How can I help you?"}',
-      agentName: '{agent.name}'
+      agentName: '{agent.name}',
+      language: '{agent.embed_language or "en"}'
     }};
     
     var script = document.createElement('script');
@@ -158,7 +162,8 @@ async def generate_embed_code(
             "color": agent.embed_widget_color,
             "position": agent.embed_position,
             "greeting": agent.embed_greeting_message or f"Hi! I'm {agent.name}. How can I help you?",
-            "agent_name": agent.name
+            "agent_name": agent.name,
+            "language": agent.embed_language or "en"
         }
     }
 
@@ -199,6 +204,6 @@ async def get_widget_config(
         "color": agent.embed_widget_color,
         "position": agent.embed_position,
         "greeting": agent.embed_greeting_message or f"Hi! I'm {agent.name}. How can I help you?",
-        "language": agent.language
+        "language": agent.embed_language or "en"
     }
 

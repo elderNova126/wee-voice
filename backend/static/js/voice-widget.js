@@ -6,17 +6,106 @@
 (function() {
   'use strict';
 
+  // Translations for widget UI
+  const translations = {
+    en: {
+      startCall: 'Start Voice Call',
+      connecting: 'Connecting to agent...',
+      endCall: 'End Call',
+      listening: 'Listening...',
+      speaking: 'Agent is speaking...',
+      connectionError: 'Connection error. Please try again.',
+      microphoneError: 'Could not access microphone. Please allow microphone access and try again.'
+    },
+    fr: {
+      startCall: 'Démarrer l\'appel vocal',
+      connecting: 'Connexion à l\'agent...',
+      endCall: 'Terminer l\'appel',
+      listening: 'Écoute...',
+      speaking: 'L\'agent parle...',
+      connectionError: 'Erreur de connexion. Veuillez réessayer.',
+      microphoneError: 'Impossible d\'accéder au microphone. Veuillez autoriser l\'accès au microphone et réessayer.'
+    },
+    es: {
+      startCall: 'Iniciar llamada de voz',
+      connecting: 'Conectando con el agente...',
+      endCall: 'Finalizar llamada',
+      listening: 'Escuchando...',
+      speaking: 'El agente está hablando...',
+      connectionError: 'Error de conexión. Por favor, inténtelo de nuevo.',
+      microphoneError: 'No se pudo acceder al micrófono. Por favor, permita el acceso al micrófono e inténtelo de nuevo.'
+    },
+    de: {
+      startCall: 'Sprachanruf starten',
+      connecting: 'Verbinde mit Agent...',
+      endCall: 'Anruf beenden',
+      listening: 'Höre zu...',
+      speaking: 'Agent spricht...',
+      connectionError: 'Verbindungsfehler. Bitte versuchen Sie es erneut.',
+      microphoneError: 'Mikrofonzugriff nicht möglich. Bitte erlauben Sie den Mikrofonzugriff und versuchen Sie es erneut.'
+    },
+    it: {
+      startCall: 'Avvia chiamata vocale',
+      connecting: 'Connessione all\'agente...',
+      endCall: 'Termina chiamata',
+      listening: 'In ascolto...',
+      speaking: 'L\'agente sta parlando...',
+      connectionError: 'Errore di connessione. Riprova.',
+      microphoneError: 'Impossibile accedere al microfono. Consenti l\'accesso al microfono e riprova.'
+    },
+    pt: {
+      startCall: 'Iniciar chamada de voz',
+      connecting: 'Conectando ao agente...',
+      endCall: 'Encerrar chamada',
+      listening: 'Ouvindo...',
+      speaking: 'O agente está falando...',
+      connectionError: 'Erro de conexão. Por favor, tente novamente.',
+      microphoneError: 'Não foi possível acessar o microfone. Por favor, permita o acesso ao microfone e tente novamente.'
+    },
+    zh: {
+      startCall: '开始语音通话',
+      connecting: '正在连接代理...',
+      endCall: '结束通话',
+      listening: '正在聆听...',
+      speaking: '代理正在说话...',
+      connectionError: '连接错误。请重试。',
+      microphoneError: '无法访问麦克风。请允许麦克风访问并重试。'
+    },
+    ja: {
+      startCall: '音声通話を開始',
+      connecting: 'エージェントに接続中...',
+      endCall: '通話を終了',
+      listening: '聞いています...',
+      speaking: 'エージェントが話しています...',
+      connectionError: '接続エラー。もう一度お試しください。',
+      microphoneError: 'マイクにアクセスできませんでした。マイクへのアクセスを許可してもう一度お試しください。'
+    },
+    ko: {
+      startCall: '음성 통화 시작',
+      connecting: '에이전트에 연결 중...',
+      endCall: '통화 종료',
+      listening: '듣는 중...',
+      speaking: '에이전트가 말하고 있습니다...',
+      connectionError: '연결 오류. 다시 시도해 주세요.',
+      microphoneError: '마이크에 액세스할 수 없습니다. 마이크 액세스를 허용하고 다시 시도해 주세요.'
+    }
+  };
+
   window.WeeVoiceWidget = {
     config: null,
     isOpen: false,
     isConnected: false,
     audioQueue: [],  // Queue for smooth audio playback
     nextPlayTime: 0,  // Track next scheduled play time for seamless playback
+    t: null,  // Translations object
     
     init: function(config) {
       this.config = config;
       this.audioQueue = [];
       this.nextPlayTime = 0;
+      // Set translations based on language (default to 'en')
+      const lang = (config.language || 'en').toLowerCase();
+      this.t = translations[lang] || translations.en;
       this.createWidget();
       this.attachEventListeners();
     },
@@ -51,8 +140,12 @@
           <div id="weevoice-status" class="weevoice-status">
             <p>${this.config.greeting}</p>
             <button id="weevoice-start" class="weevoice-start-btn" style="background-color: ${this.config.color}">
-              Start Voice Call
+              ${this.t.startCall}
             </button>
+          </div>
+          <div id="weevoice-loading" class="weevoice-loading hidden">
+            <div class="weevoice-spinner"></div>
+            <p>${this.t.connecting}</p>
           </div>
           <div id="weevoice-call" class="weevoice-call hidden">
             <div class="weevoice-waveform">
@@ -63,7 +156,7 @@
             </div>
             <p id="weevoice-transcript" class="weevoice-transcript"></p>
             <button id="weevoice-end" class="weevoice-end-btn">
-              End Call
+              ${this.t.endCall}
             </button>
           </div>
         </div>
@@ -119,9 +212,10 @@
     },
     
     startCall: function() {
-      // Show call interface
+      // Show loading state
       document.getElementById('weevoice-status').classList.add('hidden');
-      document.getElementById('weevoice-call').classList.remove('hidden');
+      document.getElementById('weevoice-loading').classList.remove('hidden');
+      document.getElementById('weevoice-call').classList.add('hidden');
       
       // Connect to voice agent
       this.connectToAgent();
@@ -135,6 +229,9 @@
       
       this.ws.onopen = () => {
         this.isConnected = true;
+        // Hide loading and show call interface with waveform
+        document.getElementById('weevoice-loading').classList.add('hidden');
+        document.getElementById('weevoice-call').classList.remove('hidden');
         this.startAudioCapture();
       };
       
@@ -170,12 +267,26 @@
       
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
-        this.showError('Connection error. Please try again.');
+        // Hide loading and show error in status
+        document.getElementById('weevoice-loading').classList.add('hidden');
+        const statusEl = document.getElementById('weevoice-status');
+        statusEl.classList.remove('hidden');
+        const statusP = statusEl.querySelector('p');
+        if (statusP) {
+          statusP.textContent = '❌ ' + this.t.connectionError;
+          statusP.style.color = '#ef4444';
+        }
       };
       
       this.ws.onclose = () => {
         this.isConnected = false;
         this.stopAudioCapture();
+        // If loading is still showing, connection failed - show status again
+        const loadingEl = document.getElementById('weevoice-loading');
+        if (loadingEl && !loadingEl.classList.contains('hidden')) {
+          loadingEl.classList.add('hidden');
+          document.getElementById('weevoice-status').classList.remove('hidden');
+        }
       };
     },
     
@@ -233,7 +344,15 @@
         })
         .catch(error => {
           console.error('Error accessing microphone:', error);
-          this.showError('Could not access microphone. Please allow microphone access and try again.');
+          // Hide loading and show error in status
+          document.getElementById('weevoice-loading').classList.add('hidden');
+          const statusEl = document.getElementById('weevoice-status');
+          statusEl.classList.remove('hidden');
+          const statusP = statusEl.querySelector('p');
+          if (statusP) {
+            statusP.textContent = '❌ ' + this.t.microphoneError;
+            statusP.style.color = '#ef4444';
+          }
         });
     },
     
@@ -348,7 +467,7 @@
       // Update UI
       const transcript = document.getElementById('weevoice-transcript');
       if (transcript) {
-        transcript.textContent = 'Agent is speaking...';
+        transcript.textContent = this.t.speaking;
         transcript.style.color = '#10b981'; // green
       }
     },
@@ -401,7 +520,7 @@
             source.onended = () => {
               const transcript = document.getElementById('weevoice-transcript');
               if (transcript) {
-                transcript.textContent = 'Listening...';
+                transcript.textContent = this.t.listening;
                 transcript.style.color = '#6b7280'; // gray
               }
             };
@@ -432,7 +551,15 @@
       
       // Reset UI
       document.getElementById('weevoice-call').classList.add('hidden');
-      document.getElementById('weevoice-status').classList.remove('hidden');
+      document.getElementById('weevoice-loading').classList.add('hidden');
+      const statusEl = document.getElementById('weevoice-status');
+      statusEl.classList.remove('hidden');
+      // Restore original greeting
+      const statusP = statusEl.querySelector('p');
+      if (statusP) {
+        statusP.textContent = this.config.greeting;
+        statusP.style.color = '#374151';
+      }
       document.getElementById('weevoice-transcript').textContent = '';
       
       this.isConnected = false;
