@@ -36,6 +36,8 @@ class CallResponse(BaseModel):
     action_tags: Optional[List[str]] = None
     summarization_status: Optional[str] = None
     is_favorite: bool = False
+    caller_phone: Optional[str] = None  # Caller's phone number
+    caller_name: Optional[str] = None  # Caller's name
     
     class Config:
         from_attributes = True

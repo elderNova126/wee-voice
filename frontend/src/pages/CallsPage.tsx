@@ -26,6 +26,8 @@ interface Call {
   action_tags?: string[]
   summarization_status?: string | null  // "summarized", "not_summarized", or null
   messages?: CallMessage[]  // Messages for the call
+  caller_phone?: string | null  // Caller's phone number
+  caller_name?: string | null  // Caller's name
 }
 
 interface CallMessage {
@@ -420,7 +422,7 @@ export default function CallsPage() {
                 </div>
                 <div>
                   <div className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wide">
-                    {t.callsPage.totalCalls}
+                    {t.callsPage.allCalls}
                   </div>
                   {loading ? (
                     <div className="flex items-center gap-2">
@@ -761,7 +763,14 @@ export default function CallsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-                          Call #{call.id}
+                          {call.caller_phone ? (
+                            <span className="flex items-center gap-2">
+                              <PhoneIcon className="h-4 w-4 text-gray-500" />
+                              {call.caller_name || call.caller_phone}
+                            </span>
+                          ) : (
+                            `Call #${call.id}`
+                          )}
                         </h3>
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(call.status)}`}>
                           {call.status}
@@ -932,7 +941,6 @@ interface CallDetailsModalProps {
 function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const t = useTranslation()
   const [transcript, setTranscript] = useState<any>(null)
-  const [loadingTranscript, setLoadingTranscript] = useState(true)
   const [callDetails, setCallDetails] = useState<CallWithDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(true)
   const [generatingSummary, setGeneratingSummary] = useState(false)
@@ -960,7 +968,6 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   }, [call.id, t])
 
   const loadTranscript = useCallback(async () => {
-    setLoadingTranscript(true)
     try {
       const response = await callsAPI.getTranscript(call.id)
       const { transcript: rawTranscript, transcript_json: structuredTranscript } = response.data ?? {}
@@ -974,8 +981,6 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
         console.error('Failed to load transcript:', error)
         toast.error(t.common.status === 'Statut' ? 'Échec du chargement de la transcription' : 'Failed to load transcript')
       }
-    } finally {
-      setLoadingTranscript(false)
     }
   }, [call.id, call.transcript, t])
 
