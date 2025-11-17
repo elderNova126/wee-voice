@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug
 
 # Set up logging
 logging.basicConfig(
@@ -89,6 +89,7 @@ app.include_router(profile.router, prefix=f"{settings.API_V1_STR}/profile", tags
 app.include_router(integrations.router, prefix=f"{settings.API_V1_STR}/integrations", tags=["Integrations"])
 app.include_router(documents.router, prefix=f"{settings.API_V1_STR}/agents", tags=["Documents & RAG"])  # Routes: /{agent_id}/documents, /{agent_id}/documents/website
 app.include_router(phone_numbers.router, prefix=f"{settings.API_V1_STR}/phone-numbers", tags=["Phone Numbers"])
+app.include_router(phone_debug.router, prefix=f"{settings.API_V1_STR}/phone-numbers", tags=["Phone Debug"])
 app.include_router(callbacks.router, prefix=f"{settings.API_V1_STR}/callbacks", tags=["Callbacks"])
 app.include_router(embed.router, prefix=f"{settings.API_V1_STR}/embed", tags=["Embed Widget"])
 app.include_router(zadarma_webhook.router, prefix=f"{settings.API_V1_STR}/zadarma", tags=["Zadarma Webhooks"])

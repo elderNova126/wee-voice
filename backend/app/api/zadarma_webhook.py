@@ -5,6 +5,7 @@ Handles incoming call notifications and events from Zadarma telephony service
 import logging
 import hmac
 import hashlib
+import json
 from fastapi import APIRouter, Request, HTTPException, Depends, status, Query
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
@@ -55,16 +56,29 @@ def normalize_phone_for_matching(phone: str) -> str:
     """
     Normalize phone number for database matching
     Removes spaces, dashes, parentheses, and ensures consistent format
+    This is used to match incoming calls with stored phone numbers
     """
     if not phone:
         return ""
+    
     # Remove all non-digit characters except +
-    normalized = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "")
+    normalized = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").strip()
+    
+    if not normalized:
+        return ""
+    
     # Ensure + prefix for international format
-    if normalized and not normalized.startswith("+"):
+    if not normalized.startswith("+"):
         # If it starts with 00, replace with +
         if normalized.startswith("00"):
             normalized = "+" + normalized[2:]
+        # If it starts with country code (e.g., 32 for Belgium), add +
+        # Belgian numbers: 32XXXXXXXX (10 digits total)
+        elif normalized.startswith("32") and len(normalized) >= 10:
+            normalized = "+" + normalized
+        # For other cases without +, keep as-is for now
+        # We'll do digit-only comparison later
+    
     return normalized
 
 
@@ -83,6 +97,13 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
     normalized_incoming = normalize_phone_for_matching(phone_number)
     logger.info(f"Looking up agent for phone number: {phone_number} (normalized: {normalized_incoming})")
     
+    # Get all phone numbers with agents for debugging
+    all_phones = db.query(PhoneNumber).filter(
+        PhoneNumber.agent_id.isnot(None)
+    ).all()
+    
+    logger.info(f"Available phone numbers in database: {[p.phone_number for p in all_phones]}")
+    
     # Try exact match first
     phone_record = db.query(PhoneNumber).filter(
         PhoneNumber.phone_number == phone_number,
@@ -93,31 +114,41 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
         logger.info(f"Found agent {phone_record.agent.id} for phone {phone_number} (exact match)")
         return phone_record.agent
     
-    # Try normalized match
-    if normalized_incoming != phone_number:
-        # Get all phone numbers and compare normalized versions
-        all_phones = db.query(PhoneNumber).filter(
-            PhoneNumber.agent_id.isnot(None)
-        ).all()
+    # Try normalized match - compare with all stored numbers
+    for phone in all_phones:
+        normalized_stored = normalize_phone_for_matching(phone.phone_number)
+        logger.debug(f"Comparing: incoming='{normalized_incoming}' with stored='{normalized_stored}' (original: '{phone.phone_number}')")
         
-        for phone in all_phones:
-            normalized_stored = normalize_phone_for_matching(phone.phone_number)
-            # Compare last 9-10 digits (typical phone number length without country code)
-            incoming_digits = ''.join(filter(str.isdigit, normalized_incoming))
-            stored_digits = ''.join(filter(str.isdigit, normalized_stored))
-            
-            if len(incoming_digits) >= 9 and len(stored_digits) >= 9:
-                # Compare last 9-10 digits
-                if incoming_digits[-9:] == stored_digits[-9:] or incoming_digits[-10:] == stored_digits[-10:]:
-                    logger.info(f"Found agent {phone.agent.id} for phone {phone_number} (normalized match: {phone.phone_number})")
-                    return phone.agent
-            
-            # Also try exact normalized match
-            if normalized_incoming == normalized_stored:
-                logger.info(f"Found agent {phone.agent.id} for phone {phone_number} (normalized exact match: {phone.phone_number})")
+        # Try exact normalized match first
+        if normalized_incoming == normalized_stored:
+            logger.info(f"Found agent {phone.agent.id} for phone {phone_number} (normalized exact match: stored={phone.phone_number})")
+            return phone.agent
+        
+        # Extract digits only for comparison
+        incoming_digits = ''.join(filter(str.isdigit, normalized_incoming))
+        stored_digits = ''.join(filter(str.isdigit, normalized_stored))
+        
+        logger.debug(f"Digit comparison: incoming_digits='{incoming_digits}', stored_digits='{stored_digits}'")
+        
+        # Compare full digits if they match
+        if incoming_digits == stored_digits:
+            logger.info(f"Found agent {phone.agent.id} for phone {phone_number} (digit match: stored={phone.phone_number})")
+            return phone.agent
+        
+        # Compare last 9-10 digits (typical phone number length without country code)
+        if len(incoming_digits) >= 9 and len(stored_digits) >= 9:
+            # Try last 9 digits
+            if incoming_digits[-9:] == stored_digits[-9:]:
+                logger.info(f"Found agent {phone.agent.id} for phone {phone_number} (last 9 digits match: stored={phone.phone_number})")
                 return phone.agent
+            # Try last 10 digits
+            if len(incoming_digits) >= 10 and len(stored_digits) >= 10:
+                if incoming_digits[-10:] == stored_digits[-10:]:
+                    logger.info(f"Found agent {phone.agent.id} for phone {phone_number} (last 10 digits match: stored={phone.phone_number})")
+                    return phone.agent
     
     logger.warning(f"No agent found for phone number: {phone_number} (normalized: {normalized_incoming})")
+    logger.warning(f"Searched against {len(all_phones)} phone numbers in database")
     return None
 
 
@@ -218,23 +249,35 @@ async def zadarma_webhook(
         
         # Log all webhook data for debugging
         logger.info(f"Zadarma webhook received: {event} for call {zadarma_call_id}")
-        logger.info(f"Full webhook data: {data}")
+        logger.info(f"Full webhook data: {json.dumps(data, indent=2)}")
         logger.info(f"Extracted - From: {caller_id}, To: {called_did}")
         
-        # Normalize phone numbers
+        # Normalize phone numbers - more comprehensive normalization
         def normalize_phone_number(phone: str) -> str:
             """Normalize phone number to E.164 format"""
             if not phone:
                 return ""
+            
             # Remove all non-digit characters except +
-            normalized = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "")
-            # Ensure + prefix for international format
-            if normalized and not normalized.startswith("+"):
-                # If it starts with 00, replace with +
-                if normalized.startswith("00"):
-                    normalized = "+" + normalized[2:]
-                # Otherwise, try to add country code (this is a fallback)
-                # For now, just return as-is if no + prefix
+            normalized = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").strip()
+            
+            if not normalized:
+                return ""
+            
+            # Handle different formats
+            # If it starts with 00, replace with +
+            if normalized.startswith("00"):
+                normalized = "+" + normalized[2:]
+            # If it starts with +, keep it
+            elif normalized.startswith("+"):
+                pass  # Already has +
+            # If it's a number without +, check if it needs country code
+            # For Belgian numbers (32), if it starts with 32 and is 10+ digits, add +
+            elif normalized.startswith("32") and len(normalized) >= 10:
+                normalized = "+" + normalized
+            # If it's 9 digits and starts with 4 (Belgian mobile), might be missing country code
+            # But we'll leave it as-is to preserve what Zadarma sent
+            
             return normalized
         
         caller_id = normalize_phone_number(caller_id)

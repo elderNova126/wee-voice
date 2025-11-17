@@ -19,6 +19,9 @@ from app.models import (
 from app.core.security import get_current_user
 from app.services.zadarma_service import get_zadarma_service
 from app.services.storage_service import get_storage_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -128,6 +131,38 @@ async def get_available_numbers(
     return numbers
 
 
+def normalize_phone_for_storage(phone: str) -> str:
+    """
+    Normalize phone number for storage in database
+    Ensures consistent format: +XXXXXXXXXX (E.164 format)
+    """
+    if not phone:
+        return ""
+    
+    # Remove all non-digit characters except +
+    normalized = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace(".", "").strip()
+    
+    if not normalized:
+        return ""
+    
+    # Ensure + prefix for international format
+    if not normalized.startswith("+"):
+        # If it starts with 00, replace with +
+        if normalized.startswith("00"):
+            normalized = "+" + normalized[2:]
+        # If it starts with country code (e.g., 32 for Belgium), add +
+        # Belgian numbers: 32XXXXXXXX (10 digits total)
+        elif normalized.startswith("32") and len(normalized) >= 10:
+            normalized = "+" + normalized
+        # For other cases, try to add + if it looks like an international number
+        # (9+ digits without country code prefix)
+        elif len(normalized) >= 9:
+            # If it's a long number, assume it needs + prefix
+            normalized = "+" + normalized
+    
+    return normalized
+
+
 @router.post("/add-existing", response_model=PhoneNumberResponse)
 async def add_existing_phone_number(
     request: PhoneNumberAddExisting,
@@ -135,9 +170,15 @@ async def add_existing_phone_number(
     db: Session = Depends(get_db)
 ):
     """Add an existing phone number that you already own on Zadarma"""
-    # Check if number already exists
+    # Normalize phone number for storage
+    normalized_phone = normalize_phone_for_storage(request.phone_number)
+    
+    logger.info(f"Adding existing phone number: {request.phone_number} -> normalized: {normalized_phone}")
+    
+    # Check if number already exists (try both original and normalized)
     existing = db.query(PhoneNumber).filter(
-        PhoneNumber.phone_number == request.phone_number
+        (PhoneNumber.phone_number == request.phone_number) |
+        (PhoneNumber.phone_number == normalized_phone)
     ).first()
     
     if existing:
@@ -146,22 +187,41 @@ async def add_existing_phone_number(
             detail="This phone number is already registered"
         )
     
-    # Create phone number record directly (already owned, no verification needed)
+    # Try to get Zadarma number ID if this is a Zadarma number
+    zadarma_number_id = None
+    if request.zadarma_number_id:
+        zadarma_number_id = request.zadarma_number_id
+        logger.info(f"Using provided Zadarma number ID: {zadarma_number_id}")
+    else:
+        zadarma_service = get_zadarma_service()
+        logger.info(f"Calling Zadarma service to get number ID for: {normalized_phone}")
+        zadarma_number_id = await zadarma_service.get_number_id_by_phone(normalized_phone)
+        logger.info(f"Zadarma number ID result: {zadarma_number_id}")
+    
+    # Create phone number record with normalized number
     phone_record = PhoneNumber(
         user_id=current_user.id,
-        phone_number=request.phone_number,
+        phone_number=normalized_phone,  # Store normalized version
         country_code=request.country_code,
         number_type="local",
         status=PhoneNumberStatus.ACTIVE,  # Already active since you own it
         business_name=request.business_name or current_user.email,
         monthly_cost="4.99",
         per_minute_cost="0.02",
+        zadarma_number_id=zadarma_number_id,
         activated_at=datetime.utcnow()
     )
     
     db.add(phone_record)
     db.commit()
     db.refresh(phone_record)
+    
+    # Log warning if number ID wasn't found
+    if not zadarma_number_id:
+        logger.warning(
+            f"Added phone number {normalized_phone} without zadarma_number_id. "
+            "PBX configuration will not be available for this number."
+        )
     
     return phone_record
 
