@@ -177,7 +177,7 @@ async def create_call_record(
     call = Call(
         user_id=agent.user_id,
         agent_id=agent.id,
-        caller_phone=caller_id,
+        caller_phone=caller_id,  # The number calling FROM (caller's phone)
         caller_name=caller_id,  # Will be updated if caller provides name
         direction="inbound",
         status="initiated" if event_type == "NOTIFY_START" else "in_progress",
@@ -190,6 +190,7 @@ async def create_call_record(
     db.refresh(call)
     
     logger.info(f"Created call record: {call.id} for agent {agent.id}")
+    logger.info(f"Call details - Caller: {caller_id}, Called: {called_did}, Stored caller_phone: {call.caller_phone}")
     return call
 
 
