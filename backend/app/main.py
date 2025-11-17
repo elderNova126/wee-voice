@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio
 
 # Set up logging
 logging.basicConfig(
@@ -92,6 +92,7 @@ app.include_router(phone_numbers.router, prefix=f"{settings.API_V1_STR}/phone-nu
 app.include_router(callbacks.router, prefix=f"{settings.API_V1_STR}/callbacks", tags=["Callbacks"])
 app.include_router(embed.router, prefix=f"{settings.API_V1_STR}/embed", tags=["Embed Widget"])
 app.include_router(zadarma_webhook.router, prefix=f"{settings.API_V1_STR}/zadarma", tags=["Zadarma Webhooks"])
+app.include_router(phone_audio.router, prefix=f"{settings.API_V1_STR}/phone", tags=["Phone Audio"])
 app.include_router(admin.router, prefix=f"{settings.API_V1_STR}/admin", tags=["Admin"])
 app.include_router(libraries.router, prefix=f"{settings.API_V1_STR}/libraries", tags=["Agent Libraries"])
 app.include_router(collaborators.router, prefix=f"{settings.API_V1_STR}", tags=["Collaborators"])

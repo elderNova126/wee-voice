@@ -64,6 +64,15 @@ export interface Translations {
     totalCalls: string
     activeCalls: string
     recentCalls: string
+    welcomeMessage: string
+    totalAgentsSubtitle: string
+    totalCallsSubtitle: string
+    totalMinutes: string
+    totalMinutesSubtitle: string
+    totalCost: string
+    totalCostSubtitle: string
+    statsLoadError: string
+    quickActions: string
   }
 
   // Agents
@@ -88,6 +97,7 @@ export interface Translations {
   // Libraries
   libraries: {
     title: string
+    subtitle: string
     publicLibraries: string
     myLibraries: string
     createLibrary: string
@@ -163,6 +173,12 @@ export interface Translations {
     changeAgent: string
     assignAgent: string
     configurePBX: string
+    pbxRequiresZadarma: string
+    zadarmaNumberId: string
+    zadarmaNumberIdHelper: string
+    testCall: string
+    testCallSuccess: string
+    testCallError: string
     verificationDocuments: string
     noDocumentsUploaded: string
     addExistingPhoneNumber: string
@@ -247,6 +263,7 @@ export interface Translations {
   // API Keys
   apiKeys: {
     title: string
+    subtitle: string
     createApiKey: string
     deleteApiKey: string
     keyName: string
@@ -254,11 +271,19 @@ export interface Translations {
     createdAt: string
     lastUsed: string
     noApiKeys: string
+    deleteConfirm: string
+    deleteSuccess: string
+    deleteError: string
+    createSuccess: string
+    createError: string
+    copySuccess: string
+    never: string
   }
 
   // Support
   support: {
     title: string
+    subtitle: string
     createTicket: string
     tickets: string
     subject: string
@@ -267,17 +292,29 @@ export interface Translations {
     priority: string
     createdAt: string
     noTickets: string
+    createSuccess: string
+    createError: string
+    low: string
+    medium: string
+    high: string
+    open: string
+    closed: string
+    inProgress: string
   }
 
   // Billing
   billing: {
     title: string
+    subtitle: string
     currentPlan: string
     credits: string
     usage: string
     paymentMethod: string
     invoices: string
     noInvoices: string
+    addPaymentMethod: string
+    updatePaymentMethod: string
+    noPaymentMethod: string
   }
 
   // Settings
@@ -350,15 +387,6 @@ export interface Translations {
     failed: string
   }
 
-  // Dashboard
-  dashboard: {
-    welcomeMessage: string
-    totalAgentsSubtitle: string
-    totalCallsSubtitle: string
-    totalMinutesSubtitle: string
-    totalCostSubtitle: string
-    statsLoadError: string
-  }
 
   // Agents Page
   agentsPage: {
@@ -419,6 +447,28 @@ export interface Translations {
     emailSent: string
     emailError: string
     close: string
+    callDetails: string
+    sessionId: string
+    duration: string
+    regenerateSummary: string
+    regenerating: string
+    generateSummary: string
+    followUpActions: string
+    summary: string
+    messages: string
+    live: string
+    visitor: string
+    system: string
+    agent: string
+    compose: string
+    to: string
+    subject: string
+    message: string
+    sending: string
+    noCalls: string
+    favorite: string
+    unfavorite: string
+    loading: string
   }
 
   // Categories
@@ -453,78 +503,9 @@ export interface Translations {
     error: string
   }
 
-  // Phone Numbers
-  phoneNumbers: {
-    subtitle: string
-    addPhoneNumber: string
-    editPhoneNumber: string
-    deletePhoneNumber: string
-    phoneNumber: string
-    agent: string
-    status: string
-    noPhoneNumbers: string
-    deleteConfirm: string
-    deleteSuccess: string
-    deleteError: string
-    createSuccess: string
-    createError: string
-    updateSuccess: string
-    updateError: string
-  }
 
-  // API Keys
-  apiKeys: {
-    subtitle: string
-    createApiKey: string
-    deleteApiKey: string
-    keyName: string
-    apiKey: string
-    createdAt: string
-    lastUsed: string
-    noApiKeys: string
-    deleteConfirm: string
-    deleteSuccess: string
-    deleteError: string
-    createSuccess: string
-    createError: string
-    copySuccess: string
-    never: string
-  }
 
-  // Support
-  support: {
-    subtitle: string
-    createTicket: string
-    tickets: string
-    subject: string
-    message: string
-    status: string
-    priority: string
-    createdAt: string
-    noTickets: string
-    createSuccess: string
-    createError: string
-    low: string
-    medium: string
-    high: string
-    open: string
-    closed: string
-    inProgress: string
-  }
 
-  // Billing
-  billing: {
-    subtitle: string
-    currentPlan: string
-    credits: string
-    usage: string
-    paymentMethod: string
-    invoices: string
-    noInvoices: string
-    addPaymentMethod: string
-    updatePaymentMethod: string
-    noPaymentMethod: string
-  }
 
   // Profile
   profile: {
@@ -1000,14 +981,6 @@ const translations: Record<Language, Translations> = {
       usage: 'Utilisation',
       security: 'Sécurité',
     },
-    dashboard: {
-      title: 'Tableau de bord',
-      welcome: 'Bienvenue',
-      totalAgents: 'Agents totaux',
-      totalCalls: 'Appels totaux',
-      activeCalls: 'Appels actifs',
-      recentCalls: 'Appels récents',
-    },
     agents: {
       title: 'Agents',
       createAgent: 'Créer un agent',
@@ -1099,6 +1072,12 @@ const translations: Record<Language, Translations> = {
       changeAgent: 'Changer d\'agent',
       assignAgent: 'Assigner un agent',
       configurePBX: 'Configurer PBX',
+      pbxRequiresZadarma: 'La configuration PBX nécessite un numéro Zadarma',
+      zadarmaNumberId: 'ID du numéro Zadarma (Optionnel)',
+      zadarmaNumberIdHelper: 'Si la recherche automatique échoue, vous pouvez saisir manuellement l\'ID du numéro Zadarma depuis votre compte Zadarma',
+      testCall: 'Tester l\'appel',
+      testCallSuccess: 'Appel de test simulé avec succès ! Vérifiez la page Appels pour voir l\'enregistrement.',
+      testCallError: 'Échec de la simulation de l\'appel de test',
       verificationDocuments: 'Documents de vérification',
       noDocumentsUploaded: 'Aucun document téléchargé pour le moment',
       addExistingPhoneNumber: 'Ajouter un numéro de téléphone existant',
@@ -1181,6 +1160,7 @@ const translations: Record<Language, Translations> = {
     },
     apiKeys: {
       title: 'Clés API',
+      subtitle: 'Gérez de manière sécurisée vos clés d\'accès pour les API d\'agents vocaux.',
       createApiKey: 'Créer une clé API',
       deleteApiKey: 'Supprimer la clé API',
       keyName: 'Nom de la clé',
@@ -1188,9 +1168,17 @@ const translations: Record<Language, Translations> = {
       createdAt: 'Créée le',
       lastUsed: 'Dernière utilisation',
       noApiKeys: 'Aucune clé API',
+      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer cette clé API ?',
+      deleteSuccess: 'Clé API supprimée avec succès',
+      deleteError: 'Échec de la suppression de la clé API',
+      createSuccess: 'Clé API créée avec succès',
+      createError: 'Échec de la création de la clé API',
+      copySuccess: 'Clé API copiée dans le presse-papiers',
+      never: 'Jamais',
     },
     support: {
       title: 'Support',
+      subtitle: 'Contactez notre équipe pour toute question ou problème',
       createTicket: 'Créer un ticket',
       tickets: 'Tickets',
       subject: 'Sujet',
@@ -1199,15 +1187,14 @@ const translations: Record<Language, Translations> = {
       priority: 'Priorité',
       createdAt: 'Créé le',
       noTickets: 'Aucun ticket',
-    },
-    billing: {
-      title: 'Facturation',
-      currentPlan: 'Plan actuel',
-      credits: 'Crédits',
-      usage: 'Utilisation',
-      paymentMethod: 'Méthode de paiement',
-      invoices: 'Factures',
-      noInvoices: 'Aucune facture',
+      createSuccess: 'Votre demande a été envoyée avec succès!',
+      createError: 'Erreur lors de l\'envoi de votre demande',
+      low: 'Faible',
+      medium: 'Moyenne',
+      high: 'Élevée',
+      open: 'Ouvert',
+      closed: 'Fermé',
+      inProgress: 'En cours',
     },
     settings: {
       title: 'Paramètres',
@@ -1274,6 +1261,12 @@ const translations: Record<Language, Translations> = {
       failed: 'Échec',
     },
     dashboard: {
+      title: 'Tableau de bord',
+      welcome: 'Bienvenue',
+      totalAgents: 'Agents totaux',
+      totalCalls: 'Appels totaux',
+      activeCalls: 'Appels actifs',
+      recentCalls: 'Appels récents',
       welcomeMessage: 'Bienvenue ! Voici un aperçu de vos agents vocaux.',
       totalAgentsSubtitle: 'Agents vocaux actifs',
       totalCallsSubtitle: 'Appels effectués',
@@ -1347,7 +1340,6 @@ const translations: Record<Language, Translations> = {
       regenerating: 'Régénération...',
       generateSummary: 'Générer un résumé',
       followUpActions: 'Actions de suivi détectées',
-      actionItems: 'Détails des actions à entreprendre',
       summary: 'Résumé',
       messages: 'Messages',
       live: 'En direct',
@@ -1392,60 +1384,8 @@ const translations: Record<Language, Translations> = {
       success: 'Compte créé avec succès! Veuillez attendre l\'approbation d\'un administrateur avant de vous connecter.',
       error: 'Erreur lors de la création du compte',
     },
-    phoneNumbers: {
-      subtitle: 'Gérez les numéros de téléphone pour vos agents vocaux',
-      addPhoneNumber: 'Ajouter un numéro',
-      editPhoneNumber: 'Modifier le numéro',
-      deletePhoneNumber: 'Supprimer le numéro',
-      phoneNumber: 'Numéro de téléphone',
-      agent: 'Agent',
-      status: 'Statut',
-      noPhoneNumbers: 'Aucun numéro de téléphone',
-      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer ce numéro ?',
-      deleteSuccess: 'Numéro supprimé avec succès',
-      deleteError: 'Échec de la suppression du numéro',
-      createSuccess: 'Numéro créé avec succès',
-      createError: 'Échec de la création du numéro',
-      updateSuccess: 'Numéro mis à jour avec succès',
-      updateError: 'Échec de la mise à jour du numéro',
-    },
-    apiKeys: {
-      subtitle: 'Gérez de manière sécurisée vos clés d\'accès pour les API d\'agents vocaux.',
-      createApiKey: 'Nouvelle clé API',
-      deleteApiKey: 'Supprimer la clé API',
-      keyName: 'Nom de la clé',
-      apiKey: 'Clé API',
-      createdAt: 'Créée le',
-      lastUsed: 'Dernière utilisation',
-      noApiKeys: 'Aucune clé API trouvée',
-      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer cette clé API ?',
-      deleteSuccess: 'Clé API supprimée avec succès',
-      deleteError: 'Échec de la suppression de la clé API',
-      createSuccess: 'Clé API créée avec succès',
-      createError: 'Échec de la création de la clé API',
-      copySuccess: 'Clé API copiée dans le presse-papiers',
-      never: 'Jamais',
-    },
-    support: {
-      subtitle: 'Contactez notre équipe pour toute question ou problème',
-      createTicket: 'Créer un ticket',
-      tickets: 'Tickets',
-      subject: 'Sujet',
-      message: 'Message',
-      status: 'Statut',
-      priority: 'Priorité',
-      createdAt: 'Créé le',
-      noTickets: 'Aucun ticket',
-      createSuccess: 'Votre demande a été envoyée avec succès!',
-      createError: 'Erreur lors de l\'envoi de votre demande',
-      low: 'Faible',
-      medium: 'Moyenne',
-      high: 'Élevée',
-      open: 'Ouvert',
-      closed: 'Fermé',
-      inProgress: 'En cours',
-    },
     billing: {
+      title: 'Facturation',
       subtitle: 'Gérez votre facturation et vos méthodes de paiement',
       currentPlan: 'Plan actuel',
       credits: 'Crédits',
@@ -1902,14 +1842,6 @@ const translations: Record<Language, Translations> = {
       usage: 'Usage',
       security: 'Security',
     },
-    dashboard: {
-      title: 'Dashboard',
-      welcome: 'Welcome',
-      totalAgents: 'Total Agents',
-      totalCalls: 'Total Calls',
-      activeCalls: 'Active Calls',
-      recentCalls: 'Recent Calls',
-    },
     agents: {
       title: 'Agents',
       createAgent: 'Create Agent',
@@ -2001,6 +1933,12 @@ const translations: Record<Language, Translations> = {
       changeAgent: 'Change Agent',
       assignAgent: 'Assign Agent',
       configurePBX: 'Configure PBX',
+      pbxRequiresZadarma: 'PBX configuration requires Zadarma number',
+      zadarmaNumberId: 'Zadarma Number ID (Optional)',
+      zadarmaNumberIdHelper: 'If automatic lookup fails, you can manually enter the Zadarma number ID from your Zadarma account',
+      testCall: 'Test Call',
+      testCallSuccess: 'Test call simulated successfully! Check the Calls page to see the call record.',
+      testCallError: 'Failed to simulate test call',
       verificationDocuments: 'Verification Documents',
       noDocumentsUploaded: 'No documents uploaded yet',
       addExistingPhoneNumber: 'Add Existing Phone Number',
@@ -2083,6 +2021,7 @@ const translations: Record<Language, Translations> = {
     },
     apiKeys: {
       title: 'API Keys',
+      subtitle: 'Securely manage your access keys for voice agent APIs.',
       createApiKey: 'Create API Key',
       deleteApiKey: 'Delete API Key',
       keyName: 'Key Name',
@@ -2090,9 +2029,17 @@ const translations: Record<Language, Translations> = {
       createdAt: 'Created At',
       lastUsed: 'Last Used',
       noApiKeys: 'No API Keys',
+      deleteConfirm: 'Are you sure you want to delete this API key?',
+      deleteSuccess: 'API key deleted successfully',
+      deleteError: 'Failed to delete API key',
+      createSuccess: 'API key created successfully',
+      createError: 'Failed to create API key',
+      copySuccess: 'API key copied to clipboard',
+      never: 'Never',
     },
     support: {
       title: 'Support',
+      subtitle: 'Contact our team for any questions or issues',
       createTicket: 'Create Ticket',
       tickets: 'Tickets',
       subject: 'Subject',
@@ -2101,15 +2048,14 @@ const translations: Record<Language, Translations> = {
       priority: 'Priority',
       createdAt: 'Created At',
       noTickets: 'No Tickets',
-    },
-    billing: {
-      title: 'Billing',
-      currentPlan: 'Current Plan',
-      credits: 'Credits',
-      usage: 'Usage',
-      paymentMethod: 'Payment Method',
-      invoices: 'Invoices',
-      noInvoices: 'No Invoices',
+      createSuccess: 'Your request has been sent successfully!',
+      createError: 'Error sending your request',
+      low: 'Low',
+      medium: 'Medium',
+      high: 'High',
+      open: 'Open',
+      closed: 'Closed',
+      inProgress: 'In Progress',
     },
     settings: {
       title: 'Settings',
@@ -2176,6 +2122,12 @@ const translations: Record<Language, Translations> = {
       failed: 'Failed',
     },
     dashboard: {
+      title: 'Dashboard',
+      welcome: 'Welcome',
+      totalAgents: 'Total Agents',
+      totalCalls: 'Total Calls',
+      activeCalls: 'Active Calls',
+      recentCalls: 'Recent Calls',
       welcomeMessage: 'Welcome! Here\'s an overview of your voice agents.',
       totalAgentsSubtitle: 'Active voice agents',
       totalCallsSubtitle: 'Calls made',
@@ -2249,7 +2201,6 @@ const translations: Record<Language, Translations> = {
       regenerating: 'Regenerating...',
       generateSummary: 'Generate Summary',
       followUpActions: 'Follow-up Actions Detected',
-      actionItems: 'Action Items Details',
       summary: 'Summary',
       messages: 'Messages',
       live: 'Live',
@@ -2294,60 +2245,8 @@ const translations: Record<Language, Translations> = {
       success: 'Account created successfully! Please wait for administrator approval before logging in.',
       error: 'Error creating account',
     },
-    phoneNumbers: {
-      subtitle: 'Manage phone numbers for your voice agents',
-      addPhoneNumber: 'Add Phone Number',
-      editPhoneNumber: 'Edit Phone Number',
-      deletePhoneNumber: 'Delete Phone Number',
-      phoneNumber: 'Phone Number',
-      agent: 'Agent',
-      status: 'Status',
-      noPhoneNumbers: 'No Phone Numbers',
-      deleteConfirm: 'Are you sure you want to delete this phone number?',
-      deleteSuccess: 'Phone number deleted successfully',
-      deleteError: 'Failed to delete phone number',
-      createSuccess: 'Phone number created successfully',
-      createError: 'Failed to create phone number',
-      updateSuccess: 'Phone number updated successfully',
-      updateError: 'Failed to update phone number',
-    },
-    apiKeys: {
-      subtitle: 'Securely manage your access keys for voice agent APIs.',
-      createApiKey: 'New API Key',
-      deleteApiKey: 'Delete API Key',
-      keyName: 'Key Name',
-      apiKey: 'API Key',
-      createdAt: 'Created At',
-      lastUsed: 'Last Used',
-      noApiKeys: 'No API Keys Found',
-      deleteConfirm: 'Are you sure you want to delete this API key?',
-      deleteSuccess: 'API key deleted successfully',
-      deleteError: 'Failed to delete API key',
-      createSuccess: 'API key created successfully',
-      createError: 'Failed to create API key',
-      copySuccess: 'API key copied to clipboard',
-      never: 'Never',
-    },
-    support: {
-      subtitle: 'Contact our team for any questions or issues',
-      createTicket: 'Create Ticket',
-      tickets: 'Tickets',
-      subject: 'Subject',
-      message: 'Message',
-      status: 'Status',
-      priority: 'Priority',
-      createdAt: 'Created At',
-      noTickets: 'No Tickets',
-      createSuccess: 'Your request has been sent successfully!',
-      createError: 'Error sending your request',
-      low: 'Low',
-      medium: 'Medium',
-      high: 'High',
-      open: 'Open',
-      closed: 'Closed',
-      inProgress: 'In Progress',
-    },
     billing: {
+      title: 'Billing',
       subtitle: 'Manage your billing and payment methods',
       currentPlan: 'Current Plan',
       credits: 'Credits',

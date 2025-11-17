@@ -17,6 +17,7 @@ import {
   Cog6ToothIcon,
   PlusCircleIcon,
   TrashIcon,
+  PlayCircleIcon,
 } from '@heroicons/react/24/outline'
 
 interface PhoneNumber {
@@ -30,6 +31,7 @@ interface PhoneNumber {
   agent_id: number | null;
   created_at: string;
   activated_at: string | null;
+  zadarma_number_id?: string | null;
   pbx_enabled?: boolean;
   pbx_extension?: string | null;
   pbx_scenario_id?: string | null;
@@ -595,6 +597,27 @@ export const PhoneNumbersPage: React.FC = () => {
     return agent ? agent.name : (t?.phoneNumbers?.unknownAgent || 'Unknown Agent');
   };
 
+  const handleTestCall = async (number: PhoneNumber) => {
+    try {
+      const response = await api.post(
+        `/zadarma/test-call?phone_number=${encodeURIComponent(number.phone_number)}&caller_id=${encodeURIComponent('+33123456789')}`
+      );
+
+      toast.success(
+        t?.phoneNumbers?.testCallSuccess ||
+        `Test call simulated! Call ID: ${response.data.call.id}. The call will progress through: initiated → in_progress → completed over 5 seconds. Navigate to the Calls page to see real-time updates.`
+      );
+
+      // Optionally reload phone numbers to show updated status
+      await loadPhoneNumbers();
+    } catch (error: any) {
+      toast.error(
+        t?.phoneNumbers?.testCallError ||
+        'Failed to simulate test call: ' + (error.response?.data?.detail || error.message)
+      );
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     const statusColors: Record<string, string> = {
       pending: 'bg-gray-500',
@@ -800,7 +823,7 @@ export const PhoneNumbersPage: React.FC = () => {
                         {number.agent_id ? (t?.phoneNumbers?.changeAgent || 'Change Agent') : (t?.phoneNumbers?.assignAgent || 'Assign Agent')}
                       </Button>
                     )}
-                    {number.agent_id && (
+                    {number.agent_id && number.zadarma_number_id && (
                       <Button
                         size="sm"
                         variant="secondary"
@@ -808,6 +831,21 @@ export const PhoneNumbersPage: React.FC = () => {
                       >
                         <Cog6ToothIcon className="mr-2 h-3.5 w-3.5" />
                         {t?.phoneNumbers?.configurePBX || 'Configure PBX'}
+                      </Button>
+                    )}
+                    {number.agent_id && !number.zadarma_number_id && (
+                      <div className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        {t?.phoneNumbers?.pbxRequiresZadarma || 'PBX configuration requires Zadarma number'}
+                      </div>
+                    )}
+                    {number.agent_id && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleTestCall(number)}
+                      >
+                        <PlayCircleIcon className="mr-2 h-3.5 w-3.5" />
+                        {t?.phoneNumbers?.testCall || 'Test Call'}
                       </Button>
                     )}
                   </div>

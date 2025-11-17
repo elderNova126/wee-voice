@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = True
     API_V1_STR: str = "/api/v1"
+    BASE_URL: str = os.getenv("BASE_URL", "http://localhost:8000")  # Base URL for API endpoints
     
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
