@@ -194,6 +194,24 @@ async def create_call_record(
     return call
 
 
+@router.get("/webhook")
+async def zadarma_webhook_get(
+    request: Request,
+    zd_echo: Optional[str] = Query(None, alias="zd_echo")
+):
+    """
+    Handle GET requests from Zadarma for webhook verification (echo test)
+    
+    Zadarma sends a GET request with ?zd_echo=<value> to verify the webhook endpoint.
+    We must return the same value to confirm the endpoint is working.
+    """
+    if zd_echo:
+        logger.info(f"Zadarma echo verification received: {zd_echo}")
+        return zd_echo
+    else:
+        return {"status": "ok", "message": "Zadarma webhook endpoint is active"}
+
+
 @router.post("/webhook")
 async def zadarma_webhook(
     request: Request,
