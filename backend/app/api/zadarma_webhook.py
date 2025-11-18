@@ -7,6 +7,7 @@ import hmac
 import hashlib
 import json
 from fastapi import APIRouter, Request, HTTPException, Depends, status, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -203,11 +204,16 @@ async def zadarma_webhook_get(
     Handle GET requests from Zadarma for webhook verification (echo test)
     
     Zadarma sends a GET request with ?zd_echo=<value> to verify the webhook endpoint.
-    We must return the same value to confirm the endpoint is working.
+    We must return the same value as plain text (not JSON) to confirm the endpoint is working.
+    
+    This is equivalent to the PHP code:
+    <?php if (isset($_GET['zd_echo'])) exit($_GET['zd_echo']); ?>
     """
     if zd_echo:
         logger.info(f"Zadarma echo verification received: {zd_echo}")
-        return zd_echo
+        # Return the raw string value as plain text (not JSON)
+        # This is what Zadarma expects for echo verification
+        return Response(content=zd_echo, media_type="text/plain")
     else:
         return {"status": "ok", "message": "Zadarma webhook endpoint is active"}
 
