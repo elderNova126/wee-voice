@@ -55,6 +55,7 @@ class PhoneNumber(Base):
     pbx_enabled = Column(Boolean, default=False)
     pbx_scenario_id = Column(String, nullable=True)
     pbx_extension = Column(String, nullable=True)
+    sip_id = Column(String, nullable=True)  # SIP ID for SIP-based forwarding
     business_hours = Column(JSON, nullable=True)
     menu_options = Column(JSON, nullable=True)
     after_hours_routing = Column(JSON, nullable=True)

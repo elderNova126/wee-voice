@@ -159,9 +159,19 @@ class ZadarmaService:
         agent: VoiceAgent
     ) -> str:
         """
-        Ensure a PBX extension exists for the agent so the call flow can reach it.
-        Creates a virtual extension in Zadarma if necessary and stores it locally.
+        Ensure call routing is configured for the agent.
+        Prefers SIP if available, falls back to PBX extension.
         """
+        # Prefer SIP if available
+        sip_id = getattr(settings, 'ZADARMA_SIP_LOGIN', None)
+        if sip_id:
+            logger.info(f"Using SIP {sip_id} for call routing")
+            sip_result = await self.ensure_sip_configured(db, phone_record, agent)
+            if sip_result:
+                # Return SIP ID as the "extension" identifier for compatibility
+                return sip_result
+        
+        # Fallback to PBX extension if no SIP
         if phone_record.pbx_extension:
             return phone_record.pbx_extension
         
@@ -207,6 +217,103 @@ class ZadarmaService:
             phone_record.phone_number,
         )
         return extension
+    
+    # -------------------------------------------------------------------------
+    # SIP helpers
+    # -------------------------------------------------------------------------
+    def get_sip_list(self) -> List[Dict[str, Any]]:
+        """Get list of user's SIP numbers"""
+        try:
+            response = self._make_request("/sip/", method="GET")
+            if response.get("status") == "success":
+                return response.get("sips", [])
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get SIP list: {e}")
+            return []
+    
+    def get_sip_status(self, sip_id: str) -> Dict[str, Any]:
+        """Get SIP number online status"""
+        try:
+            response = self._make_request(f"/sip/{sip_id}/status/", method="GET")
+            return response
+        except Exception as e:
+            logger.error(f"Failed to get SIP status for {sip_id}: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    def get_sip_redirection(self, sip_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get SIP redirection settings"""
+        try:
+            params = {}
+            if sip_id:
+                params["id"] = sip_id
+            response = self._make_request("/sip/redirection/", method="GET", params=params)
+            if response.get("status") == "success":
+                return response.get("info", [])
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get SIP redirection: {e}")
+            return []
+    
+    def set_sip_redirection_status(self, sip_id: str, status: str = "on") -> Dict[str, Any]:
+        """Enable or disable SIP redirection"""
+        try:
+            params = {
+                "id": sip_id,
+                "status": status
+            }
+            response = self._make_request("/sip/redirection/", method="PUT", params=params)
+            return response
+        except Exception as e:
+            logger.error(f"Failed to set SIP redirection status for {sip_id}: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    async def ensure_sip_configured(
+        self,
+        db: Session,
+        phone_record: PhoneNumber,
+        agent: VoiceAgent
+    ) -> Optional[str]:
+        """
+        Ensure SIP is configured for call forwarding.
+        Uses SIP ID from settings or finds existing SIP.
+        
+        Note: SIP redirection API forwards to phone numbers, not webhooks directly.
+        Webhook forwarding must be configured in Zadarma Event Notifications.
+        
+        Returns:
+            SIP ID if configured, None otherwise
+        """
+        # Get SIP ID from settings or phone record
+        sip_id = getattr(settings, 'ZADARMA_SIP_LOGIN', None) or phone_record.sip_id
+        
+        if not sip_id:
+            # Try to find an existing SIP
+            sips = self.get_sip_list()
+            if sips:
+                sip_id = sips[0].get("id")
+                logger.info(f"Using existing SIP: {sip_id}")
+            else:
+                logger.warning("No SIP ID found and no existing SIPs available")
+                return None
+        
+        # Store SIP ID in phone record
+        phone_record.sip_id = sip_id
+        db.commit()
+        
+        # Enable SIP redirection (webhook is configured in Event Notifications, not here)
+        result = self.set_sip_redirection_status(sip_id, status="on")
+        if result.get("status") == "success":
+            logger.info(f"SIP {sip_id} redirection enabled for phone number {phone_record.phone_number}")
+        else:
+            logger.warning(f"Failed to enable SIP redirection: {result}")
+        
+        logger.info(
+            f"SIP {sip_id} configured for phone number {phone_record.phone_number}. "
+            f"Ensure webhook URL is set in Zadarma Event Notifications."
+        )
+        
+        return sip_id
     
     # -------------------------------------------------------------------------
     # PBX scenario builders
