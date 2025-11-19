@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     ZADARMA_API_KEY: str = os.getenv("ZADARMA_API_KEY", "")
     ZADARMA_API_SECRET: str = os.getenv("ZADARMA_API_SECRET", "")
     
+    # Zadarma PBX Settings (for PBX extension management)
+    ZADARMA_PBX_SERVER: str = os.getenv("ZADARMA_PBX_SERVER", "pbx.zadarma.com")
+    ZADARMA_PBX_LOGIN: str = os.getenv("ZADARMA_PBX_LOGIN", "")
+    ZADARMA_PBX_PASSWORD: str = os.getenv("ZADARMA_PBX_PASSWORD", "")
+    ZADARMA_PBX_ID: str = os.getenv("ZADARMA_PBX_ID", "")
+    
     # Zadarma SIP Settings (optional, for direct SIP connection)
     ZADARMA_SIP_SERVER: str = os.getenv("ZADARMA_SIP_SERVER", "sip.zadarma.com")
     ZADARMA_SIP_LOGIN: str = os.getenv("ZADARMA_SIP_LOGIN", "")

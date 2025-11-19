@@ -32,6 +32,12 @@ class ZadarmaService:
         self.api_key = getattr(settings, 'ZADARMA_API_KEY', None)
         self.api_secret = getattr(settings, 'ZADARMA_API_SECRET', None)
         self.base_url = "https://api.zadarma.com/v1"
+        
+        # PBX credentials (optional, for PBX extension management)
+        self.pbx_server = getattr(settings, 'ZADARMA_PBX_SERVER', None)
+        self.pbx_login = getattr(settings, 'ZADARMA_PBX_LOGIN', None)
+        self.pbx_password = getattr(settings, 'ZADARMA_PBX_PASSWORD', None)
+        self.pbx_id = getattr(settings, 'ZADARMA_PBX_ID', None)
     
     # -------------------------------------------------------------------------
     # Low-level helpers
@@ -185,6 +191,14 @@ class ZadarmaService:
             "webhook_url": f"{settings.BACKEND_URL}{settings.API_V1_STR}/zadarma/webhook",
             "caller_id": phone_record.phone_number,
         }
+        
+        # Add PBX credentials if provided (required for PBX extension management)
+        if self.pbx_id:
+            params["pbx_id"] = self.pbx_id
+        if self.pbx_login:
+            params["pbx_login"] = self.pbx_login
+        if self.pbx_password:
+            params["pbx_password"] = self.pbx_password
         
         try:
             response = self._make_request(
