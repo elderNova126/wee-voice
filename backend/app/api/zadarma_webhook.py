@@ -6,10 +6,11 @@ import logging
 import hmac
 import hashlib
 import json
-from fastapi import APIRouter, Request, HTTPException, Depends, status, Query
-from fastapi.responses import Response
+import base64
+from fastapi import APIRouter, Request, HTTPException, Depends, status, Query, Form
+from fastapi.responses import Response, JSONResponse
 from sqlalchemy.orm import Session
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from datetime import datetime
 
 from app.models import get_db, Call, VoiceAgent, PhoneNumber, User
@@ -27,7 +28,7 @@ router = APIRouter()
 
 def verify_zadarma_signature(payload: str, signature: str) -> bool:
     """
-    Verify webhook signature from Zadarma
+    Verify webhook signature from Zadarma (for JSON webhooks)
     
     Args:
         payload: Raw request body as string
@@ -50,6 +51,52 @@ def verify_zadarma_signature(payload: str, signature: str) -> bool:
         return hmac.compare_digest(expected_signature, signature)
     except Exception as e:
         logger.error(f"Error verifying Zadarma signature: {e}")
+        return False
+
+
+def verify_pbx_signature(
+    caller_id: str,
+    called_did: str,
+    call_start: str,
+    signature: str
+) -> bool:
+    """
+    Verify PBX extension webhook signature from Zadarma
+    
+    For PBX extension webhooks, Zadarma uses a different signature format:
+    base64(hash_hmac('sha1', caller_id + called_did + call_start, API_SECRET))
+    
+    Args:
+        caller_id: Caller's phone number
+        called_did: Called phone number
+        call_start: Call start time
+        signature: Base64-encoded signature from webhook
+        
+    Returns:
+        True if signature is valid, False otherwise
+    """
+    if not settings.ZADARMA_API_SECRET:
+        logger.warning("ZADARMA_API_SECRET not configured, skipping signature verification")
+        return True  # In dev mode without credentials
+    
+    try:
+        # Create the message string: caller_id + called_did + call_start
+        message = str(caller_id) + str(called_did) + str(call_start)
+        
+        # Generate HMAC-SHA1 signature
+        expected_signature_bytes = hmac.new(
+            settings.ZADARMA_API_SECRET.encode(),
+            message.encode(),
+            hashlib.sha1
+        ).digest()
+        
+        # Encode to base64
+        expected_signature = base64.b64encode(expected_signature_bytes).decode()
+        
+        # Compare signatures (case-insensitive, as Zadarma may send different case)
+        return hmac.compare_digest(expected_signature.lower(), signature.lower())
+    except Exception as e:
+        logger.error(f"Error verifying PBX signature: {e}")
         return False
 
 
@@ -226,56 +273,101 @@ async def zadarma_webhook(
     """
     Handle incoming webhooks from Zadarma
     
+    Supports both JSON webhooks (standard) and form-encoded webhooks (PBX extensions).
+    
     Zadarma sends webhooks for various call events:
-    - NOTIFY_START: Incoming call initiated
+    - NOTIFY_START: Incoming call initiated (can return call flow control)
+    - NOTIFY_INTERNAL: Internal call to PBX extension
     - NOTIFY_ANSWER: Call was answered
     - NOTIFY_END: Call ended
     - NOTIFY_OUT_START: Outgoing call started
     - NOTIFY_OUT_END: Outgoing call ended
     - NOTIFY_RECORD: Call recording available
+    - NOTIFY_IVR: Caller response to IVR action (can return call flow control)
     """
     try:
-        # Get raw body for signature verification
-        body_bytes = await request.body()
-        body_str = body_bytes.decode('utf-8')
+        # Get content type to determine if it's JSON or form data
+        content_type = request.headers.get('content-type', '').lower()
+        is_form_data = 'application/x-www-form-urlencoded' in content_type or 'multipart/form-data' in content_type
         
-        # Verify signature
-        signature = request.headers.get('X-Zadarma-Signature', '')
-        if signature and not verify_zadarma_signature(body_str, signature):
-            logger.error("Invalid Zadarma webhook signature")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid signature"
+        # Parse webhook data based on content type
+        if is_form_data:
+            # PBX extension webhooks use form data
+            form_data = await request.form()
+            data = dict(form_data)
+            
+            # Extract event and parameters
+            event = data.get('event', '')
+            caller_id = data.get('caller_id', '')
+            called_did = data.get('called_did', data.get('destination', ''))
+            call_start = data.get('call_start', '')
+            zadarma_call_id = data.get('pbx_call_id', data.get('call_id', ''))
+            
+            # Verify PBX signature
+            signature = request.headers.get('X-Zadarma-Signature', '')
+            if signature and not verify_pbx_signature(caller_id, called_did, call_start, signature):
+                logger.error("Invalid PBX webhook signature")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid signature"
+                )
+            
+            logger.info(f"PBX webhook received: {event} for call {zadarma_call_id}")
+            logger.info(f"PBX webhook data: {data}")
+        else:
+            # Standard JSON webhooks
+            # Get raw body for signature verification (must be done before parsing JSON)
+            body_bytes = await request.body()
+            body_str = body_bytes.decode('utf-8')
+            
+            try:
+                # Parse JSON from the body string we already read
+                data = json.loads(body_str)
+            except json.JSONDecodeError:
+                # Fallback: try to parse as form data if JSON fails
+                # Note: This won't work if we already read the body, so we'll use the body_str
+                # For form data, we'd need to parse it manually or use a different approach
+                logger.warning("Failed to parse as JSON, attempting form data parsing")
+                # Try to parse as URL-encoded form data
+                from urllib.parse import parse_qs
+                form_data = parse_qs(body_str)
+                data = {k: v[0] if v else '' for k, v in form_data.items()}
+                is_form_data = True
+            
+            event = data.get('event', '')
+            zadarma_call_id = data.get('call_id', data.get('pbx_call_id', ''))
+            
+            # Verify signature for JSON webhooks
+            signature = request.headers.get('X-Zadarma-Signature', '')
+            if signature and not verify_zadarma_signature(body_str, signature):
+                logger.error("Invalid Zadarma webhook signature")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid signature"
+                )
+            
+            # Extract phone numbers - Zadarma may send them in different fields
+            caller_id = (
+                data.get('caller_id') or 
+                data.get('from') or 
+                data.get('caller') or 
+                data.get('caller_number') or
+                data.get('callerid') or
+                ''
             )
-        
-        # Parse webhook data
-        data = await request.json()
-        event = data.get('event')
-        zadarma_call_id = data.get('call_id', data.get('pbx_call_id'))
-        
-        # Extract phone numbers - Zadarma may send them in different fields
-        # Try multiple possible field names
-        caller_id = (
-            data.get('caller_id') or 
-            data.get('from') or 
-            data.get('caller') or 
-            data.get('caller_number') or
-            data.get('callerid') or
-            ''
-        )
-        called_did = (
-            data.get('called_did') or 
-            data.get('to') or 
-            data.get('called') or 
-            data.get('called_number') or
-            data.get('did') or
-            ''
-        )
-        
-        # Log all webhook data for debugging
-        logger.info(f"Zadarma webhook received: {event} for call {zadarma_call_id}")
-        logger.info(f"Full webhook data: {json.dumps(data, indent=2)}")
-        logger.info(f"Extracted - From: {caller_id}, To: {called_did}")
+            called_did = (
+                data.get('called_did') or 
+                data.get('to') or 
+                data.get('called') or 
+                data.get('called_number') or
+                data.get('did') or
+                data.get('destination') or
+                ''
+            )
+            call_start = data.get('call_start', '')
+            
+            logger.info(f"Zadarma webhook received: {event} for call {zadarma_call_id}")
+            logger.info(f"Full webhook data: {json.dumps(data, indent=2)}")
         
         # Normalize phone numbers - more comprehensive normalization
         def normalize_phone_number(phone: str) -> str:
@@ -314,6 +406,9 @@ async def zadarma_webhook(
         if event == "NOTIFY_START":
             return await handle_call_start(db, data, caller_id, called_did, zadarma_call_id)
         
+        elif event == "NOTIFY_INTERNAL":
+            return await handle_internal_call(db, data, caller_id, called_did, zadarma_call_id)
+        
         elif event == "NOTIFY_ANSWER":
             return await handle_call_answer(db, data, zadarma_call_id)
         
@@ -329,16 +424,85 @@ async def zadarma_webhook(
         elif event == "NOTIFY_RECORD":
             return await handle_recording_available(db, data, zadarma_call_id)
         
+        elif event == "NOTIFY_IVR":
+            return await handle_ivr_response(db, data, caller_id, called_did, zadarma_call_id)
+        
         else:
             logger.warning(f"Unknown Zadarma event type: {event}")
             return {"status": "ok", "message": f"Event {event} acknowledged but not handled"}
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error processing Zadarma webhook: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+
+def build_call_flow_response(
+    response_type: str,
+    value: Any = None,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Build call flow control response for NOTIFY_START and NOTIFY_IVR
+    
+    Supported response types:
+    - "redirect": Redirect to extension/scenario (value: extension/scenario ID)
+    - "hangup": End the call (value: 1)
+    - "caller_name": Set caller name (value: name string)
+    - "wait_dtmf": Wait for DTMF input (value: dict with timeout, attempts, etc.)
+    - "ivr_play": Play audio file (value: file ID)
+    - "ivr_saypopular": Play popular phrase (value: phrase number, language: "en"/"ru"/"es"/"pl")
+    - "ivr_saydigits": Play digits (value: digits string, language: "en"/"ru"/"es"/"pl")
+    - "ivr_saynumber": Play number (value: number string, language: "en"/"ru"/"es"/"pl")
+    
+    Returns:
+        Dict with appropriate response structure for Zadarma
+    """
+    if response_type == "redirect":
+        response = {"redirect": value}
+        if "return_timeout" in kwargs:
+            response["return_timeout"] = kwargs["return_timeout"]
+        if "rewrite_forward_number" in kwargs:
+            response["rewrite_forward_number"] = kwargs["rewrite_forward_number"]
+        return response
+    
+    elif response_type == "hangup":
+        return {"hangup": 1}
+    
+    elif response_type == "caller_name":
+        return {"caller_name": value}
+    
+    elif response_type == "wait_dtmf":
+        return {"wait_dtmf": value if isinstance(value, dict) else kwargs}
+    
+    elif response_type == "ivr_play":
+        return {"ivr_play": value}
+    
+    elif response_type == "ivr_saypopular":
+        response = {"ivr_saypopular": value if value is not None else 1}
+        if "language" in kwargs:
+            response["language"] = kwargs["language"]
+        return response
+    
+    elif response_type == "ivr_saydigits":
+        response = {"ivr_saydigits": value}
+        if "language" in kwargs:
+            response["language"] = kwargs["language"]
+        return response
+    
+    elif response_type == "ivr_saynumber":
+        response = {"ivr_saynumber": value}
+        if "language" in kwargs:
+            response["language"] = kwargs["language"]
+        return response
+    
+    else:
+        logger.warning(f"Unknown call flow response type: {response_type}")
+        return {}
 
 
 async def handle_call_start(
@@ -348,13 +512,30 @@ async def handle_call_start(
     called_did: str,
     zadarma_call_id: str
 ) -> Dict[str, Any]:
-    """Handle incoming call start (NOTIFY_START)"""
+    """
+    Handle incoming call start (NOTIFY_START)
+    
+    For PBX extension webhooks, this can return call flow control responses:
+    - redirect: Redirect to extension/scenario
+    - hangup: End the call
+    - caller_name: Set caller name
+    - wait_dtmf: Wait for DTMF input
+    - ivr_play: Play audio file
+    - ivr_saypopular: Play popular phrase
+    - ivr_saydigits: Play digits
+    - ivr_saynumber: Play number
+    
+    Currently, we return audio streaming endpoints for direct call handling.
+    You can modify this to return call flow control responses if needed.
+    """
     
     # Find agent assigned to this phone number
     agent = await get_agent_for_phone_number(db, called_did)
     
     if not agent:
         logger.warning(f"No agent found for phone number {called_did}")
+        # Option: Return hangup response to reject the call
+        # return build_call_flow_response("hangup")
         return {
             "status": "error",
             "message": f"No agent configured for number {called_did}"
@@ -409,7 +590,25 @@ async def handle_call_start(
     except Exception as e:
         logger.error(f"Failed to send notification: {e}")
     
-    # Return response to Zadarma with audio streaming endpoints
+    # Return response to Zadarma
+    # For PBX extension webhooks, you can return call flow control responses.
+    # For now, we return a standard response with audio endpoints.
+    # 
+    # Example: To redirect to an extension instead:
+    # return build_call_flow_response("redirect", "2001")  # Redirect to extension 2001
+    #
+    # Example: To play a greeting and wait for DTMF:
+    # return {
+    #     "ivr_saypopular": 1,
+    #     "language": "en",
+    #     "wait_dtmf": {
+    #         "timeout": 10,
+    #         "attempts": 3,
+    #         "maxdigits": 1,
+    #         "name": "menu_choice"
+    #     }
+    # }
+    
     from app.core.config import settings
     
     # Provide audio streaming endpoints for Zadarma to use
@@ -596,6 +795,147 @@ async def handle_recording_available(
         # await storage_service.download_and_store_recording(call.id, recording_url)
     
     return {"status": "ok", "message": "Recording URL saved"}
+
+
+async def handle_internal_call(
+    db: Session,
+    data: Dict[str, Any],
+    caller_id: str,
+    called_did: str,
+    zadarma_call_id: str
+) -> Dict[str, Any]:
+    """
+    Handle internal call to PBX extension (NOTIFY_INTERNAL)
+    
+    This event is triggered when a call is routed to a PBX extension.
+    Parameters:
+    - event: NOTIFY_INTERNAL
+    - call_start: Call start time
+    - pbx_call_id: Call ID
+    - caller_id: Caller's phone number
+    - called_did: Called phone number
+    - internal: (optional) Extension number
+    - transfer_from: (optional) Transfer initiator, extension
+    - transfer_type: (optional) Transfer type
+    """
+    logger.info(f"Internal PBX call received: {zadarma_call_id}")
+    logger.info(f"Internal call details - From: {caller_id}, To: {called_did}")
+    logger.info(f"Extension: {data.get('internal')}, Transfer from: {data.get('transfer_from')}")
+    
+    # Extract extension number
+    extension = data.get('internal', '')
+    
+    # Try to find agent by extension number
+    agent = None
+    if extension:
+        phone_record = db.query(PhoneNumber).filter(
+            PhoneNumber.pbx_extension == str(extension)
+        ).first()
+        
+        if phone_record and phone_record.agent:
+            agent = phone_record.agent
+            logger.info(f"Found agent {agent.id} for extension {extension}")
+    
+    # If no agent found by extension, try by called number
+    if not agent:
+        agent = await get_agent_for_phone_number(db, called_did)
+    
+    if not agent:
+        logger.warning(f"No agent found for internal call - extension: {extension}, called: {called_did}")
+        return {"status": "ok", "message": "Internal call received but no agent configured"}
+    
+    # Find or create call record
+    call = db.query(Call).filter(
+        Call.zadarma_call_id == zadarma_call_id
+    ).first()
+    
+    if not call:
+        call = await create_call_record(
+            db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_INTERNAL"
+        )
+        logger.info(f"Created call record for internal call: {call.id}")
+    else:
+        logger.info(f"Using existing call record: {call.id}")
+    
+    return {
+        "status": "ok",
+        "call_id": call.id,
+        "message": "Internal call processed",
+        "extension": extension
+    }
+
+
+async def handle_ivr_response(
+    db: Session,
+    data: Dict[str, Any],
+    caller_id: str,
+    called_did: str,
+    zadarma_call_id: str
+) -> Dict[str, Any]:
+    """
+    Handle IVR response from caller (NOTIFY_IVR)
+    
+    This event is triggered when the caller responds to an IVR action (e.g., presses a digit).
+    For NOTIFY_IVR, we can return call flow control responses similar to NOTIFY_START.
+    
+    Parameters:
+    - event: NOTIFY_IVR
+    - call_start: Call start time
+    - pbx_call_id: Call ID
+    - caller_id: Caller's phone number
+    - called_did: Called phone number
+    - digits: (optional) Digits entered by caller
+    - ivr_saydigits: (optional) "COMPLETE" if digits were played
+    - ivr_saynumber: (optional) "COMPLETE" if number was played
+    """
+    logger.info(f"IVR response received: {zadarma_call_id}")
+    logger.info(f"IVR data: {data}")
+    
+    # Extract digits entered by caller
+    digits = data.get('digits', '')
+    ivr_saydigits = data.get('ivr_saydigits', '')
+    ivr_saynumber = data.get('ivr_saynumber', '')
+    
+    # Find call record
+    call = db.query(Call).filter(
+        Call.zadarma_call_id == zadarma_call_id
+    ).first()
+    
+    if not call:
+        logger.warning(f"Call record not found for IVR response {zadarma_call_id}")
+        # Return empty response - call will continue with default behavior
+        return {}
+    
+    logger.info(f"IVR response for call {call.id}: digits={digits}, saydigits={ivr_saydigits}, saynumber={ivr_saynumber}")
+    
+    # For now, we return an empty response which means "continue with default behavior"
+    # In the future, you can implement logic to:
+    # - Redirect based on digits entered
+    # - Play additional files
+    # - Wait for more DTMF input
+    # - Hang up the call
+    
+    # Example: If you want to redirect to extension based on digits
+    # if digits == "1":
+    #     return build_call_flow_response("redirect", "2001")  # Redirect to extension 2001
+    # elif digits == "2":
+    #     return build_call_flow_response("redirect", "2002")  # Redirect to extension 2002
+    # elif digits == "0":
+    #     return build_call_flow_response("hangup")  # Hang up the call
+    
+    # Example: Play a message and wait for more input
+    # return {
+    #     "ivr_saypopular": 1,
+    #     "language": "en",
+    #     "wait_dtmf": {
+    #         "timeout": 10,
+    #         "attempts": 3,
+    #         "maxdigits": 1,
+    #         "name": "menu_choice"
+    #     }
+    # }
+    
+    return {}
 
 
 @router.get("/health")
