@@ -151,9 +151,9 @@ INITIAL_GREETING PROTOCOL:
         
         # Log the system prompt for debugging
         logger.info(f"System prompt for agent {self.agent.id} ({self.agent.name}):")
-        logger.info(f"  Custom prompt: {self.agent.system_prompt[:100]}...")
-        logger.info(f"  RAG enabled: {self.agent.rag_enabled}")
-        logger.info(f"  Full instruction length: {len(system_instruction)} chars")
+        # logger.info(f"  Custom prompt: {self.agent.system_prompt[:100]}...")
+        # logger.info(f"  RAG enabled: {self.agent.rag_enabled}")
+        # logger.info(f"  Full instruction length: {len(system_instruction)} chars")
         
         # Build config matching the working test.py
         # Include both AUDIO and TEXT responses for better interaction
@@ -376,16 +376,16 @@ INITIAL_GREETING PROTOCOL:
                     turn = self.session.receive()
                     async for response in turn:
                         response_count += 1
-                        logger.info(f"📥 Received response #{response_count}: {type(response).__name__}")
+                        # logger.info(f"📥 Received response #{response_count}: {type(response).__name__}")
                         
-                        # Debug: Log all attributes of the response
-                        logger.info(f"🔍 Response attributes: {[attr for attr in dir(response) if not attr.startswith('_')]}")
+                        # # Debug: Log all attributes of the response
+                        # logger.info(f"🔍 Response attributes: {[attr for attr in dir(response) if not attr.startswith('_')]}")
                         
-                        # Log the actual response object for debugging
-                        try:
-                            logger.info(f"🔍 Response content: {response}")
-                        except:
-                            pass
+                        # # Log the actual response object for debugging
+                        # try:
+                        #     logger.info(f"🔍 Response content: {response}")
+                        # except:
+                        #     pass
                         
                         # Handle audio data (inline_data) - check for 'data' attribute
                         if hasattr(response, 'data') and response.data:
@@ -395,19 +395,19 @@ INITIAL_GREETING PROTOCOL:
                         # Handle server content (contains transcripts)
                         if hasattr(response, 'server_content'):
                             server_content = response.server_content
-                            logger.info(f"📋 Server content received: {type(server_content)}")
+                            # logger.info(f"📋 Server content received: {type(server_content)}")
                             
                             # Capture output transcripts (agent speech) - accumulate until generation complete
                             if hasattr(server_content, "output_transcription") and server_content.output_transcription:
                                 text = getattr(server_content.output_transcription, "text", None)
                                 if text:
-                                    logger.info(f"🗣️ Agent transcript fragment: {text}")
+                                    # logger.info(f"🗣️ Agent transcript fragment: {text}")
                                     self._agent_transcript_buffer.append(text.strip())
                             
                             # Check for model turn (contains text and audio)
                             if hasattr(server_content, 'model_turn') and server_content.model_turn:
                                 model_turn = server_content.model_turn
-                                logger.info(f"🤖 Model turn: {model_turn}")
+                                # logger.info(f"🤖 Model turn: {model_turn}")
                                 
                                 # Extract text from parts
                                 if hasattr(model_turn, 'parts'):
