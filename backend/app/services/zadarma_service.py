@@ -143,12 +143,14 @@ class ZadarmaService:
     # -------------------------------------------------------------------------
     def _generate_extension_number(self, db: Session) -> str:
         """Generate a unique PBX extension number"""
-        existing_exts = {
-            pn.pbx_extension
-            for pn in db.query(PhoneNumber)
-            .filter(PhoneNumber.pbx_extension.isnot(None))
-            .all()
-        }
+        # Use raw SQL to avoid sip_id column issue
+        from sqlalchemy import text
+        result = db.execute(text("""
+            SELECT pbx_extension
+            FROM phone_numbers
+            WHERE pbx_extension IS NOT NULL
+        """))
+        existing_exts = {row[0] for row in result if row[0]}
         
         # Use the range 2000-2999 for virtual agents
         for _ in range(1000):
@@ -536,7 +538,50 @@ class ZadarmaService:
     async def check_number_status(self, db: Session, phone_number_id: int) -> bool:
         """Check the status of a phone number request with Zadarma"""
         try:
-            phone_record = db.query(PhoneNumber).filter(PhoneNumber.id == phone_number_id).first()
+            # Use raw SQL to avoid sip_id column issue
+            from sqlalchemy import text
+            result = db.execute(text("""
+                SELECT id, user_id, agent_id, phone_number, country_code, number_type,
+                       zadarma_number_id, zadarma_status, zadarma_config,
+                       pbx_enabled, pbx_scenario_id, pbx_extension,
+                       business_hours, menu_options, after_hours_routing,
+                       status, status_message, monthly_cost, per_minute_cost,
+                       business_name, business_type, business_address,
+                       created_at, updated_at, activated_at
+                FROM phone_numbers
+                WHERE id = :id
+                LIMIT 1
+            """), {"id": phone_number_id}).first()
+            
+            phone_record = None
+            if result:
+                phone_record = PhoneNumber()
+                phone_record.id = result[0]
+                phone_record.user_id = result[1]
+                phone_record.agent_id = result[2]
+                phone_record.phone_number = result[3]
+                phone_record.country_code = result[4]
+                phone_record.number_type = result[5]
+                phone_record.zadarma_number_id = result[6]
+                phone_record.zadarma_status = result[7]
+                phone_record.zadarma_config = result[8]
+                phone_record.pbx_enabled = result[9]
+                phone_record.pbx_scenario_id = result[10]
+                phone_record.pbx_extension = result[11]
+                phone_record.business_hours = result[12]
+                phone_record.menu_options = result[13]
+                phone_record.after_hours_routing = result[14]
+                phone_record.status = result[15]
+                phone_record.status_message = result[16]
+                phone_record.monthly_cost = result[17]
+                phone_record.per_minute_cost = result[18]
+                phone_record.business_name = result[19]
+                phone_record.business_type = result[20]
+                phone_record.business_address = result[21]
+                phone_record.created_at = result[22]
+                phone_record.updated_at = result[23]
+                phone_record.activated_at = result[24]
+                phone_record.sip_id = None
             if not phone_record:
                 return False
             
@@ -571,7 +616,50 @@ class ZadarmaService:
     async def activate_number_for_agent(self, db: Session, phone_number_id: int, agent_id: int) -> bool:
         """Activate a phone number and assign it to an agent"""
         try:
-            phone_record = db.query(PhoneNumber).filter(PhoneNumber.id == phone_number_id).first()
+            # Use raw SQL to avoid sip_id column issue
+            from sqlalchemy import text
+            result = db.execute(text("""
+                SELECT id, user_id, agent_id, phone_number, country_code, number_type,
+                       zadarma_number_id, zadarma_status, zadarma_config,
+                       pbx_enabled, pbx_scenario_id, pbx_extension,
+                       business_hours, menu_options, after_hours_routing,
+                       status, status_message, monthly_cost, per_minute_cost,
+                       business_name, business_type, business_address,
+                       created_at, updated_at, activated_at
+                FROM phone_numbers
+                WHERE id = :id
+                LIMIT 1
+            """), {"id": phone_number_id}).first()
+            
+            phone_record = None
+            if result:
+                phone_record = PhoneNumber()
+                phone_record.id = result[0]
+                phone_record.user_id = result[1]
+                phone_record.agent_id = result[2]
+                phone_record.phone_number = result[3]
+                phone_record.country_code = result[4]
+                phone_record.number_type = result[5]
+                phone_record.zadarma_number_id = result[6]
+                phone_record.zadarma_status = result[7]
+                phone_record.zadarma_config = result[8]
+                phone_record.pbx_enabled = result[9]
+                phone_record.pbx_scenario_id = result[10]
+                phone_record.pbx_extension = result[11]
+                phone_record.business_hours = result[12]
+                phone_record.menu_options = result[13]
+                phone_record.after_hours_routing = result[14]
+                phone_record.status = result[15]
+                phone_record.status_message = result[16]
+                phone_record.monthly_cost = result[17]
+                phone_record.per_minute_cost = result[18]
+                phone_record.business_name = result[19]
+                phone_record.business_type = result[20]
+                phone_record.business_address = result[21]
+                phone_record.created_at = result[22]
+                phone_record.updated_at = result[23]
+                phone_record.activated_at = result[24]
+                phone_record.sip_id = None
             if not phone_record:
                 logger.error(f"Phone number {phone_number_id} not found")
                 return False

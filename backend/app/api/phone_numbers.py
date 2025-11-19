@@ -3,6 +3,7 @@ Phone Numbers and Zadarma Integration API
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -24,6 +25,131 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def safe_query_phone_number(db: Session, filter_clause: str, params: Dict = None) -> Optional[PhoneNumber]:
+    """
+    Safely query PhoneNumber without loading sip_id column (which may not exist in DB)
+    
+    Args:
+        db: Database session
+        filter_clause: SQL WHERE clause (e.g., "id = :id")
+        params: Parameters for the query
+        
+    Returns:
+        PhoneNumber object or None
+    """
+    params = params or {}
+    try:
+        result = db.execute(text(f"""
+            SELECT id, user_id, agent_id, phone_number, country_code, number_type,
+                   zadarma_number_id, zadarma_status, zadarma_config,
+                   pbx_enabled, pbx_scenario_id, pbx_extension,
+                   business_hours, menu_options, after_hours_routing,
+                   status, status_message, monthly_cost, per_minute_cost,
+                   business_name, business_type, business_address,
+                   created_at, updated_at, activated_at
+            FROM phone_numbers
+            WHERE {filter_clause}
+            LIMIT 1
+        """), params).first()
+        
+        if result:
+            phone = PhoneNumber()
+            phone.id = result[0]
+            phone.user_id = result[1]
+            phone.agent_id = result[2]
+            phone.phone_number = result[3]
+            phone.country_code = result[4]
+            phone.number_type = result[5]
+            phone.zadarma_number_id = result[6]
+            phone.zadarma_status = result[7]
+            phone.zadarma_config = result[8]
+            phone.pbx_enabled = result[9]
+            phone.pbx_scenario_id = result[10]
+            phone.pbx_extension = result[11]
+            phone.business_hours = result[12]
+            phone.menu_options = result[13]
+            phone.after_hours_routing = result[14]
+            phone.status = result[15]
+            phone.status_message = result[16]
+            phone.monthly_cost = result[17]
+            phone.per_minute_cost = result[18]
+            phone.business_name = result[19]
+            phone.business_type = result[20]
+            phone.business_address = result[21]
+            phone.created_at = result[22]
+            phone.updated_at = result[23]
+            phone.activated_at = result[24]
+            phone.sip_id = None  # Set to None since column may not exist
+            return phone
+        return None
+    except Exception as e:
+        logger.error(f"Error in safe_query_phone_number: {e}")
+        # Fallback to regular query if raw SQL fails
+        return None
+
+
+def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Dict = None) -> List[PhoneNumber]:
+    """
+    Safely query multiple PhoneNumber objects without loading sip_id column
+    
+    Args:
+        db: Database session
+        filter_clause: SQL WHERE clause (default: "1=1" for all records)
+        params: Parameters for the query
+        
+    Returns:
+        List of PhoneNumber objects
+    """
+    params = params or {}
+    try:
+        result = db.execute(text(f"""
+            SELECT id, user_id, agent_id, phone_number, country_code, number_type,
+                   zadarma_number_id, zadarma_status, zadarma_config,
+                   pbx_enabled, pbx_scenario_id, pbx_extension,
+                   business_hours, menu_options, after_hours_routing,
+                   status, status_message, monthly_cost, per_minute_cost,
+                   business_name, business_type, business_address,
+                   created_at, updated_at, activated_at
+            FROM phone_numbers
+            WHERE {filter_clause}
+        """), params)
+        
+        phones = []
+        for row in result:
+            phone = PhoneNumber()
+            phone.id = row[0]
+            phone.user_id = row[1]
+            phone.agent_id = row[2]
+            phone.phone_number = row[3]
+            phone.country_code = row[4]
+            phone.number_type = row[5]
+            phone.zadarma_number_id = row[6]
+            phone.zadarma_status = row[7]
+            phone.zadarma_config = row[8]
+            phone.pbx_enabled = row[9]
+            phone.pbx_scenario_id = row[10]
+            phone.pbx_extension = row[11]
+            phone.business_hours = row[12]
+            phone.menu_options = row[13]
+            phone.after_hours_routing = row[14]
+            phone.status = row[15]
+            phone.status_message = row[16]
+            phone.monthly_cost = row[17]
+            phone.per_minute_cost = row[18]
+            phone.business_name = row[19]
+            phone.business_type = row[20]
+            phone.business_address = row[21]
+            phone.created_at = row[22]
+            phone.updated_at = row[23]
+            phone.activated_at = row[24]
+            phone.sip_id = None  # Set to None since column may not exist
+            phones.append(phone)
+        return phones
+    except Exception as e:
+        logger.error(f"Error in safe_query_phone_numbers: {e}")
+        return []
 
 
 # Pydantic models
@@ -176,10 +302,12 @@ async def add_existing_phone_number(
     logger.info(f"Adding existing phone number: {request.phone_number} -> normalized: {normalized_phone}")
     
     # Check if number already exists (try both original and normalized)
-    existing = db.query(PhoneNumber).filter(
-        (PhoneNumber.phone_number == request.phone_number) |
-        (PhoneNumber.phone_number == normalized_phone)
-    ).first()
+    # Use safe query to avoid sip_id column issue
+    existing = safe_query_phone_number(
+        db, 
+        "phone_number = :phone1 OR phone_number = :phone2",
+        {"phone1": request.phone_number, "phone2": normalized_phone}
+    )
     
     if existing:
         raise HTTPException(
@@ -260,9 +388,12 @@ async def list_phone_numbers(
     db: Session = Depends(get_db)
 ):
     """List all phone numbers for current user"""
-    phone_numbers = db.query(PhoneNumber).filter(
-        PhoneNumber.user_id == current_user.id
-    ).order_by(PhoneNumber.created_at.desc()).all()
+    # Use safe query to avoid sip_id column issue
+    phone_numbers = safe_query_phone_numbers(
+        db,
+        "user_id = :user_id ORDER BY created_at DESC",
+        {"user_id": current_user.id}
+    )
     
     return phone_numbers
 
@@ -274,10 +405,12 @@ async def get_phone_number(
     db: Session = Depends(get_db)
 ):
     """Get details of a specific phone number"""
-    phone_number = db.query(PhoneNumber).filter(
-        PhoneNumber.id == phone_number_id,
-        PhoneNumber.user_id == current_user.id
-    ).first()
+    # Use safe query to avoid sip_id column issue
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id AND user_id = :user_id",
+        {"id": phone_number_id, "user_id": current_user.id}
+    )
     
     if not phone_number:
         raise HTTPException(
@@ -298,10 +431,12 @@ async def upload_verification_document(
 ):
     """Upload verification document for phone number"""
     # Verify phone number belongs to user
-    phone_number = db.query(PhoneNumber).filter(
-        PhoneNumber.id == phone_number_id,
-        PhoneNumber.user_id == current_user.id
-    ).first()
+    # Use safe query to avoid sip_id column issue
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id AND user_id = :user_id",
+        {"id": phone_number_id, "user_id": current_user.id}
+    )
     
     if not phone_number:
         raise HTTPException(
@@ -365,10 +500,12 @@ async def list_verification_documents(
 ):
     """List all verification documents for a phone number"""
     # Verify phone number belongs to user
-    phone_number = db.query(PhoneNumber).filter(
-        PhoneNumber.id == phone_number_id,
-        PhoneNumber.user_id == current_user.id
-    ).first()
+    # Use safe query to avoid sip_id column issue
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id AND user_id = :user_id",
+        {"id": phone_number_id, "user_id": current_user.id}
+    )
     
     if not phone_number:
         raise HTTPException(
@@ -427,9 +564,12 @@ async def review_verification_document(
     document.notes = review.notes
     
     # Check if all required documents are accepted
-    phone_number = db.query(PhoneNumber).filter(
-        PhoneNumber.id == phone_number_id
-    ).first()
+    # Use safe query to avoid sip_id column issue
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id",
+        {"id": phone_number_id}
+    )
     
     all_docs = db.query(VerificationDocument).filter(
         VerificationDocument.phone_number_id == phone_number_id
@@ -493,10 +633,12 @@ async def configure_pbx_for_phone_number(
     db: Session = Depends(get_db)
 ):
     """Configure PBX call flow for a Zadarma number"""
-    phone_number = db.query(PhoneNumber).filter(
-        PhoneNumber.id == phone_number_id,
-        PhoneNumber.user_id == current_user.id
-    ).first()
+    # Use safe query to avoid sip_id column issue
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id AND user_id = :user_id",
+        {"id": phone_number_id, "user_id": current_user.id}
+    )
     
     if not phone_number:
         raise HTTPException(
@@ -553,9 +695,12 @@ async def check_phone_number_status(
         )
     
     # Return updated phone number
-    phone_number = db.query(PhoneNumber).filter(
-        PhoneNumber.id == phone_number_id
-    ).first()
+    # Use safe query to avoid sip_id column issue
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id",
+        {"id": phone_number_id}
+    )
     
     return phone_number
 

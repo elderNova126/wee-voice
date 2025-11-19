@@ -393,15 +393,18 @@ def get_call_stats(
     """Get call statistics for the user with proper error handling"""
     try:
         from_date = datetime.utcnow() - timedelta(days=days)
+        from sqlalchemy.orm import noload
         
         # Admin users can see all calls, regular users see only their agents' calls
+        # Use noload to prevent loading agent relationship (which would load PhoneNumber with missing sip_id column)
         if current_user.is_superuser:
-            base_query = db.query(Call)
+            base_query = db.query(Call).options(noload(Call.agent))
         else:
             # Regular users see only calls from agents they created
+            # Join with VoiceAgent but don't load the relationship to avoid PhoneNumber loading
             base_query = db.query(Call).join(VoiceAgent, Call.agent_id == VoiceAgent.id).filter(
                 VoiceAgent.user_id == current_user.id
-            )
+            ).options(noload(Call.agent))
         
         # Total calls
         total_calls = base_query.filter(

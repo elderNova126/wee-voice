@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON, Boolean, Enum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
+from sqlalchemy.ext.hybrid import hybrid_property
 from datetime import datetime
 import enum
 from app.models.database import Base
@@ -55,8 +56,24 @@ class PhoneNumber(Base):
     pbx_enabled = Column(Boolean, default=False)
     pbx_scenario_id = Column(String, nullable=True)
     pbx_extension = Column(String, nullable=True)
-    sip_id = Column(String, nullable=True)  # SIP ID for SIP-based forwarding
+    # Note: sip_id column may not exist in database, so we handle it gracefully
+    # We don't define it as a Column to avoid SQLAlchemy trying to SELECT it
     business_hours = Column(JSON, nullable=True)
+    
+    def __init__(self, **kwargs):
+        # Remove sip_id from kwargs if present, store it separately
+        self._sip_id = kwargs.pop('sip_id', None)
+        super().__init__(**kwargs)
+    
+    @hybrid_property
+    def sip_id(self):
+        """Get sip_id, returning None if column doesn't exist"""
+        return getattr(self, '_sip_id', None)
+    
+    @sip_id.setter
+    def sip_id(self, value):
+        """Set sip_id"""
+        self._sip_id = value
     menu_options = Column(JSON, nullable=True)
     after_hours_routing = Column(JSON, nullable=True)
     

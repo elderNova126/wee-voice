@@ -359,9 +359,20 @@ INITIAL_GREETING PROTOCOL:
         
         try:
             while True:
+                # Check if session is still available (may be None after stop/cleanup)
+                if self.session is None:
+                    logger.info("Session is None, stopping audio reception")
+                    break
+                
                 try:
                     turn_count += 1
                     logger.debug(f"Listening for turn {turn_count}...")
+                    
+                    # Double-check session is still available
+                    if self.session is None:
+                        logger.info("Session became None, stopping audio reception")
+                        break
+                    
                     turn = self.session.receive()
                     async for response in turn:
                         response_count += 1
@@ -459,9 +470,21 @@ INITIAL_GREETING PROTOCOL:
                     break
                 except Exception as turn_error:
                     error_msg = str(turn_error)
-                    # Check if it's a connection closure
-                    if "1011" in error_msg or "websocket" in error_msg.lower() or "ConnectionClosed" in error_msg:
-                        logger.info(f"Gemini connection closed: {turn_error}")
+                    error_type = type(turn_error).__name__
+                    
+                    # Check for websocket closure indicators
+                    is_websocket_closed = (
+                        "1011" in error_msg or 
+                        "1000" in error_msg or  # Normal closure code
+                        "websocket" in error_msg.lower() or 
+                        "ConnectionClosed" in error_msg or 
+                        "closed" in error_msg.lower() or 
+                        "close_exc" in error_msg or
+                        "ConnectionClosed" in error_type
+                    )
+                    
+                    if is_websocket_closed:
+                        logger.info(f"Websocket closed (code 1000/1011), stopping audio reception: {error_msg[:200]}")
                         break
                     else:
                         logger.error(f"Error in turn {turn_count}: {turn_error}", exc_info=True)
@@ -591,8 +614,11 @@ INITIAL_GREETING PROTOCOL:
             func_responses.append(func_response)
         
         # Send responses back
-        if func_responses:
-            await self.session.send_tool_response(function_responses=func_responses)
+        if func_responses and self.session is not None:
+            try:
+                await self.session.send_tool_response(function_responses=func_responses)
+            except Exception as e:
+                logger.warning(f"Error sending tool response (session may be closed): {e}")
     
     async def send_realtime_input(self):
         """Send queued audio to Gemini"""
@@ -601,24 +627,51 @@ INITIAL_GREETING PROTOCOL:
         
         try:
             while True:
+                # Check if session is still available (may be None after stop/cleanup)
+                if self.session is None:
+                    logger.info("Session is None, stopping audio input")
+                    break
+                
                 try:
                     # Use wait_for with timeout to allow cancellation
                     msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=1.0)
                     audio_sent_count += 1
                     
+                    # Double-check session is still available before sending
+                    if self.session is None:
+                        logger.info("Session became None, stopping audio input")
+                        break
+                    
                     # Send audio input to Gemini Live API
                     # Format matches test.py: dict with "data" and "mime_type" keys
                     await self.session.send_realtime_input(audio=msg)
                 except asyncio.TimeoutError:
-                    # No audio in queue, continue waiting
+                    # No audio in queue, continue waiting (but check session first)
+                    if self.session is None:
+                        logger.info("Session is None during timeout, stopping audio input")
+                        break
                     continue
                 except asyncio.CancelledError:
                     logger.info("Audio input cancelled")
                     break
                 except Exception as e:
                     error_msg = str(e)
-                    if "1011" in error_msg or "websocket" in error_msg.lower() or "ConnectionClosed" in error_msg or "closed" in error_msg.lower():
-                        logger.info("Session closed, stopping audio input")
+                    error_type = type(e).__name__
+                    
+                    # Check for websocket closure indicators
+                    is_websocket_closed = (
+                        "1011" in error_msg or 
+                        "1000" in error_msg or  # Normal closure code
+                        "websocket" in error_msg.lower() or 
+                        "ConnectionClosed" in error_msg or 
+                        "closed" in error_msg.lower() or 
+                        "close_exc" in error_msg or
+                        "ConnectionClosed" in error_type or
+                        "'NoneType' object has no attribute" in error_msg
+                    )
+                    
+                    if is_websocket_closed:
+                        logger.info(f"Websocket closed (code 1000/1011), stopping audio input: {error_msg[:200]}")
                         break
                     else:
                         logger.error(f"Error sending audio input: {e}", exc_info=True)
