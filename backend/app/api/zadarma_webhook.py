@@ -160,7 +160,7 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
             FROM phone_numbers
             WHERE agent_id IS NOT NULL
         """))
-        # Convert to PhoneNumber objects
+        # Convert to PhoneNumber objects and load agent relationships
         all_phones = []
         for row in result:
             phone = PhoneNumber()
@@ -190,6 +190,62 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
             phone.updated_at = row[23]
             phone.activated_at = row[24]
             phone.sip_id = None  # Set to None since column may not exist
+            
+            # Load agent if agent_id is set
+            if phone.agent_id:
+                try:
+                    agent_result = db.execute(text("""
+                        SELECT id, user_id, name, description, language, voice_id, voice_gender,
+                               system_prompt, greeting, email_request_enabled, email_request_message,
+                               agent_config, tools_enabled, model_name, temperature, max_tokens,
+                               crm_webhook_url, crm_enabled, crm_config, is_active, is_public,
+                               created_at, updated_at, rag_enabled, rag_config, embed_enabled,
+                               embed_widget_color, embed_position, embed_greeting_message, embed_language,
+                               allowed_domains
+                        FROM voice_agents
+                        WHERE id = :agent_id
+                        LIMIT 1
+                    """), {"agent_id": phone.agent_id}).first()
+                    
+                    if agent_result:
+                        from app.models.agent import VoiceAgent
+                        agent = VoiceAgent()
+                        agent.id = agent_result[0]
+                        agent.user_id = agent_result[1]
+                        agent.name = agent_result[2]
+                        agent.description = agent_result[3]
+                        agent.language = agent_result[4]
+                        agent.voice_id = agent_result[5]
+                        agent.voice_gender = agent_result[6]
+                        agent.system_prompt = agent_result[7]
+                        agent.greeting = agent_result[8]
+                        agent.email_request_enabled = agent_result[9]
+                        agent.email_request_message = agent_result[10]
+                        agent.agent_config = agent_result[11]
+                        agent.tools_enabled = agent_result[12]
+                        agent.model_name = agent_result[13]
+                        agent.temperature = agent_result[14]
+                        agent.max_tokens = agent_result[15]
+                        agent.crm_webhook_url = agent_result[16]
+                        agent.crm_enabled = agent_result[17]
+                        agent.crm_config = agent_result[18]
+                        agent.is_active = agent_result[19]
+                        agent.is_public = agent_result[20]
+                        agent.created_at = agent_result[21]
+                        agent.updated_at = agent_result[22]
+                        agent.rag_enabled = agent_result[23]
+                        agent.rag_config = agent_result[24]
+                        agent.embed_enabled = agent_result[25]
+                        agent.embed_widget_color = agent_result[26]
+                        agent.embed_position = agent_result[27]
+                        agent.embed_greeting_message = agent_result[28]
+                        agent.embed_language = agent_result[29]
+                        agent.allowed_domains = agent_result[30]
+                        # Set the agent on the phone object
+                        phone.agent = agent
+                except Exception as e:
+                    logger.warning(f"Could not load agent {phone.agent_id} for phone {phone.phone_number}: {e}")
+            
             all_phones.append(phone)
     except Exception as e:
         logger.error(f"Error querying phone numbers: {e}")
@@ -240,6 +296,60 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
         phone_record.updated_at = result[23]
         phone_record.activated_at = result[24]
         phone_record.sip_id = None  # Set to None since column may not exist
+        
+        # Load agent if agent_id is set
+        if phone_record.agent_id:
+            try:
+                agent_result = db.execute(text("""
+                    SELECT id, user_id, name, description, language, voice_id, voice_gender,
+                           system_prompt, greeting, email_request_enabled, email_request_message,
+                           agent_config, tools_enabled, model_name, temperature, max_tokens,
+                           crm_webhook_url, crm_enabled, crm_config, is_active, is_public,
+                           created_at, updated_at, rag_enabled, rag_config, embed_enabled,
+                           embed_widget_color, embed_position, embed_greeting_message, embed_language,
+                           allowed_domains
+                    FROM voice_agents
+                    WHERE id = :agent_id
+                    LIMIT 1
+                """), {"agent_id": phone_record.agent_id}).first()
+                
+                if agent_result:
+                    from app.models.agent import VoiceAgent
+                    agent = VoiceAgent()
+                    agent.id = agent_result[0]
+                    agent.user_id = agent_result[1]
+                    agent.name = agent_result[2]
+                    agent.description = agent_result[3]
+                    agent.language = agent_result[4]
+                    agent.voice_id = agent_result[5]
+                    agent.voice_gender = agent_result[6]
+                    agent.system_prompt = agent_result[7]
+                    agent.greeting = agent_result[8]
+                    agent.email_request_enabled = agent_result[9]
+                    agent.email_request_message = agent_result[10]
+                    agent.agent_config = agent_result[11]
+                    agent.tools_enabled = agent_result[12]
+                    agent.model_name = agent_result[13]
+                    agent.temperature = agent_result[14]
+                    agent.max_tokens = agent_result[15]
+                    agent.crm_webhook_url = agent_result[16]
+                    agent.crm_enabled = agent_result[17]
+                    agent.crm_config = agent_result[18]
+                    agent.is_active = agent_result[19]
+                    agent.is_public = agent_result[20]
+                    agent.created_at = agent_result[21]
+                    agent.updated_at = agent_result[22]
+                    agent.rag_enabled = agent_result[23]
+                    agent.rag_config = agent_result[24]
+                    agent.embed_enabled = agent_result[25]
+                    agent.embed_widget_color = agent_result[26]
+                    agent.embed_position = agent_result[27]
+                    agent.embed_greeting_message = agent_result[28]
+                    agent.embed_language = agent_result[29]
+                    agent.allowed_domains = agent_result[30]
+                    phone_record.agent = agent
+            except Exception as e:
+                logger.warning(f"Could not load agent {phone_record.agent_id} for phone {phone_record.phone_number}: {e}")
     
     if phone_record and phone_record.agent:
         logger.info(f"Found agent {phone_record.agent.id} for phone {phone_number} (exact match)")
@@ -247,6 +357,11 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
     
     # Try normalized match - compare with all stored numbers
     for phone in all_phones:
+        # Skip if phone doesn't have an agent assigned
+        if not phone.agent_id or not phone.agent:
+            logger.debug(f"Skipping phone {phone.phone_number} - no agent assigned (agent_id={phone.agent_id})")
+            continue
+        
         normalized_stored = normalize_phone_for_matching(phone.phone_number)
         logger.debug(f"Comparing: incoming='{normalized_incoming}' with stored='{normalized_stored}' (original: '{phone.phone_number}')")
         
@@ -280,6 +395,18 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
     
     logger.warning(f"No agent found for phone number: {phone_number} (normalized: {normalized_incoming})")
     logger.warning(f"Searched against {len(all_phones)} phone numbers in database")
+    
+    # Check if the number exists but has no agent assigned
+    result = db.execute(text("""
+        SELECT id, phone_number, agent_id
+        FROM phone_numbers
+        WHERE phone_number = :phone_number OR phone_number = :normalized
+        LIMIT 1
+    """), {"phone_number": phone_number, "normalized": normalized_incoming}).first()
+    
+    if result and result[2] is None:  # agent_id is None
+        logger.warning(f"Phone number {phone_number} exists in database but has no agent assigned. Please assign an agent to this number.")
+    
     return None
 
 
