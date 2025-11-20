@@ -495,8 +495,13 @@ async def zadarma_webhook(
     - NOTIFY_RECORD: Call recording available
     - NOTIFY_IVR: Caller response to IVR action (can return call flow control)
     """
+    # Log immediately at function entry - this should ALWAYS appear
+    print("=" * 80)
+    print("🔔 ZADARMA WEBHOOK RECEIVED (PRINT)")
+    print(f"Request method: {request.method}")
+    print(f"Request URL: {request.url}")
     logger.info("=" * 80)
-    logger.info("🔔 ZADARMA WEBHOOK RECEIVED")
+    logger.info("🔔 ZADARMA WEBHOOK RECEIVED (LOGGER)")
     logger.info(f"Request method: {request.method}")
     logger.info(f"Request URL: {request.url}")
     logger.info(f"Request headers: {dict(request.headers)}")
@@ -521,6 +526,12 @@ async def zadarma_webhook(
             called_did = data.get('called_did', data.get('destination', ''))
             call_start = data.get('call_start', '')
             zadarma_call_id = data.get('pbx_call_id', data.get('call_id', ''))
+            
+            print(f"🔍 Extracted event from form: '{event}'")
+            print(f"🔍 Extracted pbx_call_id: '{zadarma_call_id}'")
+            print(f"🔍 Full form data keys: {list(data.keys())}")
+            logger.info(f"Extracted event: {event}, pbx_call_id: {zadarma_call_id}")
+            logger.info(f"Full form data keys: {list(data.keys())}")
             
             # Verify PBX signature
             signature = request.headers.get('X-Zadarma-Signature', '')
@@ -556,9 +567,16 @@ async def zadarma_webhook(
             event = data.get('event', '')
             zadarma_call_id = data.get('call_id', data.get('pbx_call_id', ''))
             
+            print(f"🔍 Extracted event from JSON: '{event}'")
+            print(f"🔍 Extracted call_id: '{zadarma_call_id}'")
+            print(f"🔍 Full data keys: {list(data.keys())}")
+            logger.info(f"Extracted event: {event}, call_id: {zadarma_call_id}")
+            logger.info(f"Full webhook data keys: {list(data.keys())}")
+            
             # Verify signature for JSON webhooks
             signature = request.headers.get('X-Zadarma-Signature', '')
             if signature and not verify_zadarma_signature(body_str, signature):
+                print("❌ Invalid Zadarma webhook signature (PRINT)")
                 logger.error("Invalid Zadarma webhook signature")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -622,7 +640,11 @@ async def zadarma_webhook(
         logger.info(f"Normalized - From: {caller_id}, To: {called_did}")
         
         # Handle different event types
+        print(f"🔍 Event type: {event}")
+        logger.info(f"🔍 Event type: {event}")
+        
         if event == "NOTIFY_START":
+            print("📞 NOTIFY_START received - Incoming call initiated (PRINT)")
             logger.info("📞 NOTIFY_START received - Incoming call initiated")
             logger.info("ℹ️ NOTE: For PBX extensions, the call will only be answered if the extension is registered via SIP")
             logger.info("ℹ️ If you see NOTIFY_INTERNAL next, it means the call reached the extension")
