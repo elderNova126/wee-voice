@@ -495,10 +495,19 @@ async def zadarma_webhook(
     - NOTIFY_RECORD: Call recording available
     - NOTIFY_IVR: Caller response to IVR action (can return call flow control)
     """
+    logger.info("=" * 80)
+    logger.info("🔔 ZADARMA WEBHOOK RECEIVED")
+    logger.info(f"Request method: {request.method}")
+    logger.info(f"Request URL: {request.url}")
+    logger.info(f"Request headers: {dict(request.headers)}")
+    logger.info("=" * 80)
+    
     try:
         # Get content type to determine if it's JSON or form data
         content_type = request.headers.get('content-type', '').lower()
+        logger.info(f"Content-Type: {content_type}")
         is_form_data = 'application/x-www-form-urlencoded' in content_type or 'multipart/form-data' in content_type
+        logger.info(f"Is form data: {is_form_data}")
         
         # Parse webhook data based on content type
         if is_form_data:
@@ -726,6 +735,16 @@ async def handle_call_start(
     Handle incoming call start (NOTIFY_START)
     
     For PBX extension webhooks, this can return call flow control responses:
+    """
+    logger.info("=" * 80)
+    logger.info("📞 HANDLING CALL START (NOTIFY_START)")
+    logger.info(f"Caller ID: {caller_id}")
+    logger.info(f"Called DID: {called_did}")
+    logger.info(f"Zadarma Call ID: {zadarma_call_id}")
+    logger.info(f"Data: {data}")
+    logger.info("=" * 80)
+    
+    """
     - redirect: Redirect to extension/scenario
     - hangup: End the call
     - caller_name: Set caller name
@@ -740,9 +759,11 @@ async def handle_call_start(
     """
     
     # Find agent assigned to this phone number
+    logger.info(f"🔍 Looking up agent for phone number: {called_did}")
     agent = await get_agent_for_phone_number(db, called_did)
     
     if not agent:
+        logger.error(f"❌ NO AGENT FOUND for phone number {called_did}")
         logger.warning(f"No agent found for phone number {called_did}")
         # Option: Return hangup response to reject the call
         # return build_call_flow_response("hangup")
@@ -751,10 +772,14 @@ async def handle_call_start(
             "message": f"No agent configured for number {called_did}"
         }
     
+    logger.info(f"✅ Agent found: {agent.id} ({agent.name})")
+    
     # Create call record
+    logger.info(f"📝 Creating call record...")
     call = await create_call_record(
         db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_START"
     )
+    logger.info(f"✅ Call record created: ID={call.id}, Session ID={call.session_id}")
     
     # Start voice session for phone call
     # This sets up the audio bridge between Zadarma and Gemini
@@ -787,6 +812,20 @@ async def handle_call_start(
         )
         logger.info(f"Started phone audio bridge for call {call.id}")
         
+        # ⚠️ IMPORTANT: For PBX extensions with webhook forwarding, audio flows through SIP, not HTTP
+        # The webhook only handles call control. For audio to work, you need:
+        # 1. SIP client registered to the extension
+        # 2. RTP audio streaming through SIP
+        # 3. Audio bridge between SIP and Gemini API
+        # 
+        # Currently, the phone_audio_bridge expects HTTP audio endpoints, which don't work with
+        # PBX extension webhook forwarding. Audio must flow through SIP connection.
+        logger.warning(
+            "⚠️ AUDIO WARNING: PBX extensions with webhook forwarding require SIP connection for audio. "
+            "The call will be answered but no audio will be transmitted until SIP client is implemented. "
+            "See docs/ZADARMA_INCOMING_CALL_SCENARIO_SETUP.md for details."
+        )
+    
     except Exception as e:
         logger.error(f"Failed to start voice session for phone call {call.id}: {e}", exc_info=True)
         # Continue anyway - the call record is created
@@ -799,6 +838,13 @@ async def handle_call_start(
             await notification_service.send_call_notification(db, call, "incoming")
     except Exception as e:
         logger.error(f"Failed to send notification: {e}")
+    
+    logger.info("=" * 80)
+    logger.info(f"✅ CALL START HANDLING COMPLETE")
+    logger.info(f"Call ID: {call.id}")
+    logger.info(f"Session ID: {call.session_id}")
+    logger.info(f"Agent: {agent.id} ({agent.name})")
+    logger.info("=" * 80)
     
     # Return response to Zadarma
     # For PBX extension webhooks, you can return call flow control responses.
@@ -825,7 +871,7 @@ async def handle_call_start(
     base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
     api_prefix = settings.API_V1_STR
     
-    return {
+    response = {
         "status": "ok",
         "call_id": call.id,
         "message": "Call initiated successfully, audio bridge ready",
@@ -844,6 +890,9 @@ async def handle_call_start(
             "greeting": agent.greeting
         }
     }
+    
+    logger.info(f"📤 Returning response to Zadarma for call {call.id}: {json.dumps(response, indent=2)}")
+    return response
 
 
 async def handle_call_answer(

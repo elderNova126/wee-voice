@@ -232,6 +232,13 @@ class ZadarmaService:
             agent.id,
             phone_record.phone_number,
         )
+        logger.warning(
+            "⚠️ IMPORTANT: After creating PBX extension %s, you must configure the incoming call scenario in Zadarma Dashboard: "
+            "My PBX → Incoming Calls and IVR → 'Without pressing' scenario → Add extension %s. "
+            "Without this, calls will get a busy tone. See docs/ZADARMA_INCOMING_CALL_SCENARIO_SETUP.md",
+            extension,
+            extension
+        )
         return extension
     
     # -------------------------------------------------------------------------

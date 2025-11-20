@@ -194,7 +194,22 @@ After setting up your environment:
 2. ✅ Set `BACKEND_URL` to your public HTTPS URL
 3. ✅ Configure webhook URLs in Zadarma Dashboard
 4. ✅ Assign a phone number to an agent in WeeVoice
-5. ✅ Test with a real phone call
+5. ✅ **Configure incoming call scenario in Zadarma Dashboard** (IMPORTANT - see below)
+6. ✅ Test with a real phone call
 
-For more details, see: `docs/ZADARMA_WEBHOOK_CONFIGURATION.md`
+### ⚠️ IMPORTANT: Configure Incoming Call Scenario
+
+**After creating a PBX extension, you MUST configure the incoming call scenario in Zadarma Dashboard:**
+
+1. Go to **My PBX** → **Incoming Calls and IVR**
+2. Click on **"Without pressing"** scenario
+3. Add your extension (e.g., 100) to the scenario
+4. Set ring time (30-60 seconds)
+5. Save changes
+
+**Without this step, calls will get a busy tone even though the extension exists.**
+
+For detailed instructions, see: **[ZADARMA_INCOMING_CALL_SCENARIO_SETUP.md](./ZADARMA_INCOMING_CALL_SCENARIO_SETUP.md)**
+
+For more details on webhooks, see: `docs/ZADARMA_WEBHOOK_CONFIGURATION.md`
 
