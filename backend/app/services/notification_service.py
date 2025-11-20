@@ -17,6 +17,68 @@ logger = logging.getLogger(__name__)
 class NotificationService:
     """Service for sending notifications"""
     
+    async def send_call_notification(
+        self,
+        db: Session,
+        call: Call,
+        notification_type: str = "incoming"
+    ) -> bool:
+        """Send notification when a call starts or ends"""
+        try:
+            # Get user and agent info
+            user = db.query(User).filter(User.id == call.user_id).first()
+            agent = db.query(VoiceAgent).filter(VoiceAgent.id == call.agent_id).first()
+            
+            if not user or not agent or not user.email:
+                logger.debug(f"Skipping call notification - user or agent not found, or no email for call {call.id}")
+                return False
+            
+            if notification_type == "incoming":
+                subject = f"📞 Incoming Call - {agent.name}"
+                html_content = f"""
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #4F46E5;">Incoming Call</h2>
+                    
+                    <div style="background: #F3F4F6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                        <p><strong>Agent:</strong> {agent.name}</p>
+                        <p><strong>Caller:</strong> {call.caller_name or call.caller_phone or 'Unknown'}</p>
+                        <p><strong>Time:</strong> {call.started_at.strftime('%B %d, %Y at %H:%M') if call.started_at else 'Now'}</p>
+                    </div>
+                    
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')}/calls/{call.id}" 
+                           style="background: #4F46E5; color: white; padding: 12px 24px; 
+                                  text-decoration: none; border-radius: 6px; display: inline-block;">
+                            View Call Details
+                        </a>
+                    </div>
+                </div>
+                """
+            elif notification_type == "completed":
+                # For completed calls, we'll send a summary email instead
+                # This is just a placeholder - actual summary is sent separately
+                return True
+            else:
+                logger.warning(f"Unknown notification type: {notification_type}")
+                return False
+            
+            # Send email
+            success = await send_email(
+                to_email=user.email,
+                subject=subject,
+                html_content=html_content
+            )
+            
+            if success:
+                logger.info(f"Call notification ({notification_type}) sent to {user.email} for call {call.id}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error sending call notification: {e}", exc_info=True)
+            return False
+    
     async def send_call_summary_email(
         self,
         db: Session,
