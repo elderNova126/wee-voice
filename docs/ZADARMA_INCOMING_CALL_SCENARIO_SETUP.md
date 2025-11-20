@@ -41,13 +41,30 @@ By default, calls go to the "Main Menu" → "Without pressing" scenario. If this
 
 3. **Save the changes**
 
-### Step 4: Verify Extension Status
+### Step 4: Verify Extension Status (CRITICAL)
 
 1. Go to **My PBX** → **Extensions**
-2. Verify that extension **100** shows as **online/registered** (green status)
-3. If it's offline (red), check:
-   - Your AI server is running
-   - SIP registration is correct (login = PBX number-100, password, server = sip.zadarma.com or regional equivalent)
+2. **VERIFY that extension 100 shows as ONLINE/REGISTERED (green status)**
+3. **If it's OFFLINE (red), the call will ring but NEVER be answered**
+
+**Why This Matters:**
+- The webhook (`NOTIFY_START`) only notifies your server about the call
+- **The actual call connection happens through SIP**
+- If the extension is offline, Zadarma cannot connect the call
+- You will see `NOTIFY_START` webhooks, but the call will keep ringing
+
+**To Register the Extension:**
+- You need a SIP client that registers to the extension
+- SIP Login: `{PBX_NUMBER}-{EXTENSION}` (e.g., `32480206645-100`)
+- SIP Password: Check in **My PBX** → **Extensions** → **100** → **Password**
+- SIP Server: `sip.zadarma.com` (or regional equivalent like `sip-eu.zadarma.com`)
+- Port: 5060 (UDP)
+
+**Current Status:**
+- ✅ Extension created via API
+- ✅ Webhook configured
+- ✅ Incoming call scenario configured
+- ❌ **SIP client NOT implemented** (this is why calls ring but don't answer)
 
 ### Step 5: Test
 

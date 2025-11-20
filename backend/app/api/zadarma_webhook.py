@@ -623,9 +623,15 @@ async def zadarma_webhook(
         
         # Handle different event types
         if event == "NOTIFY_START":
+            logger.info("📞 NOTIFY_START received - Incoming call initiated")
+            logger.info("ℹ️ NOTE: For PBX extensions, the call will only be answered if the extension is registered via SIP")
+            logger.info("ℹ️ If you see NOTIFY_INTERNAL next, it means the call reached the extension")
             return await handle_call_start(db, data, caller_id, called_did, zadarma_call_id)
         
         elif event == "NOTIFY_INTERNAL":
+            logger.info("📞 NOTIFY_INTERNAL received - Call reached PBX extension")
+            logger.info("✅ This means the call was successfully routed to the extension")
+            logger.info("⚠️ For audio to work, the extension MUST be registered via SIP")
             return await handle_internal_call(db, data, caller_id, called_did, zadarma_call_id)
         
         elif event == "NOTIFY_ANSWER":
@@ -743,6 +749,10 @@ async def handle_call_start(
     logger.info(f"Zadarma Call ID: {zadarma_call_id}")
     logger.info(f"Data: {data}")
     logger.info("=" * 80)
+    logger.info("⚠️ IMPORTANT: NOTIFY_START is just a notification. The call will only be answered")
+    logger.info("   if the PBX extension is registered via SIP. Check extension status in Zadarma dashboard.")
+    logger.info("   You should receive NOTIFY_INTERNAL when the call reaches the extension.")
+    logger.info("=" * 80)
     
     """
     - redirect: Redirect to extension/scenario
@@ -844,6 +854,12 @@ async def handle_call_start(
     logger.info(f"Call ID: {call.id}")
     logger.info(f"Session ID: {call.session_id}")
     logger.info(f"Agent: {agent.id} ({agent.name})")
+    logger.info("=" * 80)
+    logger.info("⚠️ DIAGNOSTIC: If call keeps ringing but doesn't answer:")
+    logger.info("   1. Check if you receive NOTIFY_INTERNAL webhook (call reached extension)")
+    logger.info("   2. Check extension status in Zadarma: My PBX → Extensions")
+    logger.info("   3. Extension MUST be ONLINE (green) for call to be answered")
+    logger.info("   4. If offline, you need SIP client registration (not yet implemented)")
     logger.info("=" * 80)
     
     # Return response to Zadarma
@@ -1077,9 +1093,18 @@ async def handle_internal_call(
     - transfer_from: (optional) Transfer initiator, extension
     - transfer_type: (optional) Transfer type
     """
-    logger.info(f"Internal PBX call received: {zadarma_call_id}")
-    logger.info(f"Internal call details - From: {caller_id}, To: {called_did}")
+    logger.info("=" * 80)
+    logger.info("📞 NOTIFY_INTERNAL - Call reached PBX extension")
+    logger.info(f"Zadarma Call ID: {zadarma_call_id}")
+    logger.info(f"Caller ID: {caller_id}")
+    logger.info(f"Called DID: {called_did}")
     logger.info(f"Extension: {data.get('internal')}, Transfer from: {data.get('transfer_from')}")
+    logger.info("=" * 80)
+    logger.info("✅ Call successfully routed to extension")
+    logger.info("⚠️ For audio to work, the extension MUST be registered via SIP")
+    logger.info("   Check: My PBX → Extensions → Your extension should show as ONLINE (green)")
+    logger.info("   If offline, you need to register a SIP client to the extension")
+    logger.info("=" * 80)
     
     # Extract extension number
     extension = data.get('internal', '')
