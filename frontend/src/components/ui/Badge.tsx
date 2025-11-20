@@ -1,13 +1,20 @@
-import { ReactNode } from 'react'
+import { ReactNode, HTMLAttributes } from 'react'
 
-interface BadgeProps {
+interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   children: ReactNode
   variant?: 'default' | 'success' | 'warning' | 'danger' | 'info' | 'purple'
   size?: 'sm' | 'md'
   dot?: boolean
 }
 
-export const Badge = ({ children, variant = 'default', size = 'md', dot = false }: BadgeProps) => {
+export const Badge = ({ 
+  children, 
+  variant = 'default', 
+  size = 'md', 
+  dot = false,
+  className = '',
+  ...props 
+}: BadgeProps) => {
   const variantClasses = {
     default: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
     success: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
@@ -32,15 +39,18 @@ export const Badge = ({ children, variant = 'default', size = 'md', dot = false 
   }
   
   return (
-    <span className={`
-      inline-flex items-center gap-1.5 
-      ${variantClasses[variant]} 
-      ${sizeClasses[size]} 
-      rounded-full font-medium
-    `}>
+    <span 
+      className={`
+        inline-flex items-center gap-1.5 
+        ${variantClasses[variant]} 
+        ${sizeClasses[size]} 
+        rounded-full font-medium
+        ${className}
+      `}
+      {...props}
+    >
       {dot && <span className={`w-1.5 h-1.5 rounded-full ${dotColors[variant]}`} />}
       {children}
     </span>
   )
 }
-

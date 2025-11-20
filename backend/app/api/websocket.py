@@ -8,15 +8,17 @@ import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.models import get_db, User, VoiceAgent, Call, CallStatus
+from app.models import get_db, User, VoiceAgent, Call, CallStatus, CallMessage
 from app.core.security import verify_api_key, decode_token
-from app.services.agent_service import FrenchVoiceAgentService
+from app.services.agent_service import FrenchVoiceAgentService, CallSummaryService
 from app.services.crm_service import CRMIntegrationService
 
 # Note: Using asyncio.gather for Python 3.10+ compatibility instead of TaskGroup (3.11+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.propagate = True
 
 
 class ConnectionManager:
@@ -50,6 +52,102 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def auto_summarize_call(call_id: int):
+    """Background task to automatically summarize a call"""
+    from app.models.database import SessionLocal
+    
+    db = SessionLocal()
+    try:
+        call = db.query(Call).filter(Call.id == call_id).first()
+        if not call:
+            logger.error(f"Call {call_id} not found for summarization")
+            return
+        
+        # Build transcript from messages if transcript doesn't exist
+        if not call.transcript:
+            messages = db.query(CallMessage).filter(
+                CallMessage.call_id == call_id
+            ).order_by(CallMessage.timestamp).all()
+            
+            if messages:
+                # Build transcript from messages
+                transcript_lines = []
+                for msg in messages:
+                    transcript_lines.append(f"{msg.role.upper()}: {msg.content}")
+                call.transcript = "\n\n".join(transcript_lines)
+                logger.info(f"Built transcript from {len(messages)} messages for call {call_id}")
+            else:
+                logger.warning(f"Call {call_id} has no transcript or messages, marking as not_summarized")
+                call.summarization_status = "not_summarized"
+                call.status = CallStatus.COMPLETED
+                db.commit()
+                
+                # Broadcast update to monitoring connections
+                try:
+                    call_data = {
+                        "id": call.id,
+                        "status": call.status.value,
+                        "summarization_status": call.summarization_status
+                    }
+                    await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+                except Exception as e:
+                    logger.error(f"Error broadcasting call update: {e}")
+                return
+        
+        # Generate summary
+        try:
+            summary_service = CallSummaryService()
+            result = await summary_service.generate_summary(call)
+            
+            if result.get("error"):
+                logger.error(f"Summarization failed for call {call_id}: {result.get('error')}")
+                call.summarization_status = "not_summarized"
+            else:
+                logger.info(f"Call {call_id} summarized successfully")
+                call.summarization_status = "summarized"
+            
+            # Update status to completed
+            call.status = CallStatus.COMPLETED
+            db.commit()
+            logger.info(f"Call {call_id} summarization completed, status updated to completed")
+            
+            # Broadcast update to monitoring connections
+            try:
+                call_data = {
+                    "id": call.id,
+                    "status": call.status.value,
+                    "summarization_status": call.summarization_status,
+                    "summary": call.summary,
+                    "sentiment": call.sentiment,
+                    "action_items": call.action_items,
+                    "action_tags": call.action_tags
+                }
+                await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+            except Exception as e:
+                logger.error(f"Error broadcasting call update: {e}")
+        except Exception as e:
+            logger.error(f"Error during summarization for call {call_id}: {e}", exc_info=True)
+            call.summarization_status = "not_summarized"
+            call.status = CallStatus.COMPLETED
+            db.commit()
+            
+            # Broadcast update to monitoring connections even on error
+            try:
+                call_data = {
+                    "id": call.id,
+                    "status": call.status.value,
+                    "summarization_status": call.summarization_status
+                }
+                await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+            except Exception as e:
+                logger.error(f"Error broadcasting call update: {e}")
+    except Exception as e:
+        logger.error(f"Error in auto_summarize_call for call {call_id}: {e}", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
 @router.websocket("/voice/{agent_id}")
 async def voice_websocket(
     websocket: WebSocket,
@@ -64,10 +162,11 @@ async def voice_websocket(
     call: Optional[Call] = None
     agent_service: Optional[FrenchVoiceAgentService] = None
     
-    logger.info(f"New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
-    
+    logger.info(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
+    print(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
     try:
         # Verify authentication (API key or JWT token)
+        logger.info(f"🔐 Checking authentication...")
         if api_key:
             logger.info(f"API key provided: {api_key[:20]}...")
             user = await verify_api_key(api_key, db)
@@ -114,9 +213,12 @@ async def voice_websocket(
             return
         
         # Accept connection
+        logger.info(f"✅ Authentication successful, accepting WebSocket connection")
+        print(f"✅ Authentication successful, accepting WebSocket connection")
         await manager.connect(session_id, websocket)
         
         # Create call record (without started_at yet)
+        logger.info(f"📞 Creating call record...")
         call = Call(
             user_id=user.id if user else agent.user_id,
             agent_id=agent_id,
@@ -126,14 +228,31 @@ async def voice_websocket(
         db.add(call)
         db.commit()
         db.refresh(call)
+        logger.info(f"✅ Call record created: ID={call.id}")
+        
+        # Broadcast new call to monitoring connections
+        try:
+            call_data = {
+                "id": call.id,
+                "status": call.status.value,
+                "agent_id": call.agent_id,
+                "session_id": call.session_id,
+                "created_at": call.created_at.isoformat() if call.created_at else None
+            }
+            await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+        except Exception as e:
+            logger.error(f"Error broadcasting new call: {e}")
         
         # Initialize agent service
+        logger.info(f"🤖 Initializing agent service...")
         agent_service = FrenchVoiceAgentService(agent, call)
         manager.agent_services[session_id] = agent_service
         
         # Start agent session
+        logger.info(f"🚀 Starting Gemini session...")
         success = await agent_service.start_session()
         if not success:
+            logger.error(f"❌ Failed to start agent session")
             await websocket.send_json({
                 "type": "error",
                 "message": "Failed to start agent session"
@@ -146,14 +265,30 @@ async def voice_websocket(
         call.status = CallStatus.IN_PROGRESS
         db.commit()
         db.refresh(call)
+        logger.info(f"✅ Session started successfully, call status: IN_PROGRESS")
+        
+        # Broadcast call start to monitoring connections
+        try:
+            call_data = {
+                "id": call.id,
+                "status": call.status.value,
+                "started_at": call.started_at.isoformat() if call.started_at else None,
+                "agent_id": call.agent_id
+            }
+            await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+        except Exception as e:
+            logger.error(f"Error broadcasting call start: {e}")
         
         # Send session started message
+        logger.info(f"📤 Sending session_started message to client")
         await websocket.send_json({
             "type": "session_started",
             "session_id": session_id,
+            "call_id": call.id,
             "agent_name": agent.name,
             "language": agent.language
         })
+        logger.info(f"🎧 Starting audio processing tasks...")
         
         # Create tasks for bidirectional communication
         # Flag to signal all tasks to stop
@@ -187,9 +322,28 @@ async def voice_websocket(
                             else:
                                 call.ended_at = datetime.utcnow()
                             
-                            # Save ended_at immediately
+                            # Update status to summarizing immediately
+                            if call.status in [CallStatus.IN_PROGRESS, CallStatus.INITIATED]:
+                                call.status = CallStatus.SUMMARIZING
+                                logger.info(f"Call {call.id} status set to summarizing (end_session message)")
+                            
+                            # Save changes immediately
                             try:
                                 db.commit()
+                                db.refresh(call)
+                                
+                                # Broadcast status update immediately
+                                try:
+                                    call_data = {
+                                        "id": call.id,
+                                        "status": call.status.value,
+                                        "ended_at": call.ended_at.isoformat() if call.ended_at else None,
+                                        "summarization_status": call.summarization_status
+                                    }
+                                    await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+                                    logger.info(f"Broadcasted call status update: {call.status.value}")
+                                except Exception as e:
+                                    logger.error(f"Error broadcasting call update: {e}")
                             except Exception as e:
                                 logger.error(f"Error saving ended_at: {e}")
                             
@@ -201,6 +355,29 @@ async def voice_websocket(
             
             except WebSocketDisconnect:
                 logger.info(f"Client disconnected: {session_id}")
+                # Update call status immediately on disconnect
+                try:
+                    if call and call.status in [CallStatus.IN_PROGRESS, CallStatus.INITIATED]:
+                        call.status = CallStatus.SUMMARIZING
+                        if not call.ended_at:
+                            call.ended_at = datetime.utcnow()
+                        db.commit()
+                        db.refresh(call)
+                        
+                        # Broadcast status update immediately
+                        try:
+                            call_data = {
+                                "id": call.id,
+                                "status": call.status.value,
+                                "ended_at": call.ended_at.isoformat() if call.ended_at else None,
+                                "summarization_status": call.summarization_status
+                            }
+                            await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+                            logger.info(f"Broadcasted call status update on disconnect: {call.status.value}")
+                        except Exception as e:
+                            logger.error(f"Error broadcasting call update on disconnect: {e}")
+                except Exception as e:
+                    logger.error(f"Error updating call status on disconnect: {e}")
                 stop_flag.set()
             except Exception as e:
                 logger.error(f"Error receiving from client: {e}", exc_info=True)
@@ -211,10 +388,23 @@ async def voice_websocket(
             try:
                 async for audio_data in agent_service.receive_audio():
                     if stop_flag.is_set():
+                        logger.info(f"Stop flag set in send_audio_to_client, breaking loop")
                         break
-                    await manager.send_audio(session_id, audio_data)
+                    try:
+                        await manager.send_audio(session_id, audio_data)
+                    except Exception as send_error:
+                        logger.error(f"Error sending audio to client: {send_error}")
+                        if stop_flag.is_set():
+                            break
+                        # Continue even on error
+            except asyncio.CancelledError:
+                logger.info("send_audio_to_client cancelled")
+                raise
             except Exception as e:
                 logger.error(f"Error sending to client: {e}", exc_info=True)
+                # Set stop flag on error so other tasks can exit
+                if not stop_flag.is_set():
+                    stop_flag.set()
         
         async def send_realtime_input():
             """Send queued audio to agent"""
@@ -242,15 +432,99 @@ async def voice_websocket(
                 logger.error(f"Error in realtime input: {e}", exc_info=True)
         
         # Run all tasks concurrently (compatible with Python 3.10+)
+        tasks = []
         try:
-            await asyncio.gather(
-                receive_audio_from_client(),
-                send_audio_to_client(),
-                send_realtime_input(),
-                return_exceptions=True
+            logger.info(f"Starting concurrent tasks for session {session_id}")
+            # Create tasks
+            tasks = [
+                asyncio.create_task(receive_audio_from_client(), name="receive_audio"),
+                asyncio.create_task(send_audio_to_client(), name="send_audio"),
+                asyncio.create_task(send_realtime_input(), name="realtime_input")
+            ]
+            
+            logger.info(f"All tasks created for session {session_id}, waiting for completion...")
+            
+            # Wait for any task to complete or raise exception
+            # Use FIRST_COMPLETED so we can handle stop_flag and cancel others
+            done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=None
             )
+            
+            logger.info(f"First task completed for session {session_id}, done: {len(done)}, pending: {len(pending)}")
+            
+            # When any task completes, check if stop_flag is set
+            # If so, cancel all remaining tasks
+            if stop_flag.is_set():
+                logger.info(f"Stop flag set, cancelling all pending tasks for session {session_id}")
+                for task in pending:
+                    task.cancel()
+                # Wait for cancelled tasks to finish
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+            
+            # Check for exceptions in completed tasks
+            for task in done:
+                if task.exception():
+                    logger.error(f"Task {task.get_name()} raised exception: {task.exception()}")
+                    # If a task failed and stop_flag isn't set, set it to stop other tasks
+                    if not stop_flag.is_set():
+                        logger.info(f"Task {task.get_name()} failed, setting stop flag")
+                        stop_flag.set()
+                        for t in pending:
+                            t.cancel()
+                        if pending:
+                            await asyncio.gather(*pending, return_exceptions=True)
+            
+            # Always ensure all tasks are done before proceeding
+            # If stop_flag is set, cancel any remaining tasks
+            if stop_flag.is_set():
+                logger.info(f"Stop flag is set, ensuring all tasks complete for session {session_id}")
+                remaining = [t for t in tasks if not t.done()]
+                if remaining:
+                    logger.info(f"Cancelling {len(remaining)} remaining tasks")
+                    # Cancel remaining tasks
+                    for t in remaining:
+                        t.cancel()
+                    # Wait for them to finish (with timeout)
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(*remaining, return_exceptions=True),
+                            timeout=3.0
+                        )
+                        logger.info(f"All remaining tasks completed for session {session_id}")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Some tasks didn't complete within timeout for session {session_id}")
+            else:
+                # If stop_flag is not set but a task completed, wait for others
+                remaining = [t for t in tasks if not t.done()]
+                if remaining:
+                    logger.info(f"Waiting for {len(remaining)} remaining tasks to complete for session {session_id}")
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(*remaining, return_exceptions=True),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Remaining tasks didn't complete, setting stop flag")
+                        stop_flag.set()
+                        for t in remaining:
+                            if not t.done():
+                                t.cancel()
+                        await asyncio.gather(*remaining, return_exceptions=True)
+            
+            logger.info(f"All tasks finished for session {session_id}, proceeding to finally block")
+                        
         except Exception as e:
-            logger.error(f"Error in concurrent tasks: {e}")
+            logger.error(f"Error in concurrent tasks: {e}", exc_info=True)
+            # Ensure stop_flag is set and cancel all tasks
+            stop_flag.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
     
     except asyncio.CancelledError:
         logger.info(f"Tasks cancelled for session: {session_id}")
@@ -266,6 +540,7 @@ async def voice_websocket(
             pass
     
     finally:
+        print("================================================================")
         # Cleanup - ensure call end is recorded even if there are errors
         if agent_service:
             try:
@@ -290,9 +565,51 @@ async def voice_websocket(
                     if not fresh_call.ended_at:
                         fresh_call.ended_at = datetime.utcnow()
                     
+                    # Ensure transcript is complete from messages if not already set
+                    if not fresh_call.transcript:
+                        messages = cleanup_db.query(CallMessage).filter(
+                            CallMessage.call_id == fresh_call.id
+                        ).order_by(CallMessage.timestamp).all()
+                        
+                        if messages:
+                            transcript_lines = []
+                            for msg in messages:
+                                transcript_lines.append(f"{msg.role.upper()}: {msg.content}")
+                            fresh_call.transcript = "\n\n".join(transcript_lines)
+                            logger.info(f"Built transcript from {len(messages)} messages for call {fresh_call.id}")
+                    
+                    # Log transcript status
+                    if fresh_call.transcript:
+                        logger.info(f"Call {fresh_call.id} transcript saved: {len(fresh_call.transcript)} characters")
+                    else:
+                        logger.warning(f"Call {fresh_call.id} has no transcript")
+                    
                     # Calculate duration
                     if not fresh_call.calculate_duration_and_cost():
                         logger.warning(f"Could not calculate duration for call {fresh_call.id}")
+                    
+                    # Set status to summarizing immediately when call ends
+                    if fresh_call.status in [CallStatus.IN_PROGRESS, CallStatus.INITIATED]:
+                        fresh_call.status = CallStatus.SUMMARIZING
+                        logger.info(f"Call {fresh_call.id} status set to summarizing")
+                    
+                    # Commit status change first
+                    cleanup_db.commit()
+                    
+                    # Broadcast status update to monitoring connections
+                    try:
+                        call_data = {
+                            "id": fresh_call.id,
+                            "status": fresh_call.status.value,
+                            "summarization_status": fresh_call.summarization_status
+                        }
+                        await call_monitor_manager.broadcast_call_update(fresh_call.user_id, call_data)
+                    except Exception as e:
+                        logger.error(f"Error broadcasting call update: {e}")
+                    
+                    # Start background summarization task
+                    asyncio.create_task(auto_summarize_call(fresh_call.id))
+                    logger.info(f"Started background summarization task for call {fresh_call.id}")
                     
                     # Update user usage
                     if user and fresh_call.duration_minutes > 0:
@@ -329,6 +646,99 @@ async def voice_websocket(
         try:
             await websocket.close()
         except Exception:
+            pass
+
+
+class CallMonitorManager:
+    """Manage WebSocket connections for call status monitoring"""
+    
+    def __init__(self):
+        self.monitor_connections: dict[int, list[WebSocket]] = {}  # user_id -> list of websockets
+    
+    async def connect(self, user_id: int, websocket: WebSocket):
+        await websocket.accept()
+        if user_id not in self.monitor_connections:
+            self.monitor_connections[user_id] = []
+        self.monitor_connections[user_id].append(websocket)
+        logger.info(f"Call monitor connected for user {user_id}")
+    
+    def disconnect(self, user_id: int, websocket: WebSocket):
+        if user_id in self.monitor_connections:
+            try:
+                self.monitor_connections[user_id].remove(websocket)
+                if not self.monitor_connections[user_id]:
+                    del self.monitor_connections[user_id]
+            except ValueError:
+                pass
+        logger.info(f"Call monitor disconnected for user {user_id}")
+    
+    async def broadcast_call_update(self, user_id: int, call_data: dict):
+        """Broadcast call status update to all monitoring connections for a user"""
+        if user_id in self.monitor_connections:
+            disconnected = []
+            for ws in self.monitor_connections[user_id]:
+                try:
+                    await ws.send_json({
+                        "type": "call_update",
+                        "call": call_data
+                    })
+                except Exception as e:
+                    logger.error(f"Error broadcasting to monitor: {e}")
+                    disconnected.append(ws)
+            
+            # Remove disconnected websockets
+            for ws in disconnected:
+                self.disconnect(user_id, ws)
+
+
+call_monitor_manager = CallMonitorManager()
+
+
+@router.websocket("/calls/monitor")
+async def monitor_calls(
+    websocket: WebSocket,
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """WebSocket endpoint for real-time call status monitoring"""
+    try:
+        # Authenticate user
+        if not token:
+            await websocket.close(code=4001, reason="Token required")
+            return
+        
+        payload = decode_token(token)
+        if not payload:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+        
+        user_id = int(payload.get("sub"))
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            await websocket.close(code=4001, reason="User not found")
+            return
+        
+        # Connect to monitor
+        await call_monitor_manager.connect(user_id, websocket)
+        
+        try:
+            # Keep connection alive and handle incoming messages
+            while True:
+                try:
+                    # Wait for any message (ping/pong or close)
+                    message = await websocket.receive_text()
+                    # Echo back or handle ping
+                    if message == "ping":
+                        await websocket.send_text("pong")
+                except Exception:
+                    break
+        finally:
+            call_monitor_manager.disconnect(user_id, websocket)
+    except Exception as e:
+        logger.error(f"Error in call monitor: {e}", exc_info=True)
+        try:
+            await websocket.close()
+        except:
             pass
 
 

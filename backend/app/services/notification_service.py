@@ -1,0 +1,322 @@
+"""
+Notification Service
+Handles email notifications for call summaries, callbacks, and other events
+"""
+import logging
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+from sqlalchemy.orm import Session
+
+from app.services.email_service import send_email
+from app.models import Call, CallbackRequest, User, VoiceAgent
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class NotificationService:
+    """Service for sending notifications"""
+    
+    async def send_call_notification(
+        self,
+        db: Session,
+        call: Call,
+        notification_type: str = "incoming"
+    ) -> bool:
+        """Send notification when a call starts or ends"""
+        try:
+            # Get user and agent info
+            user = db.query(User).filter(User.id == call.user_id).first()
+            agent = db.query(VoiceAgent).filter(VoiceAgent.id == call.agent_id).first()
+            
+            if not user or not agent or not user.email:
+                logger.debug(f"Skipping call notification - user or agent not found, or no email for call {call.id}")
+                return False
+            
+            if notification_type == "incoming":
+                subject = f"📞 Incoming Call - {agent.name}"
+                html_content = f"""
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #4F46E5;">Incoming Call</h2>
+                    
+                    <div style="background: #F3F4F6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                        <p><strong>Agent:</strong> {agent.name}</p>
+                        <p><strong>Caller:</strong> {call.caller_name or call.caller_phone or 'Unknown'}</p>
+                        <p><strong>Time:</strong> {call.started_at.strftime('%B %d, %Y at %H:%M') if call.started_at else 'Now'}</p>
+                    </div>
+                    
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')}/calls/{call.id}" 
+                           style="background: #4F46E5; color: white; padding: 12px 24px; 
+                                  text-decoration: none; border-radius: 6px; display: inline-block;">
+                            View Call Details
+                        </a>
+                    </div>
+                </div>
+                """
+            elif notification_type == "completed":
+                # For completed calls, we'll send a summary email instead
+                # This is just a placeholder - actual summary is sent separately
+                return True
+            else:
+                logger.warning(f"Unknown notification type: {notification_type}")
+                return False
+            
+            # Send email
+            success = await send_email(
+                to_email=user.email,
+                subject=subject,
+                html_content=html_content
+            )
+            
+            if success:
+                logger.info(f"Call notification ({notification_type}) sent to {user.email} for call {call.id}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error sending call notification: {e}", exc_info=True)
+            return False
+    
+    async def send_call_summary_email(
+        self,
+        db: Session,
+        call: Call,
+        summary_data: Dict[str, Any]
+    ) -> bool:
+        """Send call summary email to user"""
+        try:
+            # Get user and agent info
+            user = db.query(User).filter(User.id == call.user_id).first()
+            agent = db.query(VoiceAgent).filter(VoiceAgent.id == call.agent_id).first()
+            
+            if not user or not agent:
+                logger.error(f"User or agent not found for call {call.id}")
+                return False
+            
+            # Format duration
+            duration_str = self._format_duration(call.duration_seconds)
+            
+            # Prepare email content
+            subject = f"Call Summary - {agent.name}"
+            
+            # Build summary HTML
+            summary_html = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #4F46E5;">Call Summary</h2>
+                
+                <div style="background: #F3F4F6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <p><strong>Agent:</strong> {agent.name}</p>
+                    <p><strong>Date:</strong> {call.started_at.strftime('%B %d, %Y at %H:%M') if call.started_at else 'N/A'}</p>
+                    <p><strong>Duration:</strong> {duration_str}</p>
+                    <p><strong>Caller:</strong> {call.caller_name or call.caller_phone or 'Unknown'}</p>
+                </div>
+                
+                <h3 style="color: #374151;">Summary</h3>
+                <p style="line-height: 1.6;">{summary_data.get('summary', 'No summary available')}</p>
+                
+                <h3 style="color: #374151;">Key Points</h3>
+                <ul style="line-height: 1.8;">
+            """
+            
+            for point in summary_data.get('key_points', []):
+                summary_html += f"<li>{point}</li>"
+            
+            summary_html += """
+                </ul>
+            """
+            
+            # Add sentiment if available
+            sentiment = summary_data.get('sentiment', 'neutral')
+            sentiment_emoji = {
+                'positive': '😊',
+                'neutral': '😐',
+                'negative': '😞'
+            }.get(sentiment.lower(), '😐')
+            
+            summary_html += f"""
+                <div style="background: #F3F4F6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <p><strong>Sentiment:</strong> {sentiment_emoji} {sentiment.capitalize()}</p>
+                </div>
+            """
+            
+            # Add action items if any
+            action_items = summary_data.get('action_items', [])
+            if action_items:
+                summary_html += """
+                    <h3 style="color: #374151;">Action Items</h3>
+                    <ul style="line-height: 1.8;">
+                """
+                for item in action_items:
+                    summary_html += f"<li>{item}</li>"
+                summary_html += "</ul>"
+            
+            # Add callback notice if requested
+            if call.callback_requested:
+                summary_html += f"""
+                    <div style="background: #FEF3C7; border-left: 4px solid #F59E0B; padding: 15px; margin: 20px 0;">
+                        <p style="margin: 0;"><strong>⚠️ Callback Required</strong></p>
+                        <p style="margin: 5px 0 0 0;">{call.callback_reason or 'The caller requested a callback from a human representative.'}</p>
+                    </div>
+                """
+            
+            # Add link to view full transcript
+            dashboard_url = f"{getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')}/calls/{call.id}"
+            summary_html += f"""
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="{dashboard_url}" 
+                       style="background: #4F46E5; color: white; padding: 12px 24px; 
+                              text-decoration: none; border-radius: 6px; display: inline-block;">
+                        View Full Call Details
+                    </a>
+                </div>
+                
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #E5E7EB; 
+                            color: #6B7280; font-size: 12px; text-align: center;">
+                    <p>This is an automated summary generated by {agent.name}</p>
+                </div>
+            </div>
+            """
+            
+            # Send email
+            success = await send_email(
+                to_email=user.email,
+                subject=subject,
+                html_content=summary_html
+            )
+            
+            if success:
+                # Update call record
+                call.summary_email_sent = True
+                call.summary_email_sent_at = datetime.utcnow()
+                db.commit()
+                
+                logger.info(f"Call summary email sent to {user.email} for call {call.id}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error sending call summary email: {e}", exc_info=True)
+            return False
+    
+    async def send_callback_notification(
+        self,
+        db: Session,
+        callback_request: CallbackRequest
+    ) -> bool:
+        """Send notification when a callback is requested"""
+        try:
+            # Get related records
+            user = db.query(User).filter(User.id == callback_request.user_id).first()
+            agent = db.query(VoiceAgent).filter(VoiceAgent.id == callback_request.agent_id).first()
+            call = db.query(Call).filter(Call.id == callback_request.call_id).first()
+            
+            if not all([user, agent, call]):
+                logger.error("Missing required records for callback notification")
+                return False
+            
+            # Prepare email content
+            subject = f"🔔 Callback Required - {agent.name}"
+            
+            priority_emoji = {
+                'urgent': '🚨',
+                'high': '⚠️',
+                'normal': '📞',
+                'low': '📝'
+            }.get(callback_request.priority, '📞')
+            
+            html_content = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #DC2626;">
+                    {priority_emoji} Callback Request
+                </h2>
+                
+                <div style="background: #FEE2E2; border-left: 4px solid #DC2626; padding: 15px; margin: 20px 0;">
+                    <p style="margin: 0;"><strong>Priority:</strong> {callback_request.priority.upper()}</p>
+                    <p style="margin: 10px 0 0 0;"><strong>Reason:</strong> {callback_request.reason}</p>
+                </div>
+                
+                <h3 style="color: #374151;">Caller Information</h3>
+                <div style="background: #F3F4F6; padding: 15px; border-radius: 8px;">
+            """
+            
+            if callback_request.caller_name:
+                html_content += f"<p><strong>Name:</strong> {callback_request.caller_name}</p>"
+            if callback_request.caller_phone:
+                html_content += f"<p><strong>Phone:</strong> {callback_request.caller_phone}</p>"
+            if callback_request.caller_email:
+                html_content += f"<p><strong>Email:</strong> {callback_request.caller_email}</p>"
+            if callback_request.preferred_callback_time:
+                html_content += f"<p><strong>Preferred Time:</strong> {callback_request.preferred_callback_time}</p>"
+            
+            html_content += f"""
+                    <p><strong>Call Time:</strong> {call.started_at.strftime('%B %d, %Y at %H:%M') if call.started_at else 'N/A'}</p>
+                </div>
+                
+                <h3 style="color: #374151;">Call Context</h3>
+                <p style="line-height: 1.6;">{call.summary or 'View full call transcript for details.'}</p>
+            """
+            
+            # Add notes if any
+            if callback_request.notes:
+                html_content += f"""
+                    <div style="background: #F3F4F6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                        <p><strong>Additional Notes:</strong></p>
+                        <p>{callback_request.notes}</p>
+                    </div>
+                """
+            
+            # Add link to dashboard
+            dashboard_url = f"{getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')}/callbacks/{callback_request.id}"
+            html_content += f"""
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="{dashboard_url}" 
+                       style="background: #DC2626; color: white; padding: 12px 24px; 
+                              text-decoration: none; border-radius: 6px; display: inline-block;">
+                        View Callback Request
+                    </a>
+                </div>
+                
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #E5E7EB; 
+                            color: #6B7280; font-size: 12px; text-align: center;">
+                    <p>Agent: {agent.name} | Request created: {callback_request.created_at.strftime('%B %d, %Y at %H:%M')}</p>
+                </div>
+            </div>
+            """
+            
+            # Send email
+            success = await send_email(
+                to_email=user.email,
+                subject=subject,
+                html_content=html_content
+            )
+            
+            if success:
+                logger.info(f"Callback notification sent to {user.email} for request {callback_request.id}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error sending callback notification: {e}", exc_info=True)
+            return False
+    
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in seconds to readable format"""
+        if not seconds:
+            return "0s"
+        
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        
+        if minutes > 0:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
+
+
+def get_notification_service() -> NotificationService:
+    """Get notification service instance"""
+    return NotificationService()
+

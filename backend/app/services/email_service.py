@@ -34,15 +34,29 @@ class EmailService:
             bool: True if email sent successfully, False otherwise
         """
         try:
+            # Validate email addresses
+            import re
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_pattern, to_email):
+                logger.error(f"Invalid recipient email address: {to_email}")
+                return False
+            
             # Use defaults from settings if not provided
             from_email = from_email or getattr(settings, 'SMTP_FROM_EMAIL', 'noreply@voiceagent.ai')
             from_name = from_name or getattr(settings, 'SMTP_FROM_NAME', 'VoiceAgent Support')
+            
+            if not re.match(email_pattern, from_email):
+                logger.error(f"Invalid sender email address: {from_email}")
+                return False
             
             # Create message
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = f"{from_name} <{from_email}>"
             msg['To'] = to_email
+            # Add Date header
+            from email.utils import formatdate
+            msg['Date'] = formatdate(localtime=True)
             
             # Add text part
             text_part = MIMEText(body_text, 'plain')
@@ -55,11 +69,12 @@ class EmailService:
             
             # Check if SMTP is configured
             smtp_host = getattr(settings, 'SMTP_HOST', None)
-            if not smtp_host:
-                logger.warning("SMTP not configured. Email would be sent to: %s", to_email)
-                logger.info("Subject: %s", subject)
-                logger.info("Body: %s", body_text)
-                return True  # Return True for development
+            if not smtp_host or smtp_host.strip() == '':
+                error_msg = "SMTP is not configured. Please set SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD environment variables."
+                logger.error(error_msg)
+                logger.error("Email not sent to: %s", to_email)
+                logger.error("Subject: %s", subject)
+                return False
             
             # Send email
             smtp_port = getattr(settings, 'SMTP_PORT', 587)
@@ -67,15 +82,62 @@ class EmailService:
             smtp_password = getattr(settings, 'SMTP_PASSWORD', None)
             use_tls = getattr(settings, 'SMTP_USE_TLS', True)
             
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                if use_tls:
-                    server.starttls()
-                if smtp_user and smtp_password:
-                    server.login(smtp_user, smtp_password)
-                server.send_message(msg)
+            # Check if credentials are provided
+            if not smtp_user or not smtp_password:
+                error_msg = "SMTP credentials not configured. Please set SMTP_USER and SMTP_PASSWORD environment variables."
+                logger.error(error_msg)
+                logger.error("Email not sent to: %s", to_email)
+                return False
             
-            logger.info("Email sent successfully to %s", to_email)
-            return True
+            try:
+                logger.info(f"Attempting to send email via SMTP: {smtp_host}:{smtp_port}")
+                logger.info(f"From: {from_email}, To: {to_email}, Subject: {subject}")
+                logger.info(f"SMTP User: {smtp_user}, Use TLS: {use_tls}")
+                
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                    # Enable debug output to see SMTP conversation (set to 1 for verbose, 0 for none)
+                    debug_level = getattr(settings, 'SMTP_DEBUG_LEVEL', 0)
+                    server.set_debuglevel(debug_level)
+                    if debug_level > 0:
+                        logger.info(f"SMTP debug level set to {debug_level}")
+                    logger.debug(f"Connected to SMTP server {smtp_host}:{smtp_port}")
+                    
+                    if use_tls:
+                        logger.debug("Starting TLS...")
+                        server.starttls()
+                        logger.debug("TLS started successfully")
+                    
+                    logger.debug(f"Logging in as {smtp_user}...")
+                    server.login(smtp_user, smtp_password)
+                    logger.debug("SMTP login successful")
+                    
+                    logger.debug(f"Sending email message to {to_email}...")
+                    # send_message returns a dict of failed recipients, check it
+                    failed_recipients = server.send_message(msg)
+                    
+                    if failed_recipients:
+                        logger.error(f"Email sending failed for recipients: {failed_recipients}")
+                        logger.error(f"Failed to send email to: {to_email}")
+                        return False
+                    
+                    logger.info(f"Email sent successfully to {to_email}")
+                    logger.info(f"SMTP server accepted the message for delivery")
+                    return True
+            except smtplib.SMTPAuthenticationError as e:
+                error_msg = f"SMTP authentication failed: {str(e)}"
+                logger.error(error_msg)
+                logger.error("Email not sent to: %s", to_email)
+                return False
+            except smtplib.SMTPException as e:
+                error_msg = f"SMTP error occurred: {str(e)}"
+                logger.error(error_msg)
+                logger.error("Email not sent to: %s", to_email)
+                return False
+            except Exception as e:
+                error_msg = f"Unexpected error sending email: {str(e)}"
+                logger.error(error_msg)
+                logger.error("Email not sent to: %s", to_email)
+                return False
             
         except Exception as e:
             logger.error(f"Failed to send email to {to_email}: {str(e)}")
@@ -230,3 +292,35 @@ VoiceAgent Support System
             body_html=body_html
         )
 
+
+# Convenience function for easy importing
+async def send_email(
+    to_email: str,
+    subject: str,
+    html_content: str,
+    text_content: Optional[str] = None
+) -> bool:
+    """
+    Async wrapper for sending emails
+    
+    Args:
+        to_email: Recipient email address
+        subject: Email subject
+        html_content: HTML email body
+        text_content: Plain text email body (optional, will be auto-generated if not provided)
+        
+    Returns:
+        bool: True if email sent successfully, False otherwise
+    """
+    # If no text content provided, create a simple text version
+    if not text_content:
+        # Strip HTML tags for basic text version
+        import re
+        text_content = re.sub('<[^<]+?>', '', html_content)
+    
+    return EmailService.send_email(
+        to_email=to_email,
+        subject=subject,
+        body_text=text_content,
+        body_html=html_content
+    )

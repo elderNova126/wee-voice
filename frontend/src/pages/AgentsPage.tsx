@@ -6,11 +6,15 @@ import {
   PencilIcon,
   TrashIcon,
   PlayIcon,
+  CodeBracketIcon,
+  UserGroupIcon,
+  UserIcon,
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, VoiceWebSocket } from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface Agent {
   id: number
@@ -20,12 +24,19 @@ interface Agent {
   is_active: boolean
   is_public: boolean
   created_at: string
+  is_owner?: boolean
+  role?: string
+  permissions?: string[]
 }
 
+type FilterType = 'all' | 'my' | 'team'
+
 export default function AgentsPage() {
+  const t = useTranslation()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [testingAgent, setTestingAgent] = useState<Agent | null>(null)
+  const [filter, setFilter] = useState<FilterType>('all')
 
   useEffect(() => {
     loadAgents()
@@ -37,21 +48,21 @@ export default function AgentsPage() {
       setAgents(response.data)
     } catch (error) {
       console.error('Failed to load agents:', error)
-      toast.error('Failed to load agents')
+      toast.error(t.agentsPage.loadError)
     } finally {
       setLoading(false)
     }
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this agent?')) return
+    if (!confirm(t.agentsPage.deleteConfirm)) return
     try {
       await agentsAPI.delete(id)
-      toast.success('Agent deleted successfully')
+      toast.success(t.agentsPage.deleteSuccess)
       loadAgents()
     } catch (error) {
       console.error('Failed to delete agent:', error)
-      toast.error('Failed to delete agent')
+      toast.error(t.agentsPage.deleteError)
     }
   }
 
@@ -59,13 +70,23 @@ export default function AgentsPage() {
     setTestingAgent(agent)
   }
 
+  // Filter agents based on selected filter
+  const filteredAgents = agents.filter((agent) => {
+    if (filter === 'my') return agent.is_owner
+    if (filter === 'team') return agent.role === 'collaborator'
+    return true // 'all'
+  })
+
+  const myAgents = agents.filter((a) => a.is_owner)
+  const teamAgents = agents.filter((a) => a.role === 'collaborator')
+
   return (
     <DashboardLayout>
       <div className="mb-8 flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Voice Agents</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.agentsPage.title}</h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Manage, start, and improve your AI voice agents
+            {t.agentsPage.subtitle}
           </p>
         </div>
         <Link
@@ -73,9 +94,49 @@ export default function AgentsPage() {
           className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition"
         >
           <PlusIcon className="h-5 w-5 mr-2" />
-          New Agent
+          {t.agentsPage.newAgent}
         </Link>
       </div>
+
+      {/* Filter Tabs */}
+      {agents.length > 0 && (
+        <div className="mb-6 flex gap-2 border-b border-gray-200 dark:border-gray-700">
+          <button
+            onClick={() => setFilter('all')}
+            className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 ${
+              filter === 'all'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+            }`}
+          >
+            All ({agents.length})
+          </button>
+          <button
+            onClick={() => setFilter('my')}
+            className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 flex items-center gap-2 ${
+              filter === 'my'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+            }`}
+          >
+            <UserIcon className="h-4 w-4" />
+            My Agents ({myAgents.length})
+          </button>
+          {teamAgents.length > 0 && (
+            <button
+              onClick={() => setFilter('team')}
+              className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 flex items-center gap-2 ${
+                filter === 'team'
+                  ? 'border-purple-600 text-purple-600 dark:text-purple-400'
+                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
+            >
+              <UserGroupIcon className="h-4 w-4" />
+              Team Agents ({teamAgents.length})
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Loading Skeleton */}
       {loading ? (
@@ -89,34 +150,56 @@ export default function AgentsPage() {
             </div>
           ))}
         </div>
-      ) : agents.length === 0 ? (
+      ) : filteredAgents.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 px-6 text-center bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm">
           <div className="bg-blue-100 dark:bg-blue-900 p-4 rounded-full mb-4">
             <MicrophoneIcon className="h-10 w-10 text-blue-600 dark:text-blue-300" />
           </div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            No Agents Yet
+            {filter === 'team' ? 'No Team Agents' : filter === 'my' ? 'No Agents Yet' : t.agentsPage.noAgentsYet}
           </h3>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-w-sm">
-            You don’t have any voice agents yet. Start by creating your first one below.
+            {filter === 'team' 
+              ? 'You are not a collaborator on any agents yet.' 
+              : filter === 'my'
+              ? 'Create your first agent to get started.'
+              : t.agentsPage.noAgentsDescription}
           </p>
-          <Link
-            to="/dashboard/agents/new"
-            className="mt-6 inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition"
-          >
-            <PlusIcon className="h-5 w-5 mr-2" />
-            Create Agent
-          </Link>
+          {filter !== 'team' && (
+            <Link
+              to="/dashboard/agents/new"
+              className="mt-6 inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition"
+            >
+              <PlusIcon className="h-5 w-5 mr-2" />
+              {t.agentsPage.createAgent}
+            </Link>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {agents.map((agent) => (
+          {filteredAgents.map((agent) => (
             <div
               key={agent.id}
-              className="relative bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm hover:shadow-lg transition-all"
+              className={`relative bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm hover:shadow-lg transition-all ${
+                agent.role === 'collaborator'
+                  ? 'border-2 border-purple-200 dark:border-purple-800'
+                  : 'border border-gray-200 dark:border-gray-700'
+              }`}
             >
-              {/* Status Badge */}
-              <div className="absolute top-4 right-4">
+              {/* Status and Role Badges */}
+              <div className="absolute top-4 right-4 flex gap-2 flex-wrap justify-end max-w-[50%]">
+                {agent.role === 'collaborator' && (
+                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 flex items-center gap-1">
+                    <UserGroupIcon className="h-3 w-3" />
+                    {t.common.status === 'Statut' ? 'Équipe' : 'Team'}
+                  </span>
+                )}
+                {agent.is_owner && (
+                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 flex items-center gap-1">
+                    <UserIcon className="h-3 w-3" />
+                    Owner
+                  </span>
+                )}
                 <span
                   className={`px-2.5 py-1 text-xs font-medium rounded-full ${
                     agent.is_active
@@ -124,7 +207,7 @@ export default function AgentsPage() {
                       : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
                   }`}
                 >
-                  {agent.is_active ? 'Active' : 'Inactive'}
+                  {agent.is_active ? t.agentsPage.active : t.agentsPage.inactive}
                 </span>
               </div>
 
@@ -138,13 +221,27 @@ export default function AgentsPage() {
                   </h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}
-                    {agent.is_public ? 'Public' : 'Private'}
+                    {agent.is_public ? t.agentsPage.public : t.agentsPage.private}
                   </p>
                 </div>
               </div>
 
+              {/* Permissions for team agents */}
+              {agent.role === 'collaborator' && agent.permissions && agent.permissions.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {agent.permissions.map((perm) => (
+                    <span
+                      key={perm}
+                      className="px-2 py-0.5 text-xs font-medium rounded bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400"
+                    >
+                      {perm}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 line-clamp-2">
-                {agent.description || 'No description provided.'}
+                {agent.description || t.agentsPage.noDescription}
               </p>
 
               <div className="flex gap-2">
@@ -153,20 +250,35 @@ export default function AgentsPage() {
                   className="flex-1 inline-flex justify-center items-center gap-2 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-950 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 font-medium text-sm py-2 transition"
                 >
                   <PlayIcon className="h-4 w-4" />
-                  Start
+                  {t.agentsPage.test}
                 </button>
-                <Link
-                  to={`/dashboard/agents/${agent.id}/edit`}
-                  className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
-                >
-                  <PencilIcon className="h-4 w-4" />
-                </Link>
-                <button
-                  onClick={() => handleDelete(agent.id)}
-                  className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
+                {(agent.is_owner || agent.permissions?.includes('edit')) && (
+                  <Link
+                    to={`/dashboard/agents/${agent.id}/embed`}
+                    className="p-2.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition"
+                    title="Embed Widget"
+                  >
+                    <CodeBracketIcon className="h-4 w-4" />
+                  </Link>
+                )}
+                {(agent.is_owner || agent.permissions?.includes('edit')) && (
+                  <Link
+                    to={`/dashboard/agents/${agent.id}/edit`}
+                    className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
+                    title={t.agentsPage.edit}
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                  </Link>
+                )}
+                {(agent.is_owner || agent.permissions?.includes('delete')) && (
+                  <button
+                    onClick={() => handleDelete(agent.id)}
+                    className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
+                    title={t.agentsPage.delete}
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -313,8 +425,15 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
     wsRef.current?.disconnect()
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop())
     processorRef.current?.disconnect()
-    audioContextRef.current?.close()
-    audioPlayerRef.current?.close()
+    
+    // Close audio contexts only if they're not already closed
+    if (audioContextRef.current?.state !== 'closed') {
+      audioContextRef.current?.close()
+    }
+    if (audioPlayerRef.current?.state !== 'closed') {
+      audioPlayerRef.current?.close()
+    }
+    
     setIsConnected(false)
   }
 
@@ -325,14 +444,11 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div
-        className="fixed inset-0 bg-black bg-opacity-50"
-        onClick={handleClose}
-      />
+      <div className="fixed inset-0 bg-black bg-opacity-50" />
       <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full p-8 z-10">
         <div className="mb-6 text-center">
           <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Testing: {agent.name}
+            Agent: {agent.name}
           </h3>
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
             {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}

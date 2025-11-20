@@ -40,8 +40,28 @@ const initializeTheme = () => {
   }
 }
 
-// Initialize theme immediately
+// Initialize language before React renders
+const initializeLanguage = () => {
+  try {
+    const stored = localStorage.getItem('language-storage')
+    let language = 'fr' // Default to French
+    
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      language = parsed?.state?.language || 'fr'
+    }
+    
+    document.documentElement.lang = language
+    console.log('Language initialized:', language)
+  } catch (error) {
+    console.error('Failed to initialize language:', error)
+    document.documentElement.lang = 'fr' // Fallback to French
+  }
+}
+
+// Initialize theme and language immediately
 initializeTheme()
+initializeLanguage()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

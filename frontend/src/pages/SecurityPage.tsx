@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { securityAPI } from '@/lib/api'
 import DashboardLayout from '@/layouts/DashboardLayout'
+import { useTranslation } from '@/lib/translations'
+import toast from 'react-hot-toast'
 
 interface DomainAllowlist {
   id: number
@@ -38,6 +40,7 @@ interface SecurityLog {
 }
 
 const SecurityPage = () => {
+  const t = useTranslation()
   const [domains, setDomains] = useState<DomainAllowlist[]>([])
   const [ips, setIPs] = useState<IPAllowlist[]>([])
   const [logs, setLogs] = useState<SecurityLog[]>([])
@@ -78,7 +81,7 @@ const SecurityPage = () => {
 
   const handleAddDomain = async () => {
     if (!domainForm.domain) {
-      alert('Please enter a domain')
+      toast.error(t.common.status === 'Statut' ? 'Veuillez entrer un domaine' : 'Please enter a domain')
       return
     }
 
@@ -88,16 +91,16 @@ const SecurityPage = () => {
       setDomainForm({ domain: '', description: '' })
       setShowDomainModal(false)
       setSelectedKey(response.data.public_key)
-      alert('Domain added successfully! Your public key has been generated.')
+      toast.success(t.common.status === 'Statut' ? 'Domaine ajouté avec succès ! Votre clé publique a été générée.' : 'Domain added successfully! Your public key has been generated.')
     } catch (error: any) {
       console.error('Error adding domain:', error)
-      alert(error.response?.data?.detail || 'Failed to add domain')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Échec de l\'ajout du domaine' : 'Failed to add domain'))
     }
   }
 
   const handleAddIP = async () => {
     if (!ipForm.ip_address) {
-      alert('Please enter an IP address')
+      toast.error(t.common.status === 'Statut' ? 'Veuillez entrer une adresse IP' : 'Please enter an IP address')
       return
     }
 
@@ -106,33 +109,36 @@ const SecurityPage = () => {
       setIPs([response.data, ...ips])
       setIPForm({ ip_address: '', ip_range: '', description: '' })
       setShowIPModal(false)
+      toast.success(t.common.status === 'Statut' ? 'IP ajoutée avec succès' : 'IP added successfully')
     } catch (error: any) {
       console.error('Error adding IP:', error)
-      alert(error.response?.data?.detail || 'Failed to add IP')
+      toast.error(error.response?.data?.detail || (t.common.status === 'Statut' ? 'Échec de l\'ajout de l\'IP' : 'Failed to add IP'))
     }
   }
 
   const handleDeleteDomain = async (id: number) => {
-    if (!confirm('Are you sure you want to remove this domain?')) return
+    if (!confirm(t.common.status === 'Statut' ? 'Êtes-vous sûr de vouloir supprimer ce domaine ?' : 'Are you sure you want to remove this domain?')) return
 
     try {
       await securityAPI.deleteDomain(id)
       setDomains(domains.filter(d => d.id !== id))
+      toast.success(t.common.status === 'Statut' ? 'Domaine supprimé avec succès' : 'Domain deleted successfully')
     } catch (error) {
       console.error('Error deleting domain:', error)
-      alert('Failed to delete domain')
+      toast.error(t.common.status === 'Statut' ? 'Échec de la suppression du domaine' : 'Failed to delete domain')
     }
   }
 
   const handleDeleteIP = async (id: number) => {
-    if (!confirm('Are you sure you want to remove this IP?')) return
+    if (!confirm(t.common.status === 'Statut' ? 'Êtes-vous sûr de vouloir supprimer cette IP ?' : 'Are you sure you want to remove this IP?')) return
 
     try {
       await securityAPI.deleteIP(id)
       setIPs(ips.filter(ip => ip.id !== id))
+      toast.success(t.common.status === 'Statut' ? 'IP supprimée avec succès' : 'IP deleted successfully')
     } catch (error) {
       console.error('Error deleting IP:', error)
-      alert('Failed to delete IP')
+      toast.error(t.common.status === 'Statut' ? 'Échec de la suppression de l\'IP' : 'Failed to delete IP')
     }
   }
 
@@ -140,9 +146,10 @@ const SecurityPage = () => {
     try {
       const response = await securityAPI.updateDomain(id, { is_active: !is_active })
       setDomains(domains.map(d => d.id === id ? response.data : d))
+      toast.success(t.common.status === 'Statut' ? 'Domaine mis à jour' : 'Domain updated')
     } catch (error) {
       console.error('Error toggling domain:', error)
-      alert('Failed to update domain')
+      toast.error(t.common.status === 'Statut' ? 'Échec de la mise à jour du domaine' : 'Failed to update domain')
     }
   }
 
@@ -150,29 +157,30 @@ const SecurityPage = () => {
     try {
       const response = await securityAPI.updateIP(id, { is_active: !is_active })
       setIPs(ips.map(ip => ip.id === id ? response.data : ip))
+      toast.success(t.common.status === 'Statut' ? 'IP mise à jour' : 'IP updated')
     } catch (error) {
       console.error('Error toggling IP:', error)
-      alert('Failed to update IP')
+      toast.error(t.common.status === 'Statut' ? 'Échec de la mise à jour de l\'IP' : 'Failed to update IP')
     }
   }
 
   const handleRegenerateKey = async (id: number) => {
-    if (!confirm('Are you sure? This will invalidate the current key.')) return
+    if (!confirm(t.common.status === 'Statut' ? 'Êtes-vous sûr ? Cela invalidera la clé actuelle.' : 'Are you sure? This will invalidate the current key.')) return
 
     try {
       const response = await securityAPI.regenerateDomainKey(id)
       setDomains(domains.map(d => d.id === id ? response.data : d))
       setSelectedKey(response.data.public_key)
-      alert('Key regenerated successfully!')
+      toast.success(t.common.status === 'Statut' ? 'Clé régénérée avec succès !' : 'Key regenerated successfully!')
     } catch (error) {
       console.error('Error regenerating key:', error)
-      alert('Failed to regenerate key')
+      toast.error(t.common.status === 'Statut' ? 'Échec de la régénération de la clé' : 'Failed to regenerate key')
     }
   }
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
-    alert('Copied to clipboard!')
+    toast.success(t.common.status === 'Statut' ? 'Copié dans le presse-papiers !' : 'Copied to clipboard!')
   }
 
   const formatDate = (dateString: string) => {
@@ -204,8 +212,8 @@ const SecurityPage = () => {
     <DashboardLayout>
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Security Settings</h1>
-        <p className="mt-2 text-gray-600 dark:text-gray-400">Manage domain allowlist, IP restrictions, and security logs</p>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.security.title}</h1>
+        <p className="mt-2 text-gray-600 dark:text-gray-400">{t.security.subtitle}</p>
       </div>
 
       {/* Tabs */}
@@ -219,7 +227,7 @@ const SecurityPage = () => {
                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
-            Domain Allowlist
+            {t.common.status === 'Statut' ? 'Liste blanche des domaines' : 'Domain Allowlist'}
           </button>
           <button
             onClick={() => setActiveTab('ips')}
@@ -229,7 +237,7 @@ const SecurityPage = () => {
                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
-            IP Allowlist
+            {t.common.status === 'Statut' ? 'Liste blanche des IP' : 'IP Allowlist'}
           </button>
           <button
             onClick={() => setActiveTab('logs')}
@@ -239,7 +247,7 @@ const SecurityPage = () => {
                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
-            Security Logs
+            {t.security.loginHistory}
           </button>
         </nav>
       </div>
@@ -248,20 +256,19 @@ const SecurityPage = () => {
       {activeTab === 'domains' && (
         <div className="space-y-6">
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
-            <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">About Domain Allowlist</h3>
+            <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">{t.common.status === 'Statut' ? 'À propos de la liste blanche des domaines' : 'About Domain Allowlist'}</h3>
             <p className="text-sm text-blue-800 dark:text-blue-200">
-              Add domains to generate public keys that can be used to access your voice agents from specific domains.
-              This is useful for embedding voice agents on your website with API key restrictions.
+              {t.common.status === 'Statut' ? 'Ajoutez des domaines pour générer des clés publiques qui peuvent être utilisées pour accéder à vos agents vocaux depuis des domaines spécifiques. Ceci est utile pour intégrer des agents vocaux sur votre site web avec des restrictions de clé API.' : 'Add domains to generate public keys that can be used to access your voice agents from specific domains. This is useful for embedding voice agents on your website with API key restrictions.'}
             </p>
           </div>
 
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Allowed Domains</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.common.status === 'Statut' ? 'Domaines autorisés' : 'Allowed Domains'}</h2>
             <button
               onClick={() => setShowDomainModal(true)}
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
             >
-              + Add Domain
+              + {t.common.status === 'Statut' ? 'Ajouter un domaine' : 'Add Domain'}
             </button>
           </div>
 
@@ -298,7 +305,7 @@ const SecurityPage = () => {
               </div>
             ) : domains.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-gray-500 dark:text-gray-400">No domains configured</p>
+                <p className="text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Aucun domaine configuré' : 'No domains configured'}</p>
               </div>
             ) : (
               <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -309,33 +316,33 @@ const SecurityPage = () => {
                         <div className="flex items-center gap-3 mb-2">
                           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{domain.domain}</h3>
                           <span className={`px-2 py-1 text-xs rounded ${domain.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                            {domain.is_active ? 'Active' : 'Inactive'}
+                            {domain.is_active ? (t.common.status === 'Statut' ? 'Actif' : 'Active') : (t.common.status === 'Statut' ? 'Inactif' : 'Inactive')}
                           </span>
                           {domain.verified && (
                             <span className="px-2 py-1 text-xs rounded bg-blue-100 text-blue-800">
-                              Verified
+                              {t.common.status === 'Statut' ? 'Vérifié' : 'Verified'}
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{domain.description || 'No description'}</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{domain.description || (t.common.status === 'Statut' ? 'Aucune description' : 'No description')}</p>
                         
                         <div className="bg-gray-50 dark:bg-gray-900 rounded p-3 mb-2">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Public Key:</span>
+                            <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">{t.common.status === 'Statut' ? 'Clé publique :' : 'Public Key:'}</span>
                             <button
                               onClick={() => copyToClipboard(domain.public_key)}
                               className="text-xs text-indigo-600 hover:text-indigo-700"
                             >
-                              Copy
+                              {t.common.status === 'Statut' ? 'Copier' : 'Copy'}
                             </button>
                           </div>
                           <code className="text-xs text-gray-600 dark:text-gray-300 break-all">{domain.public_key}</code>
                         </div>
                         
                         <div className="flex gap-4 text-sm text-gray-500">
-                          <span>Requests: {domain.total_requests}</span>
-                          <span>Created: {formatDate(domain.created_at)}</span>
-                          {domain.last_used_at && <span>Last used: {formatDate(domain.last_used_at)}</span>}
+                          <span>{t.common.status === 'Statut' ? 'Requêtes :' : 'Requests:'} {domain.total_requests}</span>
+                          <span>{t.common.status === 'Statut' ? 'Créé le :' : 'Created:'} {formatDate(domain.created_at)}</span>
+                          {domain.last_used_at && <span>{t.common.status === 'Statut' ? 'Dernière utilisation :' : 'Last used:'} {formatDate(domain.last_used_at)}</span>}
                         </div>
                       </div>
                       
@@ -344,19 +351,19 @@ const SecurityPage = () => {
                           onClick={() => handleToggleDomain(domain.id, domain.is_active)}
                           className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
                         >
-                          {domain.is_active ? 'Disable' : 'Enable'}
+                          {domain.is_active ? (t.common.status === 'Statut' ? 'Désactiver' : 'Disable') : (t.common.status === 'Statut' ? 'Activer' : 'Enable')}
                         </button>
                         <button
                           onClick={() => handleRegenerateKey(domain.id)}
                           className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
                         >
-                          Regenerate Key
+                          {t.common.status === 'Statut' ? 'Régénérer la clé' : 'Regenerate Key'}
                         </button>
                         <button
                           onClick={() => handleDeleteDomain(domain.id)}
                           className="px-3 py-1 text-sm text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
                         >
-                          Delete
+                          {t.common.delete}
                         </button>
                       </div>
                     </div>
@@ -372,20 +379,19 @@ const SecurityPage = () => {
       {activeTab === 'ips' && (
         <div className="space-y-6">
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
-            <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">About IP Allowlist</h3>
+            <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">{t.common.status === 'Statut' ? 'À propos de la liste blanche des IP' : 'About IP Allowlist'}</h3>
             <p className="text-sm text-blue-800 dark:text-blue-200">
-              Configure IP addresses or ranges (CIDR notation) that are allowed to access your API.
-              If no IPs are configured, all IPs are allowed. Once you add an IP, only listed IPs will have access.
+              {t.common.status === 'Statut' ? 'Configurez les adresses IP ou les plages (notation CIDR) autorisées à accéder à votre API. Si aucune IP n\'est configurée, toutes les IP sont autorisées. Une fois que vous ajoutez une IP, seules les IP listées auront accès.' : 'Configure IP addresses or ranges (CIDR notation) that are allowed to access your API. If no IPs are configured, all IPs are allowed. Once you add an IP, only listed IPs will have access.'}
             </p>
           </div>
 
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Allowed IP Addresses</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.common.status === 'Statut' ? 'Adresses IP autorisées' : 'Allowed IP Addresses'}</h2>
             <button
               onClick={() => setShowIPModal(true)}
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
             >
-              + Add IP
+              + {t.common.status === 'Statut' ? 'Ajouter une IP' : 'Add IP'}
             </button>
           </div>
 
@@ -417,7 +423,7 @@ const SecurityPage = () => {
               </div>
             ) : ips.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-gray-500 dark:text-gray-400">No IP restrictions configured (all IPs allowed)</p>
+                <p className="text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Aucune restriction IP configurée (toutes les IP sont autorisées)' : 'No IP restrictions configured (all IPs allowed)'}</p>
               </div>
             ) : (
               <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -428,20 +434,20 @@ const SecurityPage = () => {
                         <div className="flex items-center gap-3 mb-2">
                           <h3 className="text-lg font-semibold text-gray-900 dark:text-white font-mono">{ip.ip_address}</h3>
                           <span className={`px-2 py-1 text-xs rounded ${ip.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                            {ip.is_active ? 'Active' : 'Inactive'}
+                            {ip.is_active ? (t.common.status === 'Statut' ? 'Actif' : 'Active') : (t.common.status === 'Statut' ? 'Inactif' : 'Inactive')}
                           </span>
                         </div>
                         {ip.ip_range && (
                           <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                            Range: <code className="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-gray-900 dark:text-white">{ip.ip_range}</code>
+                            {t.common.status === 'Statut' ? 'Plage :' : 'Range:'} <code className="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-gray-900 dark:text-white">{ip.ip_range}</code>
                           </p>
                         )}
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{ip.description || 'No description'}</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{ip.description || (t.common.status === 'Statut' ? 'Aucune description' : 'No description')}</p>
                         
                         <div className="flex gap-4 text-sm text-gray-500">
-                          <span>Requests: {ip.total_requests}</span>
-                          <span>Created: {formatDate(ip.created_at)}</span>
-                          {ip.last_used_at && <span>Last used: {formatDate(ip.last_used_at)}</span>}
+                          <span>{t.common.status === 'Statut' ? 'Requêtes :' : 'Requests:'} {ip.total_requests}</span>
+                          <span>{t.common.status === 'Statut' ? 'Créé le :' : 'Created:'} {formatDate(ip.created_at)}</span>
+                          {ip.last_used_at && <span>{t.common.status === 'Statut' ? 'Dernière utilisation :' : 'Last used:'} {formatDate(ip.last_used_at)}</span>}
                         </div>
                       </div>
                       
@@ -450,13 +456,13 @@ const SecurityPage = () => {
                           onClick={() => handleToggleIP(ip.id, ip.is_active)}
                           className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
                         >
-                          {ip.is_active ? 'Disable' : 'Enable'}
+                          {ip.is_active ? (t.common.status === 'Statut' ? 'Désactiver' : 'Disable') : (t.common.status === 'Statut' ? 'Activer' : 'Enable')}
                         </button>
                         <button
                           onClick={() => handleDeleteIP(ip.id)}
                           className="px-3 py-1 text-sm text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
                         >
-                          Delete
+                          {t.common.delete}
                         </button>
                       </div>
                     </div>
@@ -471,7 +477,7 @@ const SecurityPage = () => {
       {/* Security Logs Tab */}
       {activeTab === 'logs' && (
         <div className="space-y-6">
-          <h2 className="text-xl font-semibold">Security Events</h2>
+          <h2 className="text-xl font-semibold">{t.common.status === 'Statut' ? 'Événements de sécurité' : 'Security Events'}</h2>
           
           <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
             {loading ? (
@@ -496,7 +502,7 @@ const SecurityPage = () => {
               </div>
             ) : logs.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-gray-500 dark:text-gray-400">No security logs</p>
+                <p className="text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Aucun journal de sécurité' : 'No security logs'}</p>
               </div>
             ) : (
               <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -514,7 +520,7 @@ const SecurityPage = () => {
                         <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
                           <span>{formatDate(log.created_at)}</span>
                           {log.ip_address && <span>IP: {log.ip_address}</span>}
-                          {log.endpoint && <span>Endpoint: {log.endpoint}</span>}
+                          {log.endpoint && <span>{t.common.status === 'Statut' ? 'Point de terminaison :' : 'Endpoint:'} {log.endpoint}</span>}
                         </div>
                       </div>
                     </div>
@@ -530,11 +536,11 @@ const SecurityPage = () => {
       {showDomainModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Add Domain to Allowlist</h3>
+            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">{t.common.status === 'Statut' ? 'Ajouter un domaine à la liste blanche' : 'Add Domain to Allowlist'}</h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Domain <span className="text-red-500">*</span>
+                  {t.common.status === 'Statut' ? 'Domaine' : 'Domain'} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -543,14 +549,14 @@ const SecurityPage = () => {
                   placeholder="example.com"
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enter without http:// or https://</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t.common.status === 'Statut' ? 'Entrez sans http:// ou https://' : 'Enter without http:// or https://'}</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t.common.status === 'Statut' ? 'Description' : 'Description'}</label>
                 <textarea
                   value={domainForm.description}
                   onChange={(e) => setDomainForm({ ...domainForm, description: e.target.value })}
-                  placeholder="Optional description"
+                  placeholder={t.common.status === 'Statut' ? 'Description optionnelle' : 'Optional description'}
                   rows={3}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
@@ -561,13 +567,13 @@ const SecurityPage = () => {
                 onClick={() => setShowDomainModal(false)}
                 className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
               >
-                Cancel
+                {t.common.cancel}
               </button>
               <button
                 onClick={handleAddDomain}
                 className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
               >
-                Add Domain
+                {t.common.status === 'Statut' ? 'Ajouter le domaine' : 'Add Domain'}
               </button>
             </div>
           </div>
@@ -578,11 +584,11 @@ const SecurityPage = () => {
       {showIPModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Add IP to Allowlist</h3>
+            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">{t.common.status === 'Statut' ? 'Ajouter une IP à la liste blanche' : 'Add IP to Allowlist'}</h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  IP Address <span className="text-red-500">*</span>
+                  {t.common.status === 'Statut' ? 'Adresse IP' : 'IP Address'} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -593,7 +599,7 @@ const SecurityPage = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Range (CIDR)</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t.common.status === 'Statut' ? 'Plage IP (CIDR)' : 'IP Range (CIDR)'}</label>
                 <input
                   type="text"
                   value={ipForm.ip_range}
@@ -601,14 +607,14 @@ const SecurityPage = () => {
                   placeholder="192.168.1.0/24"
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Optional: Allow entire IP range using CIDR notation</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{t.common.status === 'Statut' ? 'Optionnel : Autoriser toute la plage IP en utilisant la notation CIDR' : 'Optional: Allow entire IP range using CIDR notation'}</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t.common.status === 'Statut' ? 'Description' : 'Description'}</label>
                 <textarea
                   value={ipForm.description}
                   onChange={(e) => setIPForm({ ...ipForm, description: e.target.value })}
-                  placeholder="Optional description"
+                  placeholder={t.common.status === 'Statut' ? 'Description optionnelle' : 'Optional description'}
                   rows={3}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
@@ -619,13 +625,13 @@ const SecurityPage = () => {
                 onClick={() => setShowIPModal(false)}
                 className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
               >
-                Cancel
+                {t.common.cancel}
               </button>
               <button
                 onClick={handleAddIP}
                 className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
               >
-                Add IP
+                {t.common.status === 'Statut' ? 'Ajouter l\'IP' : 'Add IP'}
               </button>
             </div>
           </div>

@@ -3,9 +3,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import { authAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
 import { MicrophoneIcon } from '@heroicons/react/24/outline'
+import { useTranslation } from '@/lib/translations'
 
 export default function RegisterPage() {
   const navigate = useNavigate()
+  const t = useTranslation()
   
   const [formData, setFormData] = useState({
     full_name: '',
@@ -19,17 +21,17 @@ export default function RegisterPage() {
     e.preventDefault()
     
     if (formData.password !== formData.confirmPassword) {
-      toast.error('Les mots de passe ne correspondent pas')
+      toast.error(t.register.passwordMismatch)
       return
     }
     
     if (formData.password.length < 8) {
-      toast.error('Le mot de passe doit contenir au moins 8 caractères')
+      toast.error(t.register.passwordMinLength)
       return
     }
     
     if (formData.password.length > 72) {
-      toast.error('Le mot de passe ne peut pas dépasser 72 caractères')
+      toast.error(t.register.passwordMaxLength)
       return
     }
     
@@ -42,11 +44,11 @@ export default function RegisterPage() {
         full_name: formData.full_name,
       })
       
-      toast.success('Compte créé avec succès!')
+      toast.success(t.register.success)
       navigate('/login')
     } catch (error: any) {
       console.error('Registration error:', error)
-      toast.error(error.response?.data?.detail || 'Erreur lors de la création du compte')
+      toast.error(error.response?.data?.detail || t.register.error)
     } finally {
       setIsLoading(false)
     }
@@ -66,13 +68,13 @@ export default function RegisterPage() {
         {/* Form */}
         <div className="card">
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
-            Créer un compte
+            {t.register.title}
           </h2>
           
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Nom complet
+                {t.register.fullName}
               </label>
               <input
                 type="text"
@@ -85,7 +87,7 @@ export default function RegisterPage() {
             
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Email
+                {t.auth.email}
               </label>
               <input
                 type="email"
@@ -98,7 +100,7 @@ export default function RegisterPage() {
             
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Mot de passe
+                {t.auth.password}
               </label>
               <input
                 type="password"
@@ -109,12 +111,12 @@ export default function RegisterPage() {
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               />
-              <p className="text-xs text-gray-500 mt-1">8-72 caractères</p>
+              <p className="text-xs text-gray-500 mt-1">{t.register.passwordHint}</p>
             </div>
             
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Confirmer le mot de passe
+                {t.register.confirmPassword}
               </label>
               <input
                 type="password"
@@ -132,15 +134,15 @@ export default function RegisterPage() {
               disabled={isLoading}
               className="btn-primary w-full"
             >
-              {isLoading ? 'Création...' : 'Créer mon compte'}
+              {isLoading ? t.register.creating : t.register.createAccount}
             </button>
           </form>
           
           <div className="mt-6 text-center">
             <p className="text-gray-600 dark:text-gray-400">
-              Déjà un compte ?{' '}
+              {t.register.hasAccount}{' '}
               <Link to="/login" className="text-primary-600 hover:text-primary-700 font-medium">
-                Se connecter
+                {t.register.loginHere}
               </Link>
             </p>
           </div>

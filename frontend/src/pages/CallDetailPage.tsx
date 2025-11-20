@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { callsAPI } from '@/lib/api'
 import { format } from 'date-fns'
-import { fr } from 'date-fns/locale'
+import { fr, enUS } from 'date-fns/locale'
 import toast from 'react-hot-toast'
 import {
   ArrowLeftIcon,
@@ -12,10 +12,13 @@ import {
   DocumentTextIcon,
   SparklesIcon,
 } from '@heroicons/react/24/outline'
+import { useTranslation } from '@/lib/translations'
 
 export default function CallDetailPage() {
+  const t = useTranslation()
   const { callId } = useParams<{ callId: string }>()
   const [activeTab, setActiveTab] = useState<'overview' | 'transcript'>('overview')
+  const queryClient = useQueryClient()
   
   const { data: call, isLoading } = useQuery({
     queryKey: ['call', callId],
@@ -28,11 +31,11 @@ export default function CallDetailPage() {
   const generateSummaryMutation = useMutation({
     mutationFn: () => callsAPI.generateSummary(Number(callId)),
     onSuccess: (response) => {
-      toast.success('Résumé généré avec succès')
-      // Optionally refresh the call data
+      toast.success(t.callDetail.summaryGenerated)
+      queryClient.invalidateQueries({ queryKey: ['call', callId] })
     },
     onError: () => {
-      toast.error('Erreur lors de la génération du résumé')
+      toast.error(t.callDetail.summaryError)
     },
   })
   
@@ -47,10 +50,12 @@ export default function CallDetailPage() {
   if (!call) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-600 dark:text-gray-400">Appel non trouvé</p>
+        <p className="text-gray-600 dark:text-gray-400">{t.callDetail.callNotFound}</p>
       </div>
     )
   }
+  
+  const locale = t.common.status === 'Statut' ? fr : enUS
   
   return (
     <div>
@@ -61,27 +66,31 @@ export default function CallDetailPage() {
           className="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-primary-600 mb-4"
         >
           <ArrowLeftIcon className="w-5 h-5 mr-2" />
-          Retour aux appels
+          {t.callDetail.backToCalls}
         </Link>
         
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-              Détails de l'Appel #{call.id}
+              {t.callDetail.callDetails} #{call.id}
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
-              {format(new Date(call.started_at), 'PPpp', { locale: fr })}
+              {format(new Date(call.started_at), 'PPpp', { locale })}
             </p>
           </div>
           
-          {!call.summary && call.transcript && (
+          {call.transcript && (
             <button
               onClick={() => generateSummaryMutation.mutate()}
               disabled={generateSummaryMutation.isPending}
               className="btn-primary flex items-center"
             >
               <SparklesIcon className="w-5 h-5 mr-2" />
-              {generateSummaryMutation.isPending ? 'Génération...' : 'Générer un résumé'}
+              {generateSummaryMutation.isPending
+                ? t.callDetail.generating
+                : call.summary
+                  ? t.callDetail.regenerateSummary
+                  : t.callDetail.generateSummary}
             </button>
           )}
         </div>
@@ -98,7 +107,7 @@ export default function CallDetailPage() {
                 : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
             }`}
           >
-            Vue d'ensemble
+            {t.callDetail.overview}
           </button>
           <button
             onClick={() => setActiveTab('transcript')}
@@ -108,7 +117,7 @@ export default function CallDetailPage() {
                 : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
             }`}
           >
-            Transcription
+            {t.callDetail.transcript}
           </button>
         </nav>
       </div>
@@ -122,9 +131,9 @@ export default function CallDetailPage() {
               <div className="flex items-center space-x-3">
                 <ClockIcon className="w-8 h-8 text-blue-600" />
                 <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Durée</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{t.callDetail.duration}</p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                    {call.duration_minutes.toFixed(1)} min
+                    {call.duration_minutes.toFixed(1)} {t.common.status === 'Statut' ? 'min' : 'min'}
                   </p>
                 </div>
               </div>
@@ -134,7 +143,7 @@ export default function CallDetailPage() {
               <div className="flex items-center space-x-3">
                 <CurrencyDollarIcon className="w-8 h-8 text-green-600" />
                 <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Coût</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{t.callDetail.cost}</p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white">
                     ${call.cost.toFixed(3)}
                   </p>
@@ -146,7 +155,7 @@ export default function CallDetailPage() {
               <div className="flex items-center space-x-3">
                 <DocumentTextIcon className="w-8 h-8 text-purple-600" />
                 <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Statut</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{t.callDetail.status}</p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-white capitalize">
                     {call.status}
                   </p>
@@ -159,7 +168,7 @@ export default function CallDetailPage() {
           {call.summary && (
             <div className="card">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Résumé de l'Appel
+                {t.callDetail.callSummary}
               </h3>
               <p className="text-gray-700 dark:text-gray-300 mb-4">
                 {call.summary}
@@ -167,21 +176,52 @@ export default function CallDetailPage() {
               
               {call.sentiment && (
                 <div className="flex items-center space-x-2 mb-4">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">Sentiment:</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">{t.callDetail.sentiment}</span>
                   <span className="px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
                     {call.sentiment}
                   </span>
                 </div>
               )}
               
+              {call.action_tags && call.action_tags.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">
+                    {t.callDetail.detectedActions}
+                  </h4>
+                  <div className="flex flex-wrap gap-2">
+                    {call.action_tags.map((tag: string, index: number) => (
+                      <span
+                        key={`detail-tag-${index}`}
+                        className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
               {call.key_points && call.key_points.length > 0 && (
                 <div>
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">
-                    Points Clés:
+                    {t.callDetail.keyPoints}
                   </h4>
                   <ul className="list-disc list-inside space-y-1 text-gray-700 dark:text-gray-300">
                     {call.key_points.map((point: string, index: number) => (
                       <li key={index}>{point}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {call.action_items && call.action_items.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">
+                    {t.callDetail.actionItems}
+                  </h4>
+                  <ul className="list-disc list-inside space-y-1 text-gray-700 dark:text-gray-300">
+                    {call.action_items.map((item: string, index: number) => (
+                      <li key={`action-item-${index}`}>{item}</li>
                     ))}
                   </ul>
                 </div>
@@ -193,7 +233,7 @@ export default function CallDetailPage() {
           {call.messages && call.messages.length > 0 && (
             <div className="card">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Conversation
+                {t.callDetail.conversation}
               </h3>
               <div className="space-y-4 max-h-96 overflow-y-auto">
                 {call.messages.map((message: any, index: number) => (
@@ -206,7 +246,7 @@ export default function CallDetailPage() {
                     }`}
                   >
                     <div className="font-medium text-sm text-gray-500 dark:text-gray-400 mb-1">
-                      {message.role === 'user' ? 'Utilisateur' : 'Agent'} •{' '}
+                      {message.role === 'user' ? t.callDetail.user : t.callDetail.agent} •{' '}
                       {format(new Date(message.timestamp), 'HH:mm:ss')}
                     </div>
                     <div className="text-gray-900 dark:text-white">
@@ -223,7 +263,7 @@ export default function CallDetailPage() {
       {activeTab === 'transcript' && (
         <div className="card">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            Transcription Complète
+            {t.callDetail.fullTranscript}
           </h3>
           {call.transcript ? (
             <div className="prose dark:prose-invert max-w-none">
@@ -233,7 +273,7 @@ export default function CallDetailPage() {
             </div>
           ) : (
             <p className="text-gray-600 dark:text-gray-400">
-              Transcription non disponible pour cet appel
+              {t.callDetail.transcriptNotAvailable}
             </p>
           )}
         </div>

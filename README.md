@@ -13,6 +13,7 @@ A comprehensive SaaS platform for creating realistic French-speaking voice agent
 - **Security Features**: Domain/IP allowlists, security logs, and audit trails
 - **Support System**: Complete ticketing system with email notifications
 - **Real-Time Analytics**: Detailed charts, call statistics, and export capabilities
+- **Zadarma PBX Integration**: Configure business-hours menus and after-hours routing that connect callers directly with AI agents or human teams
 
 ## 📚 Complete Documentation
 
@@ -116,6 +117,10 @@ After logging in:
 ### 2. Test with Demo
 
 Visit `/demo` to test the public demo agent with voice interaction.
+
+> 💡 Need sample agents? Run `python backend/scripts/seed_public_agents.py` to create the bundled French concierge and the **French-language** Dubai real estate discovery demos (marked as public automatically).
+
+> ☎️ When a public agent has an assigned phone number, the landing page, demo, and dedicated agent page now surface a direct call button so you can dial the AI instantly.
 
 ### 3. Integrate via API
 

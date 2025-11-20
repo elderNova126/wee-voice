@@ -13,6 +13,7 @@ import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, callsAPI } from '@/lib/api'
 import { StatCard } from '@/components/ui'
 import toast from 'react-hot-toast'
+import { useTranslation } from '@/lib/translations'
 
 interface Stats {
   total_agents: number
@@ -22,6 +23,7 @@ interface Stats {
 }
 
 export default function DashboardPage() {
+  const t = useTranslation()
   const [stats, setStats] = useState<Stats>({
     total_agents: 0,
     total_calls: 0,
@@ -36,26 +38,25 @@ export default function DashboardPage() {
 
   const loadStats = async () => {
     try {
-      const [agentsResponse, callsResponse] = await Promise.all([
+      // Use the stats endpoint which provides all the data we need
+      const [agentsResponse, statsResponse] = await Promise.all([
         agentsAPI.list(),
-        callsAPI.list()
+        callsAPI.getStats(30) // Get stats for last 30 days
       ])
 
       const agents = agentsResponse.data
-      const calls = callsResponse.data
+      const stats = statsResponse.data
 
-      const totalMinutes = calls.reduce((sum: number, call: any) => sum + (call.duration_minutes || 0), 0)
-      const totalCost = calls.reduce((sum: number, call: any) => sum + (call.cost || 0), 0)
-
+      // Use stats endpoint data directly - it already has totals for all calls
       setStats({
         total_agents: agents.length,
-        total_calls: calls.length,
-        total_minutes: totalMinutes,
-        total_cost: totalCost
+        total_calls: stats.total_calls || 0,
+        total_minutes: stats.total_minutes || 0,
+        total_cost: stats.total_cost || 0
       })
     } catch (error) {
       console.error('Failed to load stats:', error)
-      toast.error('Échec du chargement des statistiques')
+      toast.error(t.dashboard.statsLoadError)
     } finally {
       setLoading(false)
     }
@@ -66,45 +67,45 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent mb-2">
-          Tableau de Bord
+          {t.dashboard.title}
         </h1>
         <p className="text-gray-600 dark:text-gray-400">
-          Bienvenue ! Voici un aperçu de vos agents vocaux.
+          {t.dashboard.welcomeMessage}
         </p>
       </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard
-          title="Agents Totaux"
+          title={t.dashboard.totalAgents}
           value={stats.total_agents}
           icon={<MicrophoneIcon className="w-5 h-5" />}
           iconColor="from-blue-500 to-blue-600"
-          subtitle="Agents vocaux actifs"
+          subtitle={t.dashboard.totalAgentsSubtitle}
           loading={loading}
         />
         <StatCard
-          title="Appels Totaux"
+          title={t.dashboard.totalCalls}
           value={stats.total_calls}
           icon={<PhoneIcon className="w-5 h-5" />}
           iconColor="from-green-500 to-green-600"
-          subtitle="Appels effectués"
+          subtitle={t.dashboard.totalCallsSubtitle}
           loading={loading}
         />
         <StatCard
-          title="Minutes Utilisées"
+          title={t.dashboard.totalMinutes}
           value={stats.total_minutes.toFixed(1)}
           icon={<ClockIcon className="w-5 h-5" />}
           iconColor="from-purple-500 to-purple-600"
-          subtitle="Temps d'appel total"
+          subtitle={t.dashboard.totalMinutesSubtitle}
           loading={loading}
         />
         <StatCard
-          title="Coût Total"
+          title={t.dashboard.totalCost}
           value={`$${stats.total_cost.toFixed(2)}`}
           icon={<CurrencyDollarIcon className="w-5 h-5" />}
           iconColor="from-orange-500 to-orange-600"
-          subtitle="Dépenses cumulées"
+          subtitle={t.dashboard.totalCostSubtitle}
           loading={loading}
         />
       </div>
@@ -112,7 +113,7 @@ export default function DashboardPage() {
       {/* Quick Actions */}
       <div>
         <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">
-          Actions Rapides
+          {t.dashboard.quickActions}
         </h2>
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <Link
@@ -125,10 +126,10 @@ export default function DashboardPage() {
                 <PlusIcon className="w-6 h-6 text-white" />
               </div>
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                Créer un Agent
+                {t.quickActions.createAgent}
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Construisez un agent vocal personnalisé pour votre cas d'usage
+                {t.quickActions.createAgentDesc}
               </p>
             </div>
           </Link>
@@ -143,10 +144,10 @@ export default function DashboardPage() {
                 <KeyIcon className="w-6 h-6 text-white" />
               </div>
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                Gérer les Clés API
+                {t.quickActions.manageApiKeys}
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Créez et gérez vos clés d'accès API pour l'intégration
+                {t.quickActions.manageApiKeysDesc}
               </p>
             </div>
           </Link>
@@ -161,10 +162,10 @@ export default function DashboardPage() {
                 <PlayIcon className="w-6 h-6 text-white" />
               </div>
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                Essayer la Démo
+                {t.quickActions.tryDemo}
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Testez l'agent de démonstration publique en direct
+                {t.quickActions.tryDemoDesc}
               </p>
             </div>
           </Link>

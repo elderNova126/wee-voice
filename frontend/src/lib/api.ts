@@ -68,7 +68,8 @@ export const agentsAPI = {
 
 // Calls API
 export const callsAPI = {
-  list: (params?: any) => api.get('/calls/', { params }),
+  list: (params?: { page?: number; per_page?: number; status?: string; action_required?: boolean; favorite?: boolean; search?: string }) => 
+    api.get('/calls/', { params }),
   
   get: (id: number) => api.get(`/calls/${id}`),
   
@@ -76,13 +77,46 @@ export const callsAPI = {
   
   generateSummary: (id: number) => api.post(`/calls/${id}/generate-summary`),
   
+  sendEmail: (id: number, data: { to_email: string; subject: string; body: string; from_email?: string; from_name?: string }) =>
+    api.post(`/calls/${id}/send-email`, data),
+  
   getStats: (days: number = 30) => api.get('/calls/stats/overview', { params: { days } }),
   
   delete: (id: number) => api.delete(`/calls/${id}`),
   
+  bulkDelete: (callIds: number[]) => api.post('/calls/bulk/delete', { call_ids: callIds }),
+  
   recalculate: (id: number) => api.post(`/calls/${id}/recalculate`),
   
   recalculateAll: () => api.post('/calls/recalculate-all'),
+  
+  sendMessage: (id: number, content: string) => api.post(`/calls/${id}/messages`, { content }),
+  
+  toggleFavorite: (id: number) => api.post(`/calls/${id}/toggle-favorite`),
+  
+  bulkToggleFavorite: (callIds: number[], isFavorite: boolean) => 
+    api.post('/calls/bulk/favorite', { call_ids: callIds, is_favorite: isFavorite }),
+}
+
+// Libraries API
+export const librariesAPI = {
+  listPublic: (params?: { category?: string; search?: string }) =>
+    api.get('/libraries/public', { params }),
+  
+  listMy: (params?: { category?: string; search?: string }) =>
+    api.get('/libraries/my', { params }),
+  
+  get: (id: number) => api.get(`/libraries/${id}`),
+  
+  save: (id: number) => api.post(`/libraries/save/${id}`),
+  
+  create: (data: any) => api.post('/libraries/', data),
+  
+  update: (id: number, data: any) => api.put(`/libraries/${id}`, data),
+  
+  delete: (id: number) => api.delete(`/libraries/${id}`),
+  
+  listCategories: () => api.get('/libraries/categories/list'),
 }
 
 // API Keys API
@@ -223,6 +257,42 @@ export const supportAPI = {
     api.get('/support/categories'),
 }
 
+// Integrations API
+export const integrationsAPI = {
+  list: (params?: { integration_type?: string; provider?: string; is_active?: boolean }) =>
+    api.get('/integrations/', { params }),
+  
+  get: (id: number) =>
+    api.get(`/integrations/${id}`),
+  
+  create: (data: {
+    name: string
+    description?: string
+    integration_type: string
+    provider: string
+    config: Record<string, any>
+  }) => api.post('/integrations/', data),
+  
+  update: (id: number, data: {
+    name?: string
+    description?: string
+    config?: Record<string, any>
+    is_active?: boolean
+  }) => api.put(`/integrations/${id}`, data),
+  
+  delete: (id: number) =>
+    api.delete(`/integrations/${id}`),
+  
+  test: (id: number) =>
+    api.post(`/integrations/${id}/test`),
+  
+  sync: (id: number) =>
+    api.post(`/integrations/${id}/sync`),
+  
+  getTypes: () =>
+    api.get('/integrations/types/list'),
+}
+
 // WebSocket API
 export class VoiceWebSocket {
   private ws: WebSocket | null = null
@@ -314,4 +384,88 @@ export class VoiceWebSocket {
     }
   }
 }
+
+// Admin API
+export const adminAPI = {
+  // Users
+  listUsers: (params?: { 
+    skip?: number; 
+    limit?: number; 
+    search?: string; 
+    is_approved?: boolean; 
+    is_active?: boolean;
+    sort_by?: string;
+    order?: string;
+  }) =>
+    api.get('/admin/users', { params }),
+  
+  getUser: (userId: number) =>
+    api.get(`/admin/users/${userId}`),
+  
+  updateUser: (userId: number, data: {
+    is_approved?: boolean;
+    is_active?: boolean;
+    is_superuser?: boolean;
+    subscription_tier?: string;
+  }) =>
+    api.patch(`/admin/users/${userId}`, data),
+  
+  approveUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/approve`),
+  
+  rejectUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/reject`),
+  
+  activateUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/activate`),
+  
+  deactivateUser: (userId: number) =>
+    api.post(`/admin/users/${userId}/deactivate`),
+  
+  // Stats
+  getUserStats: () =>
+    api.get('/admin/users/stats/summary'),
+
+  // Overview
+  getOverview: () =>
+    api.get('/admin/overview'),
+
+  // Agents
+  listAgents: (params?: {
+    skip?: number
+    limit?: number
+    search?: string
+    is_active?: boolean
+    is_public?: boolean
+    owner_id?: number
+  }) =>
+    api.get('/admin/agents', { params }),
+
+  updateAgent: (agentId: number, data: {
+    is_active?: boolean
+    is_public?: boolean
+    rag_enabled?: boolean
+  }) =>
+    api.patch(`/admin/agents/${agentId}`, data),
+
+  // Support
+  listSupportTickets: (params?: {
+    skip?: number
+    limit?: number
+    status?: string
+    priority?: string
+    search?: string
+  }) =>
+    api.get('/admin/support/tickets', { params }),
+
+  updateSupportTicket: (ticketId: number, data: {
+    status?: string
+    priority?: string
+    response_message?: string
+  }) =>
+    api.patch(`/admin/support/tickets/${ticketId}`, data),
+}
+
+// Default export for backward compatibility
+export default api
 

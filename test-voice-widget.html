@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Widget Test - WeeVoice</title>
+    
+    <!-- Voice Widget CSS -->
+    <link rel="stylesheet" href="http://localhost:8000/static/css/voice-widget.css">
+    
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .info-box {
+            background: #f3f4f6;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .info-box code {
+            background: #e5e7eb;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        ul li {
+            padding: 10px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        ul li:before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ Voice Agent Widget Demo</h1>
+        <p class="subtitle">Test your voice agent integration</p>
+        
+        <div class="info-box">
+            <h3>👋 Welcome!</h3>
+            <p>Click the <strong>purple microphone button</strong> in the bottom-right corner to start talking with your voice agent.</p>
+        </div>
+        
+        <h2>Features</h2>
+        <ul>
+            <li>Real-time voice conversation</li>
+            <li>Powered by Google Gemini AI</li>
+            <li>Works in any modern browser</li>
+            <li>No phone required</li>
+            <li>Instant responses</li>
+        </ul>
+        
+        <div class="info-box">
+            <h3>📋 Configuration</h3>
+            <p><strong>Agent ID:</strong> <code id="agent-id">1</code></p>
+            <p><strong>API URL:</strong> <code>http://localhost:8000</code></p>
+            <p><strong>Position:</strong> <code>bottom-right</code></p>
+        </div>
+        
+        <h2>How to Use</h2>
+        <ol>
+            <li>Click the microphone button in the bottom-right</li>
+            <li>Allow microphone access when prompted</li>
+            <li>Click "Start Voice Call"</li>
+            <li>Start speaking - the agent will respond!</li>
+            <li>Click "End Call" when finished</li>
+        </ol>
+    </div>
+    <!-- WeeVoice Agent Widget -->
+    <script>
+        (function() {
+        var config = {
+            agentId: 11,
+            apiUrl: 'http://localhost:8000',
+            color: '#4F46E5',
+            position: 'bottom-right',
+            greeting: 'Hi! I am Weedoo. How can I help you?',
+            agentName: 'Weedoo',
+            language: 'fr'
+        };
+        
+        var script = document.createElement('script');
+        script.src = 'http://localhost:8000/static/js/voice-widget.js';
+        script.async = true;
+        script.onload = function() {
+            if (window.WeeVoiceWidget) {
+            window.WeeVoiceWidget.init(config);
+            }
+        };
+        document.head.appendChild(script);
+        
+        var styles = document.createElement('link');
+        styles.rel = 'stylesheet';
+        styles.href = 'http://localhost:8000/static/css/voice-widget.css';
+        document.head.appendChild(styles);
+        })();
+    </script>
+    <!-- End WeeVoice Agent Widget -->
+</body>
+</html>
+

@@ -4,10 +4,12 @@ import { useAuthStore } from '@/store/authStore'
 import { authAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
 import { MicrophoneIcon } from '@heroicons/react/24/outline'
+import { useTranslation } from '@/lib/translations'
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const login = useAuthStore(state => state.login)
+  const t = useTranslation()
   
   const [formData, setFormData] = useState({
     email: '',
@@ -30,11 +32,11 @@ export default function LoginPage() {
       const userResponse = await authAPI.getMe()
       login(access_token, userResponse.data)
       
-      toast.success('Connexion réussie!')
+      toast.success(t.auth.loginSuccess)
       navigate('/dashboard')
     } catch (error: any) {
       console.error('Login error:', error)
-      toast.error(error.response?.data?.detail || 'Erreur de connexion')
+      toast.error(error.response?.data?.detail || t.auth.loginError)
     } finally {
       setIsLoading(false)
     }
@@ -54,13 +56,13 @@ export default function LoginPage() {
         {/* Form */}
         <div className="card">
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
-            Connexion
+            {t.auth.login}
           </h2>
           
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Email
+                {t.auth.email}
               </label>
               <input
                 type="email"
@@ -73,7 +75,7 @@ export default function LoginPage() {
             
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Mot de passe
+                {t.auth.password}
               </label>
               <input
                 type="password"
@@ -89,15 +91,15 @@ export default function LoginPage() {
               disabled={isLoading}
               className="btn-primary w-full"
             >
-              {isLoading ? 'Connexion...' : 'Se connecter'}
+              {isLoading ? t.auth.connecting : t.auth.connect}
             </button>
           </form>
           
           <div className="mt-6 text-center">
             <p className="text-gray-600 dark:text-gray-400">
-              Pas encore de compte ?{' '}
+              {t.auth.noAccount}{' '}
               <Link to="/register" className="text-primary-600 hover:text-primary-700 font-medium">
-                Créer un compte
+                {t.auth.createAccount}
               </Link>
             </p>
           </div>

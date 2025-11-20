@@ -6,6 +6,11 @@ from app.models.call import Call, CallMessage, CallStatus
 from app.models.billing import Transaction, Invoice, UsageRecord, PaymentStatus, InvoiceStatus
 from app.models.security import DomainAllowlist, IPAllowlist, SecurityLog
 from app.models.support import SupportTicket, TicketResponse, TicketStatus, TicketPriority, TicketCategory
+from app.models.integration import Integration, IntegrationType, IntegrationProvider, IntegrationStatus
+from app.models.document import Document, DocumentChunk
+from app.models.zadarma import PhoneNumber, PhoneNumberStatus, VerificationDocument, DocumentType, VerificationStatus, CallbackRequest
+from app.models.agent_library import AgentLibrary, LibraryCategory
+from app.models.agent_collaborator import AgentCollaborator, CollaboratorPermission
 
 __all__ = [
     "Base",
@@ -30,5 +35,21 @@ __all__ = [
     "TicketStatus",
     "TicketPriority",
     "TicketCategory",
+    "Integration",
+    "IntegrationType",
+    "IntegrationProvider",
+    "IntegrationStatus",
+    "Document",
+    "DocumentChunk",
+    "PhoneNumber",
+    "PhoneNumberStatus",
+    "VerificationDocument",
+    "DocumentType",
+    "VerificationStatus",
+    "CallbackRequest",
+    "AgentLibrary",
+    "LibraryCategory",
+    "AgentCollaborator",
+    "CollaboratorPermission",
 ]
 
