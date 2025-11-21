@@ -40,39 +40,52 @@ def _refresh_greeting_cache_sync(db: Session):
     
     try:
         # Query all phone numbers with their agent greetings
+        # Use COALESCE to handle NULL greetings and filter them out
         result = db.execute(text("""
             SELECT pn.phone_number, a.greeting, a.language
             FROM phone_numbers pn
             INNER JOIN voice_agents a ON pn.agent_id = a.id
-            WHERE pn.agent_id IS NOT NULL AND a.greeting IS NOT NULL
+            WHERE pn.agent_id IS NOT NULL 
+              AND a.greeting IS NOT NULL 
+              AND TRIM(a.greeting) != ''
         """))
         
         new_cache = {}
+        row_count = 0
         for row in result:
+            row_count += 1
             phone_number = row[0]
             greeting = row[1]
-            language = row[2]
-            if phone_number and greeting:
+            language = row[2] or "en"
+            
+            if phone_number and greeting and greeting.strip():
                 # Store multiple variations for fast lookup
-                new_cache[phone_number] = (greeting, language)
+                new_cache[phone_number] = (greeting.strip(), language)
+                
                 # Also store normalized version
-                normalized = normalize_phone_for_matching(phone_number)
-                if normalized and normalized != phone_number:
-                    new_cache[normalized] = (greeting, language)
+                try:
+                    normalized = normalize_phone_for_matching(phone_number)
+                    if normalized and normalized != phone_number:
+                        new_cache[normalized] = (greeting.strip(), language)
+                except Exception as norm_error:
+                    logger.debug(f"Normalization failed for {phone_number}: {norm_error}")
+                
                 # Store without + prefix
                 if phone_number.startswith("+"):
-                    new_cache[phone_number[1:]] = (greeting, language)
+                    new_cache[phone_number[1:]] = (greeting.strip(), language)
         
         _agent_greeting_cache = new_cache
         _cache_last_refresh = time.time()
-        logger.info(f"✅ Greeting cache refreshed: {len(new_cache)} entries (including variations)")
+        logger.info(f"✅ Greeting cache refreshed: {row_count} rows processed, {len(new_cache)} cache entries (including variations)")
         if new_cache:
             # Log first few entries for debugging
             sample_entries = list(new_cache.items())[:3]
             for phone, (greeting, lang) in sample_entries:
                 logger.info(f"  Sample: {phone} -> {greeting[:30]}... ({lang})")
         else:
-            logger.warning("⚠️ Cache refresh completed but cache is EMPTY - no agents with greetings found!")
+            logger.warning(f"⚠️ Cache refresh completed but cache is EMPTY!")
+            logger.warning(f"   Processed {row_count} rows from database")
+            logger.warning(f"   Check: Do phone_numbers have agent_id? Do agents have greeting field set?")
     except Exception as e:
         logger.error(f"❌ Failed to refresh greeting cache: {e}", exc_info=True)
 
@@ -927,16 +940,11 @@ async def handle_call_start(
         except Exception as e:
             logger.warning(f"Failed to start background task (non-critical): {e}")
         
-        # Return JSONResponse immediately (critical for call to be answered)
-        # Match simple_agent's jsonify() behavior exactly
-        # IMPORTANT: FastAPI's JSONResponse should work, but let's ensure it's correct
-        # Flask's jsonify() returns application/json with the dict serialized
-        return JSONResponse(
-            content=response,
-            status_code=200,
-            media_type="application/json",
-            headers={"Content-Type": "application/json"}
-        )
+        # Return response immediately (critical for call to be answered)
+        # For direct DID webhooks (not PBX extensions), return plain dict
+        # FastAPI will automatically serialize it to JSON, matching Flask's jsonify()
+        # This is faster and simpler than JSONResponse
+        return response
     
     except Exception as e:
         # If anything fails, still return IVR response to answer call
@@ -948,11 +956,7 @@ async def handle_call_start(
         # Return default response to answer call despite error
         error_response = {"ivr_saypopular": 1, "language": "en"}
         logger.error(f"❌ Returning fallback response due to error: {json.dumps(error_response)}")
-        return JSONResponse(
-            content=error_response,
-            status_code=200,
-            media_type="application/json"
-        )
+        return error_response
 
 
 async def _handle_call_start_background(
