@@ -765,90 +765,33 @@ async def handle_call_start(
     CRITICAL: Must return IVR response IMMEDIATELY to answer call before timeout.
     Following simple_agent pattern: return response first, do heavy operations in background.
     """
-    logger.info("=" * 80)
-    logger.info("📞 HANDLING CALL START (NOTIFY_START)")
-    logger.info(f"Caller ID: {caller_id}")
-    logger.info(f"Called DID: {called_did}")
-    logger.info(f"Zadarma Call ID: {zadarma_call_id}")
-    logger.info("=" * 80)
+    import time
+    start_time = time.time()
     
-    # CRITICAL: Return IVR response IMMEDIATELY (like simple_agent)
-    # Strategy: Do a FAST agent lookup (single query) to get agent's greeting
-    # If found, use agent's greeting via ivr_say; otherwise use simple greeting
-    
-    # Fast agent lookup - single query without complex matching
-    agent = None
-    agent_greeting = None
-    agent_language = "en"
-    
-    try:
-        # Fast lookup: direct query by phone number (no complex matching)
-        result = db.execute(text("""
-            SELECT a.id, a.greeting, a.language
-            FROM phone_numbers pn
-            JOIN voice_agents a ON pn.agent_id = a.id
-            WHERE pn.phone_number = :phone_number 
-               OR pn.phone_number = :normalized
-            LIMIT 1
-        """), {
-            "phone_number": called_did,
-            "normalized": normalize_phone_for_matching(called_did)
-        }).first()
-        
-        if result:
-            agent_id, greeting, language = result
-            agent = {"id": agent_id, "greeting": greeting, "language": language}
-            agent_greeting = greeting
-            agent_language = language[:2] if language else "en"
-            logger.info(f"✅ Fast lookup: Found agent {agent_id} with greeting")
-    except Exception as e:
-        logger.warning(f"Fast agent lookup failed (non-critical): {e}")
-        # Continue with default greeting
-    
-    # Determine language code
-    zadarma_language_map = {
-        "fr": "fr", "en": "en", "es": "es", "de": "de",
-        "it": "it", "pl": "pl", "ru": "ru"
+    # CRITICAL: Return IVR response IMMEDIATELY with ZERO operations
+    # Even logging can add delay - minimize everything before return
+    # Use simple greeting (like simple_agent) - most reliable and fastest
+    response = {
+        "ivr_saypopular": 1,
+        "language": "en"
     }
-    zadarma_lang = zadarma_language_map.get(agent_language, "en")
     
-    # Use agent's greeting if available and short enough for ivr_say
-    # Otherwise use simple greeting (ivr_saypopular)
-    if agent_greeting and len(agent_greeting) < 200:
-        # Use agent's custom greeting via ivr_say
-        response = {
-            "ivr_say": agent_greeting,
-            "language": zadarma_lang
-        }
-        logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
-    else:
-        # Use simple greeting (most reliable)
-        response = {
-            "ivr_saypopular": 1,
-            "language": zadarma_lang
-        }
-        logger.info(f"Using simple greeting (ivr_saypopular: 1) in {zadarma_lang}")
+    elapsed = (time.time() - start_time) * 1000
+    logger.info(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms - {json.dumps(response)}")
     
-    # Log the response we're about to return
-    logger.info("=" * 80)
-    logger.info(f"📤 RETURNING IVR RESPONSE IMMEDIATELY")
-    logger.info(f"Response: {json.dumps(response)}")
-    logger.info(f"Called DID: {called_did}")
-    if agent:
-        logger.info(f"Agent: {agent['id']} (greeting: {agent_greeting[:50] if agent_greeting else 'default'}...)")
-    logger.info("=" * 80)
-    
-    # Do full agent lookup and call record creation in background (non-blocking)
-    # This allows us to return the IVR response immediately
-    # The agent service will be set up for full conversation after IVR greeting
-    # Pass agent info if we found it in fast lookup
-    asyncio.create_task(_handle_call_start_background(
-        db, caller_id, called_did, zadarma_call_id, data, agent
-    ))
+    # Start background task AFTER creating response (non-blocking)
+    # Don't await it - just create the task and return immediately
+    try:
+        asyncio.create_task(_handle_call_start_background(
+            db, caller_id, called_did, zadarma_call_id, data, None
+        ))
+    except Exception as e:
+        logger.warning(f"Failed to start background task (non-critical): {e}")
     
     # Return JSONResponse immediately (critical for call to be answered)
-    # Using JSONResponse explicitly to match simple_agent's jsonify() behavior
-    return JSONResponse(content=response)
+    # FastAPI will automatically convert dict to JSON, but JSONResponse is explicit
+    # Match simple_agent's jsonify() behavior exactly
+    return JSONResponse(content=response, status_code=200)
 
 
 async def _handle_call_start_background(
