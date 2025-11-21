@@ -496,6 +496,8 @@ async def zadarma_webhook(
     - NOTIFY_IVR: Caller response to IVR action (can return call flow control)
     """
     # Log immediately at function entry - this should ALWAYS appear
+    import time
+    webhook_start_time = time.time()
     print("=" * 80)
     print("🔔 ZADARMA WEBHOOK RECEIVED (PRINT)")
     print(f"Request method: {request.method}")
@@ -644,11 +646,15 @@ async def zadarma_webhook(
         logger.info(f"🔍 Event type: {event}")
         
         if event == "NOTIFY_START":
-            print("📞 NOTIFY_START received - Incoming call initiated (PRINT)")
-            logger.info("📞 NOTIFY_START received - Incoming call initiated")
+            pre_handler_time = (time.time() - webhook_start_time) * 1000
+            print(f"📞 NOTIFY_START received - Incoming call initiated (PRINT) - {pre_handler_time:.1f}ms elapsed")
+            logger.info(f"📞 NOTIFY_START received - Incoming call initiated ({pre_handler_time:.1f}ms to handler)")
             logger.info("ℹ️ NOTE: For PBX extensions, the call will only be answered if the extension is registered via SIP")
             logger.info("ℹ️ If you see NOTIFY_INTERNAL next, it means the call reached the extension")
-            return await handle_call_start(db, data, caller_id, called_did, zadarma_call_id)
+            result = await handle_call_start(db, data, caller_id, called_did, zadarma_call_id)
+            total_time = (time.time() - webhook_start_time) * 1000
+            logger.info(f"✅ NOTIFY_START handled in {total_time:.1f}ms total")
+            return result
         
         elif event == "NOTIFY_INTERNAL":
             logger.info("📞 NOTIFY_INTERNAL received - Call reached PBX extension")
@@ -681,7 +687,17 @@ async def zadarma_webhook(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing Zadarma webhook: {e}", exc_info=True)
+        total_time = (time.time() - webhook_start_time) * 1000
+        logger.error(f"❌ ERROR processing Zadarma webhook after {total_time:.1f}ms: {e}", exc_info=True)
+        print(f"❌ ERROR processing webhook after {total_time:.1f}ms: {e} (PRINT)")
+        # For NOTIFY_START, still return IVR response to answer call
+        # This prevents Zadarma from retrying and causing "circling error"
+        if event == "NOTIFY_START":
+            logger.warning("⚠️ Returning default IVR response despite error to answer call")
+            return JSONResponse(
+                content={"ivr_saypopular": 1, "language": "en"},
+                status_code=200
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
@@ -763,77 +779,52 @@ async def handle_call_start(
     Handle incoming call start (NOTIFY_START)
     
     CRITICAL: Must return IVR response IMMEDIATELY to answer call before timeout.
-    Following simple_agent pattern: return response first, do heavy operations in background.
+    NO database queries or blocking operations before returning response.
+    Following simple_agent pattern exactly: return response first, everything else in background.
     """
     import time
     start_time = time.time()
     
-    # Try to get agent's greeting via FAST lookup
-    # This query should be < 30ms with proper indexing
-    # If it fails or is slow, we'll use simple greeting
-    agent_greeting = None
-    agent_language = "en"
-    
     try:
-        # Ultra-fast lookup: direct phone number match with index
-        # phone_numbers.phone_number is indexed, so this should be very fast
-        query_start = time.time()
-        result = db.execute(text("""
-            SELECT a.greeting, a.language
-            FROM phone_numbers pn
-            INNER JOIN voice_agents a ON pn.agent_id = a.id
-            WHERE pn.phone_number = :phone_number
-            LIMIT 1
-        """), {"phone_number": called_did}).first()
-        query_time = (time.time() - query_start) * 1000
+        # CRITICAL: Return response IMMEDIATELY with ZERO database operations
+        # Even a "fast" query can cause timeout - Zadarma needs response in < 100ms
+        # Use simple greeting to ensure call is answered, then lookup agent in background
         
-        if result and result[0]:  # result[0] is greeting
-            agent_greeting = result[0]
-            agent_language = result[1][:2] if result[1] else "en"
-            logger.info(f"✅ Fast lookup: Found agent greeting ({len(agent_greeting)} chars) in {query_time:.1f}ms")
-        elif query_time > 50:
-            # Query took too long, log warning but continue
-            logger.warning(f"⚠️ Query took {query_time:.1f}ms - may cause timeout")
-    except Exception as e:
-        # If lookup fails, continue with default greeting (non-critical)
-        logger.debug(f"Fast lookup skipped: {e}")
-    
-    # Determine language code
-    zadarma_language_map = {"fr": "fr", "en": "en", "es": "es", "de": "de", "it": "it", "pl": "pl", "ru": "ru"}
-    zadarma_lang = zadarma_language_map.get(agent_language, "en")
-    
-    # Use agent's greeting if available and reasonable length for IVR
-    # ivr_say has limits - keep it under 200 chars for reliability
-    if agent_greeting and len(agent_greeting) <= 200:
-        response = {
-            "ivr_say": agent_greeting,
-            "language": zadarma_lang
-        }
-        logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
-    else:
-        # Fallback to simple greeting if no custom greeting or too long
         response = {
             "ivr_saypopular": 1,
-            "language": zadarma_lang
+            "language": "en"
         }
-        if agent_greeting:
-            logger.info(f"⚠️ Agent greeting too long ({len(agent_greeting)} chars), using simple greeting")
-        else:
-            logger.info(f"Using simple greeting (ivr_saypopular: 1)")
+        
+        elapsed = (time.time() - start_time) * 1000
+        print(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms (PRINT)")
+        logger.info(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms - {json.dumps(response)}")
+        logger.info(f"Called DID: {called_did}, Call ID: {zadarma_call_id}")
+        
+        # Start background task AFTER creating response (non-blocking)
+        # This will lookup agent and use their greeting for future calls if needed
+        try:
+            asyncio.create_task(_handle_call_start_background(
+                db, caller_id, called_did, zadarma_call_id, data, None
+            ))
+        except Exception as e:
+            logger.warning(f"Failed to start background task (non-critical): {e}")
+        
+        # Return JSONResponse immediately (critical for call to be answered)
+        # Match simple_agent's jsonify() behavior exactly
+        return JSONResponse(content=response, status_code=200)
     
-    elapsed = (time.time() - start_time) * 1000
-    logger.info(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms - {json.dumps(response)}")
-    
-    # Start background task AFTER creating response (non-blocking)
-    try:
-        asyncio.create_task(_handle_call_start_background(
-            db, caller_id, called_did, zadarma_call_id, data, None
-        ))
     except Exception as e:
-        logger.warning(f"Failed to start background task (non-critical): {e}")
-    
-    # Return JSONResponse immediately (critical for call to be answered)
-    return JSONResponse(content=response, status_code=200)
+        # If anything fails, still return IVR response to answer call
+        # This prevents "circling error" from Zadarma retries
+        elapsed = (time.time() - start_time) * 1000
+        logger.error(f"❌ Error in handle_call_start after {elapsed:.1f}ms: {e}", exc_info=True)
+        print(f"❌ Error in handle_call_start: {e} (PRINT)")
+        
+        # Return default response to answer call despite error
+        return JSONResponse(
+            content={"ivr_saypopular": 1, "language": "en"},
+            status_code=200
+        )
 
 
 async def _handle_call_start_background(
