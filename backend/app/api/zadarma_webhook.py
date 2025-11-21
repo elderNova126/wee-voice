@@ -39,10 +39,27 @@ def _refresh_greeting_cache_sync(db: Session):
     global _agent_greeting_cache, _cache_last_refresh
     
     try:
+        # First, check if we have any phone numbers with agents
+        phone_count_result = db.execute(text("""
+            SELECT COUNT(*) 
+            FROM phone_numbers 
+            WHERE agent_id IS NOT NULL
+        """))
+        phone_count = phone_count_result.scalar() or 0
+        logger.info(f"🔍 Found {phone_count} phone numbers with agents assigned")
+        
+        # Check if we have any agents with greetings
+        greeting_count_result = db.execute(text("""
+            SELECT COUNT(*) 
+            FROM voice_agents 
+            WHERE greeting IS NOT NULL AND TRIM(greeting) != ''
+        """))
+        greeting_count = greeting_count_result.scalar() or 0
+        logger.info(f"🔍 Found {greeting_count} agents with greetings set")
+        
         # Query all phone numbers with their agent greetings
-        # Use COALESCE to handle NULL greetings and filter them out
         result = db.execute(text("""
-            SELECT pn.phone_number, a.greeting, a.language
+            SELECT pn.phone_number, a.greeting, a.language, a.id as agent_id, pn.id as phone_id
             FROM phone_numbers pn
             INNER JOIN voice_agents a ON pn.agent_id = a.id
             WHERE pn.agent_id IS NOT NULL 
@@ -57,6 +74,10 @@ def _refresh_greeting_cache_sync(db: Session):
             phone_number = row[0]
             greeting = row[1]
             language = row[2] or "en"
+            agent_id = row[3]
+            phone_id = row[4]
+            
+            logger.debug(f"Processing: phone_id={phone_id}, agent_id={agent_id}, phone={phone_number}, greeting_len={len(greeting) if greeting else 0}")
             
             if phone_number and greeting and greeting.strip():
                 # Store multiple variations for fast lookup
@@ -84,8 +105,11 @@ def _refresh_greeting_cache_sync(db: Session):
                 logger.info(f"  Sample: {phone} -> {greeting[:30]}... ({lang})")
         else:
             logger.warning(f"⚠️ Cache refresh completed but cache is EMPTY!")
-            logger.warning(f"   Processed {row_count} rows from database")
+            logger.warning(f"   Phone numbers with agents: {phone_count}")
+            logger.warning(f"   Agents with greetings: {greeting_count}")
+            logger.warning(f"   Rows processed: {row_count}")
             logger.warning(f"   Check: Do phone_numbers have agent_id? Do agents have greeting field set?")
+            logger.warning(f"   Try: SELECT pn.phone_number, a.greeting FROM phone_numbers pn INNER JOIN voice_agents a ON pn.agent_id = a.id WHERE a.greeting IS NOT NULL")
     except Exception as e:
         logger.error(f"❌ Failed to refresh greeting cache: {e}", exc_info=True)
 
@@ -745,12 +769,65 @@ async def zadarma_webhook(
             pre_handler_time = (time.time() - webhook_start_time) * 1000
             print(f"📞 NOTIFY_START received - Incoming call initiated (PRINT) - {pre_handler_time:.1f}ms elapsed")
             logger.info(f"📞 NOTIFY_START received - Incoming call initiated ({pre_handler_time:.1f}ms to handler)")
-            logger.info("ℹ️ NOTE: For PBX extensions, the call will only be answered if the extension is registered via SIP")
-            logger.info("ℹ️ If you see NOTIFY_INTERNAL next, it means the call reached the extension")
-            result = await handle_call_start(db, data, caller_id, called_did, zadarma_call_id)
+            logger.info("ℹ️ Direct DID webhook (no PBX extension) - must respond IMMEDIATELY")
+            
+            # CRITICAL: For direct DID webhooks, Zadarma has strict timeout (< 1 second)
+            # Use in-memory cache for INSTANT greeting lookup (zero DB queries, zero delay)
+            response_start = time.time()
+            
+            # Instant cache lookup (dict lookup, < 0.1ms)
+            cached = _get_cached_greeting(called_did)
+            agent_greeting = None
+            agent_language = "en"
+            
+            if cached:
+                agent_greeting, agent_language = cached
+                logger.info(f"✅ Cache hit: Found greeting for {called_did} ({len(agent_greeting)} chars)")
+            else:
+                logger.info(f"⚠️ Cache miss: No greeting cached for {called_did} (cache size: {len(_agent_greeting_cache)})")
+            
+            # Determine language code
+            zadarma_language_map = {"fr": "fr", "en": "en", "es": "es", "de": "de", "it": "it", "pl": "pl", "ru": "ru"}
+            zadarma_lang = zadarma_language_map.get(agent_language[:2] if agent_language else "en", "en")
+            
+            # Use agent's greeting if available and reasonable length for IVR
+            if agent_greeting and len(agent_greeting) <= 200:
+                response = {
+                    "ivr_say": agent_greeting,
+                    "language": zadarma_lang
+                }
+                logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
+            else:
+                # Fallback to simple greeting if no cached greeting or too long
+                response = {
+                    "ivr_saypopular": 1,
+                    "language": zadarma_lang
+                }
+                if agent_greeting:
+                    logger.info(f"⚠️ Agent greeting too long ({len(agent_greeting)} chars), using simple greeting")
+                else:
+                    logger.info(f"Using simple greeting (ivr_saypopular: 1) - cache miss")
+            
+            response_time = (time.time() - response_start) * 1000
             total_time = (time.time() - webhook_start_time) * 1000
-            logger.info(f"✅ NOTIFY_START handled in {total_time:.1f}ms total")
-            return result
+            
+            print(f"📤 RETURNING IMMEDIATE RESPONSE in {response_time:.1f}ms (PRINT)")
+            print(f"📤 Total time from webhook start: {total_time:.1f}ms (PRINT)")
+            print(f"📤 Response: {json.dumps(response)} (PRINT)")
+            logger.info(f"📤 RETURNING IMMEDIATE RESPONSE in {response_time:.1f}ms - {json.dumps(response)}")
+            logger.info(f"📤 Total time from webhook start: {total_time:.1f}ms")
+            
+            # Start background task for agent lookup and call record creation
+            # This runs AFTER response is returned
+            try:
+                asyncio.create_task(_handle_call_start_background(
+                    db, caller_id, called_did, zadarma_call_id, data, None
+                ))
+            except Exception as e:
+                logger.warning(f"Failed to start background task (non-critical): {e}")
+            
+            # Return response IMMEDIATELY - this is critical for direct DID webhooks
+            return response
         
         elif event == "NOTIFY_INTERNAL":
             logger.info("📞 NOTIFY_INTERNAL received - Call reached PBX extension")
