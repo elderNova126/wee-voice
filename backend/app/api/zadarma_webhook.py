@@ -762,103 +762,88 @@ async def handle_call_start(
     """
     Handle incoming call start (NOTIFY_START)
     
-    For PBX extension webhooks, this can return call flow control responses:
+    CRITICAL: Must return IVR response IMMEDIATELY to answer call before timeout.
+    Following simple_agent pattern: return response first, do heavy operations in background.
     """
     logger.info("=" * 80)
     logger.info("📞 HANDLING CALL START (NOTIFY_START)")
     logger.info(f"Caller ID: {caller_id}")
     logger.info(f"Called DID: {called_did}")
     logger.info(f"Zadarma Call ID: {zadarma_call_id}")
-    logger.info(f"Data: {data}")
     logger.info("=" * 80)
-    logger.info("⚠️ IMPORTANT: NOTIFY_START is just a notification. The call will only be answered")
-    logger.info("   if the PBX extension is registered via SIP. Check extension status in Zadarma dashboard.")
-    logger.info("   You should receive NOTIFY_INTERNAL when the call reaches the extension.")
-    logger.info("=" * 80)
-    
-    """
-    - redirect: Redirect to extension/scenario
-    - hangup: End the call
-    - caller_name: Set caller name
-    - wait_dtmf: Wait for DTMF input
-    - ivr_play: Play audio file
-    - ivr_saypopular: Play popular phrase
-    - ivr_saydigits: Play digits
-    - ivr_saynumber: Play number
-    
-    Currently, we return audio streaming endpoints for direct call handling.
-    You can modify this to return call flow control responses if needed.
-    """
-    
-    # Find agent assigned to this phone number
-    logger.info(f"🔍 Looking up agent for phone number: {called_did}")
-    agent = await get_agent_for_phone_number(db, called_did)
-    
-    if not agent:
-        logger.error(f"❌ NO AGENT FOUND for phone number {called_did}")
-        logger.warning(f"No agent found for phone number {called_did}")
-        # Option: Return hangup response to reject the call
-        # return build_call_flow_response("hangup")
-        return {
-            "status": "error",
-            "message": f"No agent configured for number {called_did}"
-        }
-    
-    logger.info(f"✅ Agent found: {agent.id} ({agent.name})")
-    
-    # Create call record (minimal, fast operation)
-    logger.info(f"📝 Creating call record...")
-    call = await create_call_record(
-        db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_START"
-    )
-    logger.info(f"✅ Call record created: ID={call.id}")
     
     # CRITICAL: Return IVR response IMMEDIATELY (like simple_agent)
-    # This must happen fast to answer the call before timeout
-    # Following simple_agent pattern: return IVR response to answer call
+    # Do NOT do any database queries or heavy operations before returning!
+    # The agent lookup is slow (multiple DB queries) and causes timeout
+    # Return default greeting first, then lookup agent in background
     
-    # Determine greeting based on agent configuration
-    language_code = agent.language[:2] if agent.language else "en"
-    
-    # Map language codes to Zadarma language codes
-    zadarma_language_map = {
-        "fr": "fr",
-        "en": "en",
-        "es": "es",
-        "de": "de",
-        "it": "it",
-        "pl": "pl",
-        "ru": "ru"
+    # Use simple greeting (like simple_agent) - most reliable
+    # ivr_saypopular: 1 = "Hello" in English
+    # This matches simple_agent exactly and works on all Zadarma plans
+    response = {
+        "ivr_saypopular": 1,
+        "language": "en"  # Default to English, can be customized in background
     }
-    zadarma_lang = zadarma_language_map.get(language_code, "en")
     
-    # Use agent's greeting if available and short enough for ivr_say
-    # Otherwise use simple ivr_saypopular (like simple_agent)
-    if agent.greeting and len(agent.greeting) < 200:  # Keep it short for reliability
-        greeting_text = agent.greeting
-        logger.info(f"Using agent's custom greeting via ivr_say: {greeting_text[:50]}...")
-        response = {
-            "ivr_say": greeting_text,
-            "language": zadarma_lang
-        }
-    else:
-        # Use simple greeting (like simple_agent)
-        # ivr_saypopular: 1 = "Hello" in English
-        # This is the most reliable option that works on all Zadarma plans
-        logger.info(f"Using default greeting (ivr_saypopular: 1) in {zadarma_lang}")
-        response = {
-            "ivr_saypopular": 1,
-            "language": zadarma_lang
-        }
+    # Log the response we're about to return
+    logger.info("=" * 80)
+    logger.info(f"📤 RETURNING IVR RESPONSE IMMEDIATELY (NO DB QUERIES)")
+    logger.info(f"Response: {json.dumps(response)}")
+    logger.info(f"Called DID: {called_did}")
+    logger.info("=" * 80)
     
-    logger.info(f"📤 Returning IVR response IMMEDIATELY to answer call: {json.dumps(response)}")
+    # Do agent lookup and call record creation in background (non-blocking)
+    # This allows us to return the IVR response immediately
+    asyncio.create_task(_handle_call_start_background(
+        db, caller_id, called_did, zadarma_call_id, data
+    ))
     
-    # Start background task for agent service setup and notifications
-    # This doesn't block the IVR response - call is answered immediately
-    asyncio.create_task(_setup_agent_service_background(db, call, agent, zadarma_call_id))
-    
-    # Return response immediately (critical for call to be answered)
-    return response
+    # Return JSONResponse immediately (critical for call to be answered)
+    # Using JSONResponse explicitly to match simple_agent's jsonify() behavior
+    return JSONResponse(content=response)
+
+
+async def _handle_call_start_background(
+    db: Session,
+    caller_id: str,
+    called_did: str,
+    zadarma_call_id: str,
+    data: Dict[str, Any]
+):
+    """
+    Background task to handle agent lookup and call record creation
+    This runs AFTER the IVR response is returned
+    """
+    try:
+        from app.models.database import SessionLocal
+        bg_db = SessionLocal()
+        try:
+            logger.info(f"🔄 Background: Looking up agent for {called_did}")
+            
+            # Find agent (this is slow, but now it's in background)
+            agent = await get_agent_for_phone_number(bg_db, called_did)
+            
+            if not agent:
+                logger.warning(f"⚠️ Background: No agent found for {called_did}")
+                return
+            
+            logger.info(f"✅ Background: Agent found: {agent.id} ({agent.name})")
+            
+            # Create call record
+            call = await create_call_record(
+                bg_db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_START"
+            )
+            logger.info(f"✅ Background: Call record created: ID={call.id}")
+            
+            # Start agent service setup in background
+            asyncio.create_task(_setup_agent_service_background(
+                bg_db, call, agent, zadarma_call_id
+            ))
+            
+        finally:
+            bg_db.close()
+    except Exception as e:
+        logger.error(f"❌ Background call start handling failed: {e}", exc_info=True)
 
 
 async def _setup_agent_service_background(
