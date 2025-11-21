@@ -768,19 +768,63 @@ async def handle_call_start(
     import time
     start_time = time.time()
     
-    # CRITICAL: Return IVR response IMMEDIATELY with ZERO operations
-    # Even logging can add delay - minimize everything before return
-    # Use simple greeting (like simple_agent) - most reliable and fastest
-    response = {
-        "ivr_saypopular": 1,
-        "language": "en"
-    }
+    # Try to get agent's greeting via FAST lookup
+    # This query should be < 30ms with proper indexing
+    # If it fails or is slow, we'll use simple greeting
+    agent_greeting = None
+    agent_language = "en"
+    
+    try:
+        # Ultra-fast lookup: direct phone number match with index
+        # phone_numbers.phone_number is indexed, so this should be very fast
+        query_start = time.time()
+        result = db.execute(text("""
+            SELECT a.greeting, a.language
+            FROM phone_numbers pn
+            INNER JOIN voice_agents a ON pn.agent_id = a.id
+            WHERE pn.phone_number = :phone_number
+            LIMIT 1
+        """), {"phone_number": called_did}).first()
+        query_time = (time.time() - query_start) * 1000
+        
+        if result and result[0]:  # result[0] is greeting
+            agent_greeting = result[0]
+            agent_language = result[1][:2] if result[1] else "en"
+            logger.info(f"✅ Fast lookup: Found agent greeting ({len(agent_greeting)} chars) in {query_time:.1f}ms")
+        elif query_time > 50:
+            # Query took too long, log warning but continue
+            logger.warning(f"⚠️ Query took {query_time:.1f}ms - may cause timeout")
+    except Exception as e:
+        # If lookup fails, continue with default greeting (non-critical)
+        logger.debug(f"Fast lookup skipped: {e}")
+    
+    # Determine language code
+    zadarma_language_map = {"fr": "fr", "en": "en", "es": "es", "de": "de", "it": "it", "pl": "pl", "ru": "ru"}
+    zadarma_lang = zadarma_language_map.get(agent_language, "en")
+    
+    # Use agent's greeting if available and reasonable length for IVR
+    # ivr_say has limits - keep it under 200 chars for reliability
+    if agent_greeting and len(agent_greeting) <= 200:
+        response = {
+            "ivr_say": agent_greeting,
+            "language": zadarma_lang
+        }
+        logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
+    else:
+        # Fallback to simple greeting if no custom greeting or too long
+        response = {
+            "ivr_saypopular": 1,
+            "language": zadarma_lang
+        }
+        if agent_greeting:
+            logger.info(f"⚠️ Agent greeting too long ({len(agent_greeting)} chars), using simple greeting")
+        else:
+            logger.info(f"Using simple greeting (ivr_saypopular: 1)")
     
     elapsed = (time.time() - start_time) * 1000
     logger.info(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms - {json.dumps(response)}")
     
     # Start background task AFTER creating response (non-blocking)
-    # Don't await it - just create the task and return immediately
     try:
         asyncio.create_task(_handle_call_start_background(
             db, caller_id, called_did, zadarma_call_id, data, None
@@ -789,8 +833,6 @@ async def handle_call_start(
         logger.warning(f"Failed to start background task (non-critical): {e}")
     
     # Return JSONResponse immediately (critical for call to be answered)
-    # FastAPI will automatically convert dict to JSON, but JSONResponse is explicit
-    # Match simple_agent's jsonify() behavior exactly
     return JSONResponse(content=response, status_code=200)
 
 
