@@ -66,8 +66,15 @@ def _refresh_greeting_cache_sync(db: Session):
         _agent_greeting_cache = new_cache
         _cache_last_refresh = time.time()
         logger.info(f"✅ Greeting cache refreshed: {len(new_cache)} entries (including variations)")
+        if new_cache:
+            # Log first few entries for debugging
+            sample_entries = list(new_cache.items())[:3]
+            for phone, (greeting, lang) in sample_entries:
+                logger.info(f"  Sample: {phone} -> {greeting[:30]}... ({lang})")
+        else:
+            logger.warning("⚠️ Cache refresh completed but cache is EMPTY - no agents with greetings found!")
     except Exception as e:
-        logger.error(f"Failed to refresh greeting cache: {e}")
+        logger.error(f"❌ Failed to refresh greeting cache: {e}", exc_info=True)
 
 
 async def _refresh_cache_background(db: Session):
@@ -866,19 +873,21 @@ async def handle_call_start(
         # Use in-memory cache for instant greeting lookup (no DB query)
         
         # Try to get agent's greeting from cache (instant lookup)
+        logger.info(f"🔍 Cache lookup for {called_did} - Cache size: {len(_agent_greeting_cache)}")
         cached = _get_cached_greeting(called_did)
         agent_greeting = None
         agent_language = "en"
         
         if cached:
             agent_greeting, agent_language = cached
-            logger.info(f"✅ Cache hit: Found greeting for {called_did} ({len(agent_greeting)} chars)")
+            logger.info(f"✅ Cache hit: Found greeting for {called_did} ({len(agent_greeting)} chars, lang: {agent_language})")
         else:
             # Cache miss - refresh cache in background if empty (non-blocking)
             if not _agent_greeting_cache:
-                logger.info("Cache is empty - refreshing in background")
+                logger.warning(f"⚠️ Cache is EMPTY! Size: {len(_agent_greeting_cache)} - refreshing in background")
                 asyncio.create_task(_refresh_cache_background(db))
-            logger.debug(f"Cache miss: No greeting cached for {called_did}")
+            else:
+                logger.info(f"Cache miss: No greeting cached for {called_did} (cache has {len(_agent_greeting_cache)} entries)")
         
         # Determine language code
         zadarma_language_map = {"fr": "fr", "en": "en", "es": "es", "de": "de", "it": "it", "pl": "pl", "ru": "ru"}
@@ -905,6 +914,7 @@ async def handle_call_start(
         
         elapsed = (time.time() - start_time) * 1000
         print(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms (PRINT)")
+        print(f"📤 Response content: {json.dumps(response)} (PRINT)")
         logger.info(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms - {json.dumps(response)}")
         logger.info(f"Called DID: {called_did}, Call ID: {zadarma_call_id}")
         
@@ -919,7 +929,14 @@ async def handle_call_start(
         
         # Return JSONResponse immediately (critical for call to be answered)
         # Match simple_agent's jsonify() behavior exactly
-        return JSONResponse(content=response, status_code=200)
+        # IMPORTANT: FastAPI's JSONResponse should work, but let's ensure it's correct
+        # Flask's jsonify() returns application/json with the dict serialized
+        return JSONResponse(
+            content=response,
+            status_code=200,
+            media_type="application/json",
+            headers={"Content-Type": "application/json"}
+        )
     
     except Exception as e:
         # If anything fails, still return IVR response to answer call
@@ -929,9 +946,12 @@ async def handle_call_start(
         print(f"❌ Error in handle_call_start: {e} (PRINT)")
         
         # Return default response to answer call despite error
+        error_response = {"ivr_saypopular": 1, "language": "en"}
+        logger.error(f"❌ Returning fallback response due to error: {json.dumps(error_response)}")
         return JSONResponse(
-            content={"ivr_saypopular": 1, "language": "en"},
-            status_code=200
+            content=error_response,
+            status_code=200,
+            media_type="application/json"
         )
 
 
