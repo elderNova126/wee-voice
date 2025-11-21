@@ -773,29 +773,77 @@ async def handle_call_start(
     logger.info("=" * 80)
     
     # CRITICAL: Return IVR response IMMEDIATELY (like simple_agent)
-    # Do NOT do any database queries or heavy operations before returning!
-    # The agent lookup is slow (multiple DB queries) and causes timeout
-    # Return default greeting first, then lookup agent in background
+    # Strategy: Do a FAST agent lookup (single query) to get agent's greeting
+    # If found, use agent's greeting via ivr_say; otherwise use simple greeting
     
-    # Use simple greeting (like simple_agent) - most reliable
-    # ivr_saypopular: 1 = "Hello" in English
-    # This matches simple_agent exactly and works on all Zadarma plans
-    response = {
-        "ivr_saypopular": 1,
-        "language": "en"  # Default to English, can be customized in background
+    # Fast agent lookup - single query without complex matching
+    agent = None
+    agent_greeting = None
+    agent_language = "en"
+    
+    try:
+        # Fast lookup: direct query by phone number (no complex matching)
+        result = db.execute(text("""
+            SELECT a.id, a.greeting, a.language
+            FROM phone_numbers pn
+            JOIN voice_agents a ON pn.agent_id = a.id
+            WHERE pn.phone_number = :phone_number 
+               OR pn.phone_number = :normalized
+            LIMIT 1
+        """), {
+            "phone_number": called_did,
+            "normalized": normalize_phone_for_matching(called_did)
+        }).first()
+        
+        if result:
+            agent_id, greeting, language = result
+            agent = {"id": agent_id, "greeting": greeting, "language": language}
+            agent_greeting = greeting
+            agent_language = language[:2] if language else "en"
+            logger.info(f"✅ Fast lookup: Found agent {agent_id} with greeting")
+    except Exception as e:
+        logger.warning(f"Fast agent lookup failed (non-critical): {e}")
+        # Continue with default greeting
+    
+    # Determine language code
+    zadarma_language_map = {
+        "fr": "fr", "en": "en", "es": "es", "de": "de",
+        "it": "it", "pl": "pl", "ru": "ru"
     }
+    zadarma_lang = zadarma_language_map.get(agent_language, "en")
+    
+    # Use agent's greeting if available and short enough for ivr_say
+    # Otherwise use simple greeting (ivr_saypopular)
+    if agent_greeting and len(agent_greeting) < 200:
+        # Use agent's custom greeting via ivr_say
+        response = {
+            "ivr_say": agent_greeting,
+            "language": zadarma_lang
+        }
+        logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
+    else:
+        # Use simple greeting (most reliable)
+        response = {
+            "ivr_saypopular": 1,
+            "language": zadarma_lang
+        }
+        logger.info(f"Using simple greeting (ivr_saypopular: 1) in {zadarma_lang}")
     
     # Log the response we're about to return
     logger.info("=" * 80)
-    logger.info(f"📤 RETURNING IVR RESPONSE IMMEDIATELY (NO DB QUERIES)")
+    logger.info(f"📤 RETURNING IVR RESPONSE IMMEDIATELY")
     logger.info(f"Response: {json.dumps(response)}")
     logger.info(f"Called DID: {called_did}")
+    if agent:
+        logger.info(f"Agent: {agent['id']} (greeting: {agent_greeting[:50] if agent_greeting else 'default'}...)")
     logger.info("=" * 80)
     
-    # Do agent lookup and call record creation in background (non-blocking)
+    # Do full agent lookup and call record creation in background (non-blocking)
     # This allows us to return the IVR response immediately
+    # The agent service will be set up for full conversation after IVR greeting
+    # Pass agent info if we found it in fast lookup
     asyncio.create_task(_handle_call_start_background(
-        db, caller_id, called_did, zadarma_call_id, data
+        db, caller_id, called_did, zadarma_call_id, data, agent
     ))
     
     # Return JSONResponse immediately (critical for call to be answered)
@@ -808,20 +856,28 @@ async def _handle_call_start_background(
     caller_id: str,
     called_did: str,
     zadarma_call_id: str,
-    data: Dict[str, Any]
+    data: Dict[str, Any],
+    fast_lookup_agent: Optional[Dict] = None
 ):
     """
     Background task to handle agent lookup and call record creation
     This runs AFTER the IVR response is returned
+    
+    Args:
+        fast_lookup_agent: Agent info from fast lookup (if available)
     """
     try:
         from app.models.database import SessionLocal
         bg_db = SessionLocal()
         try:
-            logger.info(f"🔄 Background: Looking up agent for {called_did}")
-            
-            # Find agent (this is slow, but now it's in background)
-            agent = await get_agent_for_phone_number(bg_db, called_did)
+            # Use fast lookup agent if available, otherwise do full lookup
+            if fast_lookup_agent:
+                logger.info(f"🔄 Background: Using agent from fast lookup: {fast_lookup_agent['id']}")
+                # Get full agent object
+                agent = bg_db.query(VoiceAgent).filter(VoiceAgent.id == fast_lookup_agent['id']).first()
+            else:
+                logger.info(f"🔄 Background: Looking up agent for {called_did}")
+                agent = await get_agent_for_phone_number(bg_db, called_did)
             
             if not agent:
                 logger.warning(f"⚠️ Background: No agent found for {called_did}")
@@ -883,17 +939,23 @@ async def _setup_agent_service_background(
             agent_service = FrenchVoiceAgentService(agent, call)
             manager.agent_services[session_id] = agent_service
             
-            # Start the voice session (but don't trigger greeting - IVR handles that)
+            # Start the voice session
+            # IMPORTANT: We DO trigger the greeting here because we want the agent's
+            # full greeting and conversation capability, not just the simple IVR "Hello"
+            # The IVR "Hello" was just to answer the call quickly - now we transition to agent
             await agent_service.start_session()
             logger.info(f"✅ Background: Started voice session for call {call.id}")
+            logger.info(f"ℹ️ Agent greeting will play via audio streaming (agent's custom greeting)")
             
-            # Create phone audio bridge (for future audio streaming if needed)
+            # Create phone audio bridge for bidirectional audio streaming
+            # This connects Zadarma phone call to Gemini agent for full conversation
             bridge = await phone_audio_manager.create_bridge(
                 agent_service,
                 str(call.id),
                 zadarma_call_id
             )
             logger.info(f"✅ Background: Started audio bridge for call {call.id}")
+            logger.info(f"ℹ️ Audio bridge ready - agent can now have full conversation with caller")
             
             # Send notification to user (non-blocking)
             try:
@@ -1265,13 +1327,14 @@ async def handle_ivr_response(
     )
     
     if greeting_completed:
-        logger.info("✅ Greeting completed - call is ready for conversation")
+        logger.info("✅ IVR greeting completed - transitioning to agent conversation")
         logger.info("ℹ️ Audio bridge should be active for full conversation")
-        logger.info("ℹ️ Returning acknowledgment to prevent infinite loop (following simple_agent pattern)")
+        logger.info("ℹ️ Agent will now handle the conversation (like web agent)")
         
-        # Following simple_agent pattern: return simple acknowledgment
-        # This prevents infinite loop of repeating the greeting
-        # The audio bridge set up in NOTIFY_START will handle the actual conversation
+        # After IVR greeting completes, the agent service should take over
+        # The audio bridge set up in background should be ready
+        # Return acknowledgment - the call continues with agent via audio streaming
+        # This is different from simple_agent which just ends the call
         return {"status": "ok"}
     
     # If user provided DTMF input, handle it
