@@ -806,19 +806,74 @@ async def handle_call_start(
     
     logger.info(f"✅ Agent found: {agent.id} ({agent.name})")
     
-    # Create call record
+    # Create call record (minimal, fast operation)
     logger.info(f"📝 Creating call record...")
     call = await create_call_record(
         db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_START"
     )
-    logger.info(f"✅ Call record created: ID={call.id}, Session ID={call.session_id}")
+    logger.info(f"✅ Call record created: ID={call.id}")
     
-    # Start voice session for phone call
-    # This sets up the audio bridge between Zadarma and Gemini
-    # Note: We're using IVR for the initial greeting (like simple_agent),
-    # but we still set up the agent service and audio bridge in case
-    # audio streaming is needed for the conversation after the greeting.
+    # CRITICAL: Return IVR response IMMEDIATELY (like simple_agent)
+    # This must happen fast to answer the call before timeout
+    # Following simple_agent pattern: return IVR response to answer call
+    
+    # Determine greeting based on agent configuration
+    language_code = agent.language[:2] if agent.language else "en"
+    
+    # Map language codes to Zadarma language codes
+    zadarma_language_map = {
+        "fr": "fr",
+        "en": "en",
+        "es": "es",
+        "de": "de",
+        "it": "it",
+        "pl": "pl",
+        "ru": "ru"
+    }
+    zadarma_lang = zadarma_language_map.get(language_code, "en")
+    
+    # Use agent's greeting if available and short enough for ivr_say
+    # Otherwise use simple ivr_saypopular (like simple_agent)
+    if agent.greeting and len(agent.greeting) < 200:  # Keep it short for reliability
+        greeting_text = agent.greeting
+        logger.info(f"Using agent's custom greeting via ivr_say: {greeting_text[:50]}...")
+        response = {
+            "ivr_say": greeting_text,
+            "language": zadarma_lang
+        }
+    else:
+        # Use simple greeting (like simple_agent)
+        # ivr_saypopular: 1 = "Hello" in English
+        # This is the most reliable option that works on all Zadarma plans
+        logger.info(f"Using default greeting (ivr_saypopular: 1) in {zadarma_lang}")
+        response = {
+            "ivr_saypopular": 1,
+            "language": zadarma_lang
+        }
+    
+    logger.info(f"📤 Returning IVR response IMMEDIATELY to answer call: {json.dumps(response)}")
+    
+    # Start background task for agent service setup and notifications
+    # This doesn't block the IVR response - call is answered immediately
+    asyncio.create_task(_setup_agent_service_background(db, call, agent, zadarma_call_id))
+    
+    # Return response immediately (critical for call to be answered)
+    return response
+
+
+async def _setup_agent_service_background(
+    db: Session,
+    call: Call,
+    agent: VoiceAgent,
+    zadarma_call_id: str
+):
+    """
+    Background task to set up agent service and audio bridge
+    This runs asynchronously after the IVR response is returned
+    """
     try:
+        logger.info(f"🔄 Starting background setup for call {call.id}")
+        
         from app.services.agent_service import FrenchVoiceAgentService
         from app.api.websocket import manager
         from app.services.phone_audio_bridge import phone_audio_manager
@@ -827,149 +882,52 @@ async def handle_call_start(
         import uuid
         session_id = call.session_id or f"phone_{zadarma_call_id}_{uuid.uuid4().hex[:8]}"
         call.session_id = session_id
-        db.commit()
-        db.refresh(call)
         
-        # Initialize agent service
-        agent_service = FrenchVoiceAgentService(agent, call)
-        manager.agent_services[session_id] = agent_service
-        
-        # Start the voice session
-        # Note: We're using IVR for the greeting, so we skip the Gemini greeting trigger
-        # The greeting will be played via IVR response below
-        await agent_service.start_session()
-        logger.info(f"Started voice session for phone call {call.id} with session {session_id}")
-        logger.info("ℹ️ Greeting will be played via IVR (not Gemini) to follow simple_agent pattern")
-        
-        # Create and start phone audio bridge
-        # This handles bidirectional audio streaming between Zadarma and Gemini
-        # It will be ready if audio streaming is needed after the IVR greeting
-        bridge = await phone_audio_manager.create_bridge(
-            agent_service,
-            str(call.id),
-            zadarma_call_id
-        )
-        logger.info(f"Started phone audio bridge for call {call.id} (ready for conversation after greeting)")
-        
-        # ⚠️ IMPORTANT: For PBX extensions with webhook forwarding, audio flows through SIP, not HTTP
-        # The webhook only handles call control. For audio to work, you need:
-        # 1. SIP client registered to the extension
-        # 2. RTP audio streaming through SIP
-        # 3. Audio bridge between SIP and Gemini API
-        # 
-        # Currently, the phone_audio_bridge expects HTTP audio endpoints, which don't work with
-        # PBX extension webhook forwarding. Audio must flow through SIP connection.
-        logger.warning(
-            "⚠️ AUDIO WARNING: PBX extensions with webhook forwarding require SIP connection for audio. "
-            "The call will be answered but no audio will be transmitted until SIP client is implemented. "
-            "See docs/ZADARMA_INCOMING_CALL_SCENARIO_SETUP.md for details."
-        )
-    
-    except Exception as e:
-        logger.error(f"Failed to start voice session for phone call {call.id}: {e}", exc_info=True)
-        # Continue anyway - the call record is created
-    
-    # Send notification to user
-    notification_service = get_notification_service()
-    try:
-        user = db.query(User).filter(User.id == agent.user_id).first()
-        if user and user.email:
-            await notification_service.send_call_notification(db, call, "incoming")
-    except Exception as e:
-        logger.error(f"Failed to send notification: {e}")
-    
-    logger.info("=" * 80)
-    logger.info(f"✅ CALL START HANDLING COMPLETE")
-    logger.info(f"Call ID: {call.id}")
-    logger.info(f"Session ID: {call.session_id}")
-    logger.info(f"Agent: {agent.id} ({agent.name})")
-    logger.info("=" * 80)
-    logger.info("⚠️ DIAGNOSTIC: If call keeps ringing but doesn't answer:")
-    logger.info("   1. Check if you receive NOTIFY_INTERNAL webhook (call reached extension)")
-    logger.info("   2. Check extension status in Zadarma: My PBX → Extensions")
-    logger.info("   3. Extension MUST be ONLINE (green) for call to be answered")
-    logger.info("   4. If offline, you need SIP client registration (not yet implemented)")
-    logger.info("=" * 80)
-    
-    # Return IVR response to Zadarma (following simple_agent pattern)
-    # This will play a greeting using Zadarma's IVR system
-    # After the greeting, we'll handle the conversation in NOTIFY_IVR
-    
-    # Determine greeting based on agent configuration and time of day
-    from datetime import datetime
-    current_hour = datetime.utcnow().hour
-    
-    # Use agent's greeting if available, otherwise use time-based greeting
-    if agent.greeting:
-        # Agent has a custom greeting - try to use ivr_say if supported
-        # Note: ivr_say may require specific Zadarma plan
-        # For now, we'll use a time-appropriate greeting that matches the agent's language
-        greeting_text = agent.greeting
-        logger.info(f"Using agent's custom greeting: {greeting_text[:50]}...")
-        
-        # Try to use ivr_say for custom text (if supported by Zadarma plan)
-        # Fallback to ivr_saypopular if ivr_say is not supported
-        language_code = agent.language[:2] if agent.language else "en"
-        
-        # Map language codes to Zadarma language codes
-        zadarma_language_map = {
-            "fr": "fr",
-            "en": "en",
-            "es": "es",
-            "de": "de",
-            "it": "it",
-            "pl": "pl",
-            "ru": "ru"
-        }
-        zadarma_lang = zadarma_language_map.get(language_code, "en")
-        
-        # Use ivr_say if we have custom greeting text (may require premium plan)
-        # Otherwise fall back to time-based ivr_saypopular
-        if greeting_text and len(greeting_text) < 500:  # Zadarma may have length limits
-            response = {
-                "ivr_say": greeting_text,
-                "language": zadarma_lang
-            }
-            logger.info(f"Using ivr_say with custom greeting in {zadarma_lang}")
-        else:
-            # Fallback: Use time-based greeting
-            if current_hour < 12:
-                greeting_phrase = 1  # "Hello" or "Good morning" equivalent
-            elif current_hour < 18:
-                greeting_phrase = 1  # "Hello" or "Good afternoon" equivalent
-            else:
-                greeting_phrase = 1  # "Hello" or "Good evening" equivalent
+        # Get a new DB session for background task
+        from app.models.database import SessionLocal
+        bg_db = SessionLocal()
+        try:
+            # Refresh call in new session
+            call = bg_db.query(Call).filter(Call.id == call.id).first()
+            if call:
+                call.session_id = session_id
+                bg_db.commit()
+                bg_db.refresh(call)
             
-            response = {
-                "ivr_saypopular": greeting_phrase,
-                "language": zadarma_lang
-            }
-            logger.info(f"Using ivr_saypopular (phrase {greeting_phrase}) in {zadarma_lang}")
-    else:
-        # No custom greeting - use time-based greeting
-        language_code = agent.language[:2] if agent.language else "en"
-        zadarma_language_map = {
-            "fr": "fr",
-            "en": "en",
-            "es": "es",
-            "de": "de",
-            "it": "it",
-            "pl": "pl",
-            "ru": "ru"
-        }
-        zadarma_lang = zadarma_language_map.get(language_code, "en")
-        
-        # Use simple greeting (like simple_agent)
-        # ivr_saypopular: 1 = "Hello" in English
-        response = {
-            "ivr_saypopular": 1,
-            "language": zadarma_lang
-        }
-        logger.info(f"Using default greeting (ivr_saypopular: 1) in {zadarma_lang}")
-    
-    logger.info(f"📤 Returning IVR response to Zadarma for call {call.id}: {json.dumps(response, indent=2)}")
-    logger.info("ℹ️ After greeting is played, NOTIFY_IVR will be received to continue conversation")
-    return response
+            # Initialize agent service
+            agent_service = FrenchVoiceAgentService(agent, call)
+            manager.agent_services[session_id] = agent_service
+            
+            # Start the voice session (but don't trigger greeting - IVR handles that)
+            await agent_service.start_session()
+            logger.info(f"✅ Background: Started voice session for call {call.id}")
+            
+            # Create phone audio bridge (for future audio streaming if needed)
+            bridge = await phone_audio_manager.create_bridge(
+                agent_service,
+                str(call.id),
+                zadarma_call_id
+            )
+            logger.info(f"✅ Background: Started audio bridge for call {call.id}")
+            
+            # Send notification to user (non-blocking)
+            try:
+                from app.services.notification_service import get_notification_service
+                from app.models import User
+                notification_service = get_notification_service()
+                user = bg_db.query(User).filter(User.id == agent.user_id).first()
+                if user and user.email:
+                    await notification_service.send_call_notification(bg_db, call, "incoming")
+                    logger.info(f"✅ Background: Sent notification for call {call.id}")
+            except Exception as e:
+                logger.error(f"Failed to send notification: {e}")
+            
+        finally:
+            bg_db.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Background setup failed for call {call.id}: {e}", exc_info=True)
+        # Don't fail the call - IVR greeting already played
 
 
 async def handle_call_answer(
