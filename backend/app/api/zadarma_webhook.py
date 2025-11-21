@@ -21,10 +21,86 @@ from app.core.security import get_current_user
 from app.services.notification_service import get_notification_service
 from app.api.websocket import call_monitor_manager
 import asyncio
+import time
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# In-memory cache for agent greetings (phone_number -> (greeting, language))
+# This allows ultra-fast lookup without database queries
+_agent_greeting_cache: Dict[str, tuple] = {}  # {phone_number: (greeting, language)}
+_cache_last_refresh = 0
+CACHE_TTL = 300  # Refresh cache every 5 minutes
+
+
+def _refresh_greeting_cache_sync(db: Session):
+    """Refresh the in-memory greeting cache from database (synchronous)"""
+    global _agent_greeting_cache, _cache_last_refresh
+    
+    try:
+        # Query all phone numbers with their agent greetings
+        result = db.execute(text("""
+            SELECT pn.phone_number, a.greeting, a.language
+            FROM phone_numbers pn
+            INNER JOIN voice_agents a ON pn.agent_id = a.id
+            WHERE pn.agent_id IS NOT NULL AND a.greeting IS NOT NULL
+        """))
+        
+        new_cache = {}
+        for row in result:
+            phone_number = row[0]
+            greeting = row[1]
+            language = row[2]
+            if phone_number and greeting:
+                # Store multiple variations for fast lookup
+                new_cache[phone_number] = (greeting, language)
+                # Also store normalized version
+                normalized = normalize_phone_for_matching(phone_number)
+                if normalized and normalized != phone_number:
+                    new_cache[normalized] = (greeting, language)
+                # Store without + prefix
+                if phone_number.startswith("+"):
+                    new_cache[phone_number[1:]] = (greeting, language)
+        
+        _agent_greeting_cache = new_cache
+        _cache_last_refresh = time.time()
+        logger.info(f"✅ Greeting cache refreshed: {len(new_cache)} entries (including variations)")
+    except Exception as e:
+        logger.error(f"Failed to refresh greeting cache: {e}")
+
+
+async def _refresh_cache_background(db: Session):
+    """Refresh cache in background (non-blocking)"""
+    try:
+        from app.models.database import SessionLocal
+        bg_db = SessionLocal()
+        try:
+            _refresh_greeting_cache_sync(bg_db)
+        finally:
+            bg_db.close()
+    except Exception as e:
+        logger.debug(f"Background cache refresh failed: {e}")
+
+
+def _get_cached_greeting(phone_number: str) -> Optional[tuple]:
+    """Get greeting from cache (instant, no DB query)"""
+    # Try exact match first
+    if phone_number in _agent_greeting_cache:
+        return _agent_greeting_cache[phone_number]
+    
+    # Try normalized version
+    normalized = normalize_phone_for_matching(phone_number)
+    if normalized and normalized != phone_number and normalized in _agent_greeting_cache:
+        return _agent_greeting_cache[normalized]
+    
+    # Try without + prefix
+    if phone_number.startswith("+"):
+        without_plus = phone_number[1:]
+        if without_plus in _agent_greeting_cache:
+            return _agent_greeting_cache[without_plus]
+    
+    return None
 
 
 def verify_zadarma_signature(payload: str, signature: str) -> bool:
@@ -787,13 +863,45 @@ async def handle_call_start(
     
     try:
         # CRITICAL: Return response IMMEDIATELY with ZERO database operations
-        # Even a "fast" query can cause timeout - Zadarma needs response in < 100ms
-        # Use simple greeting to ensure call is answered, then lookup agent in background
+        # Use in-memory cache for instant greeting lookup (no DB query)
         
-        response = {
-            "ivr_saypopular": 1,
-            "language": "en"
-        }
+        # Try to get agent's greeting from cache (instant lookup)
+        cached = _get_cached_greeting(called_did)
+        agent_greeting = None
+        agent_language = "en"
+        
+        if cached:
+            agent_greeting, agent_language = cached
+            logger.info(f"✅ Cache hit: Found greeting for {called_did} ({len(agent_greeting)} chars)")
+        else:
+            # Cache miss - refresh cache in background if empty (non-blocking)
+            if not _agent_greeting_cache:
+                logger.info("Cache is empty - refreshing in background")
+                asyncio.create_task(_refresh_cache_background(db))
+            logger.debug(f"Cache miss: No greeting cached for {called_did}")
+        
+        # Determine language code
+        zadarma_language_map = {"fr": "fr", "en": "en", "es": "es", "de": "de", "it": "it", "pl": "pl", "ru": "ru"}
+        zadarma_lang = zadarma_language_map.get(agent_language[:2] if agent_language else "en", "en")
+        
+        # Use agent's greeting if available and reasonable length for IVR
+        # ivr_say has limits - keep it under 200 chars for reliability
+        if agent_greeting and len(agent_greeting) <= 200:
+            response = {
+                "ivr_say": agent_greeting,
+                "language": zadarma_lang
+            }
+            logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
+        else:
+            # Fallback to simple greeting if no cached greeting or too long
+            response = {
+                "ivr_saypopular": 1,
+                "language": zadarma_lang
+            }
+            if agent_greeting:
+                logger.info(f"⚠️ Agent greeting too long ({len(agent_greeting)} chars), using simple greeting")
+            else:
+                logger.info(f"Using simple greeting (ivr_saypopular: 1) - cache miss or no greeting")
         
         elapsed = (time.time() - start_time) * 1000
         print(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms (PRINT)")
@@ -866,6 +974,14 @@ async def _handle_call_start_background(
                 bg_db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_START"
             )
             logger.info(f"✅ Background: Call record created: ID={call.id}")
+            
+            # Refresh cache if it's stale (non-blocking)
+            global _cache_last_refresh
+            if time.time() - _cache_last_refresh > CACHE_TTL:
+                try:
+                    _refresh_greeting_cache_sync(bg_db)
+                except Exception as e:
+                    logger.debug(f"Cache refresh failed (non-critical): {e}")
             
             # Start agent service setup in background
             asyncio.create_task(_setup_agent_service_background(
