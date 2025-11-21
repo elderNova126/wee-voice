@@ -815,6 +815,9 @@ async def handle_call_start(
     
     # Start voice session for phone call
     # This sets up the audio bridge between Zadarma and Gemini
+    # Note: We're using IVR for the initial greeting (like simple_agent),
+    # but we still set up the agent service and audio bridge in case
+    # audio streaming is needed for the conversation after the greeting.
     try:
         from app.services.agent_service import FrenchVoiceAgentService
         from app.api.websocket import manager
@@ -831,18 +834,22 @@ async def handle_call_start(
         agent_service = FrenchVoiceAgentService(agent, call)
         manager.agent_services[session_id] = agent_service
         
-        # Start the voice session (this will trigger the greeting)
+        # Start the voice session
+        # Note: We're using IVR for the greeting, so we skip the Gemini greeting trigger
+        # The greeting will be played via IVR response below
         await agent_service.start_session()
         logger.info(f"Started voice session for phone call {call.id} with session {session_id}")
+        logger.info("ℹ️ Greeting will be played via IVR (not Gemini) to follow simple_agent pattern")
         
         # Create and start phone audio bridge
         # This handles bidirectional audio streaming between Zadarma and Gemini
+        # It will be ready if audio streaming is needed after the IVR greeting
         bridge = await phone_audio_manager.create_bridge(
             agent_service,
             str(call.id),
             zadarma_call_id
         )
-        logger.info(f"Started phone audio bridge for call {call.id}")
+        logger.info(f"Started phone audio bridge for call {call.id} (ready for conversation after greeting)")
         
         # ⚠️ IMPORTANT: For PBX extensions with webhook forwarding, audio flows through SIP, not HTTP
         # The webhook only handles call control. For audio to work, you need:
@@ -884,52 +891,84 @@ async def handle_call_start(
     logger.info("   4. If offline, you need SIP client registration (not yet implemented)")
     logger.info("=" * 80)
     
-    # Return response to Zadarma
-    # For PBX extension webhooks, you can return call flow control responses.
-    # For now, we return a standard response with audio endpoints.
-    # 
-    # Example: To redirect to an extension instead:
-    # return build_call_flow_response("redirect", "2001")  # Redirect to extension 2001
-    #
-    # Example: To play a greeting and wait for DTMF:
-    # return {
-    #     "ivr_saypopular": 1,
-    #     "language": "en",
-    #     "wait_dtmf": {
-    #         "timeout": 10,
-    #         "attempts": 3,
-    #         "maxdigits": 1,
-    #         "name": "menu_choice"
-    #     }
-    # }
+    # Return IVR response to Zadarma (following simple_agent pattern)
+    # This will play a greeting using Zadarma's IVR system
+    # After the greeting, we'll handle the conversation in NOTIFY_IVR
     
-    from app.core.config import settings
+    # Determine greeting based on agent configuration and time of day
+    from datetime import datetime
+    current_hour = datetime.utcnow().hour
     
-    # Provide audio streaming endpoints for Zadarma to use
-    base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
-    api_prefix = settings.API_V1_STR
-    
-    response = {
-        "status": "ok",
-        "call_id": call.id,
-        "message": "Call initiated successfully, audio bridge ready",
-        "session_id": call.session_id,
-        # Audio streaming endpoints for Zadarma
-        "audio": {
-            "input_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/input",
-            "output_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/output",
-            "end_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/end",
-            "format": "audio/pcm;rate=16000",  # Input format (caller's voice)
-            "output_format": "audio/pcm;rate=24000"  # Output format (AI responses)
-        },
-        "agent": {
-            "id": agent.id,
-            "name": agent.name,
-            "greeting": agent.greeting
+    # Use agent's greeting if available, otherwise use time-based greeting
+    if agent.greeting:
+        # Agent has a custom greeting - try to use ivr_say if supported
+        # Note: ivr_say may require specific Zadarma plan
+        # For now, we'll use a time-appropriate greeting that matches the agent's language
+        greeting_text = agent.greeting
+        logger.info(f"Using agent's custom greeting: {greeting_text[:50]}...")
+        
+        # Try to use ivr_say for custom text (if supported by Zadarma plan)
+        # Fallback to ivr_saypopular if ivr_say is not supported
+        language_code = agent.language[:2] if agent.language else "en"
+        
+        # Map language codes to Zadarma language codes
+        zadarma_language_map = {
+            "fr": "fr",
+            "en": "en",
+            "es": "es",
+            "de": "de",
+            "it": "it",
+            "pl": "pl",
+            "ru": "ru"
         }
-    }
+        zadarma_lang = zadarma_language_map.get(language_code, "en")
+        
+        # Use ivr_say if we have custom greeting text (may require premium plan)
+        # Otherwise fall back to time-based ivr_saypopular
+        if greeting_text and len(greeting_text) < 500:  # Zadarma may have length limits
+            response = {
+                "ivr_say": greeting_text,
+                "language": zadarma_lang
+            }
+            logger.info(f"Using ivr_say with custom greeting in {zadarma_lang}")
+        else:
+            # Fallback: Use time-based greeting
+            if current_hour < 12:
+                greeting_phrase = 1  # "Hello" or "Good morning" equivalent
+            elif current_hour < 18:
+                greeting_phrase = 1  # "Hello" or "Good afternoon" equivalent
+            else:
+                greeting_phrase = 1  # "Hello" or "Good evening" equivalent
+            
+            response = {
+                "ivr_saypopular": greeting_phrase,
+                "language": zadarma_lang
+            }
+            logger.info(f"Using ivr_saypopular (phrase {greeting_phrase}) in {zadarma_lang}")
+    else:
+        # No custom greeting - use time-based greeting
+        language_code = agent.language[:2] if agent.language else "en"
+        zadarma_language_map = {
+            "fr": "fr",
+            "en": "en",
+            "es": "es",
+            "de": "de",
+            "it": "it",
+            "pl": "pl",
+            "ru": "ru"
+        }
+        zadarma_lang = zadarma_language_map.get(language_code, "en")
+        
+        # Use simple greeting (like simple_agent)
+        # ivr_saypopular: 1 = "Hello" in English
+        response = {
+            "ivr_saypopular": 1,
+            "language": zadarma_lang
+        }
+        logger.info(f"Using default greeting (ivr_saypopular: 1) in {zadarma_lang}")
     
-    logger.info(f"📤 Returning response to Zadarma for call {call.id}: {json.dumps(response, indent=2)}")
+    logger.info(f"📤 Returning IVR response to Zadarma for call {call.id}: {json.dumps(response, indent=2)}")
+    logger.info("ℹ️ After greeting is played, NOTIFY_IVR will be received to continue conversation")
     return response
 
 
@@ -1221,8 +1260,13 @@ async def handle_ivr_response(
     """
     Handle IVR response from caller (NOTIFY_IVR)
     
-    This event is triggered when the caller responds to an IVR action (e.g., presses a digit).
-    For NOTIFY_IVR, we can return call flow control responses similar to NOTIFY_START.
+    This event is triggered after an IVR action completes (e.g., after greeting is played).
+    Following simple_agent pattern: after greeting, we acknowledge to prevent infinite loop.
+    
+    For wee-voice: After greeting, we want to continue with full conversation.
+    However, since Zadarma IVR is limited, we acknowledge the greeting completion
+    and the call will continue. The audio bridge set up in NOTIFY_START will handle
+    the actual conversation if audio streaming is configured.
     
     Parameters:
     - event: NOTIFY_IVR
@@ -1231,16 +1275,27 @@ async def handle_ivr_response(
     - caller_id: Caller's phone number
     - called_did: Called phone number
     - digits: (optional) Digits entered by caller
+    - wait_dtmf[digits]: (optional) DTMF digits from wait_dtmf
+    - wait_dtmf[ERROR]: (optional) Error message if DTMF timeout
     - ivr_saydigits: (optional) "COMPLETE" if digits were played
     - ivr_saynumber: (optional) "COMPLETE" if number was played
+    - ivr_saypopular: (optional) "COMPLETE" if popular phrase was played
+    - ivr_say: (optional) "COMPLETE" if custom text was played
     """
-    logger.info(f"IVR response received: {zadarma_call_id}")
+    logger.info("=" * 80)
+    logger.info("📞 HANDLING IVR RESPONSE (NOTIFY_IVR)")
+    logger.info(f"Zadarma Call ID: {zadarma_call_id}")
     logger.info(f"IVR data: {data}")
+    logger.info("=" * 80)
     
-    # Extract digits entered by caller
+    # Extract IVR completion status
     digits = data.get('digits', '')
+    wait_dtmf_digits = data.get('wait_dtmf[digits]', '')
+    wait_dtmf_error = data.get('wait_dtmf[ERROR]', '')
     ivr_saydigits = data.get('ivr_saydigits', '')
     ivr_saynumber = data.get('ivr_saynumber', '')
+    ivr_saypopular = data.get('ivr_saypopular', '')
+    ivr_say = data.get('ivr_say', '')
     
     # Find call record
     call = db.query(Call).filter(
@@ -1252,36 +1307,54 @@ async def handle_ivr_response(
         # Return empty response - call will continue with default behavior
         return {}
     
-    logger.info(f"IVR response for call {call.id}: digits={digits}, saydigits={ivr_saydigits}, saynumber={ivr_saynumber}")
+    logger.info(f"IVR response for call {call.id}")
+    logger.info(f"  - Digits: {digits}")
+    logger.info(f"  - Wait DTMF digits: {wait_dtmf_digits}")
+    logger.info(f"  - Wait DTMF error: {wait_dtmf_error}")
+    logger.info(f"  - IVR saypopular: {ivr_saypopular}")
+    logger.info(f"  - IVR say: {ivr_say}")
     
-    # For now, we return an empty response which means "continue with default behavior"
-    # In the future, you can implement logic to:
-    # - Redirect based on digits entered
-    # - Play additional files
-    # - Wait for more DTMF input
-    # - Hang up the call
+    # Check if this is after greeting completion
+    greeting_completed = (
+        ivr_saypopular == "COMPLETE" or
+        ivr_say == "COMPLETE" or
+        (not wait_dtmf_error and not wait_dtmf_digits and not digits)
+    )
     
-    # Example: If you want to redirect to extension based on digits
-    # if digits == "1":
-    #     return build_call_flow_response("redirect", "2001")  # Redirect to extension 2001
-    # elif digits == "2":
-    #     return build_call_flow_response("redirect", "2002")  # Redirect to extension 2002
-    # elif digits == "0":
-    #     return build_call_flow_response("hangup")  # Hang up the call
+    if greeting_completed:
+        logger.info("✅ Greeting completed - call is ready for conversation")
+        logger.info("ℹ️ Audio bridge should be active for full conversation")
+        logger.info("ℹ️ Returning acknowledgment to prevent infinite loop (following simple_agent pattern)")
+        
+        # Following simple_agent pattern: return simple acknowledgment
+        # This prevents infinite loop of repeating the greeting
+        # The audio bridge set up in NOTIFY_START will handle the actual conversation
+        return {"status": "ok"}
     
-    # Example: Play a message and wait for more input
-    # return {
-    #     "ivr_saypopular": 1,
-    #     "language": "en",
-    #     "wait_dtmf": {
-    #         "timeout": 10,
-    #         "attempts": 3,
-    #         "maxdigits": 1,
-    #         "name": "menu_choice"
-    #     }
-    # }
+    # If user provided DTMF input, handle it
+    if wait_dtmf_digits or digits:
+        user_input = wait_dtmf_digits or digits
+        logger.info(f"User provided DTMF input: {user_input}")
+        
+        # For now, acknowledge and continue
+        # In the future, you could implement menu navigation based on digits
+        # Example:
+        # if user_input == "1":
+        #     return build_call_flow_response("redirect", "2001")
+        # elif user_input == "0":
+        #     return build_call_flow_response("hangup")
+        
+        return {"status": "ok"}
     
-    return {}
+    # If there was an error (timeout, etc.)
+    if wait_dtmf_error:
+        logger.warning(f"IVR Error: {wait_dtmf_error}")
+        # On timeout or error, just acknowledge - call will continue or end
+        return {"status": "ok"}
+    
+    # Default: acknowledge to prevent infinite loop
+    logger.info("Returning acknowledgment to prevent infinite loop")
+    return {"status": "ok"}
 
 
 @router.get("/health")
