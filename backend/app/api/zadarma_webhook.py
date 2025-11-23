@@ -21,130 +21,10 @@ from app.core.security import get_current_user
 from app.services.notification_service import get_notification_service
 from app.api.websocket import call_monitor_manager
 import asyncio
-import time
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# In-memory cache for agent greetings (phone_number -> (greeting, language))
-# This allows ultra-fast lookup without database queries
-_agent_greeting_cache: Dict[str, tuple] = {}  # {phone_number: (greeting, language)}
-_cache_last_refresh = 0
-CACHE_TTL = 300  # Refresh cache every 5 minutes
-
-
-def _refresh_greeting_cache_sync(db: Session):
-    """Refresh the in-memory greeting cache from database (synchronous)"""
-    global _agent_greeting_cache, _cache_last_refresh
-    
-    try:
-        # First, check if we have any phone numbers with agents
-        phone_count_result = db.execute(text("""
-            SELECT COUNT(*) 
-            FROM phone_numbers 
-            WHERE agent_id IS NOT NULL
-        """))
-        phone_count = phone_count_result.scalar() or 0
-        logger.info(f"🔍 Found {phone_count} phone numbers with agents assigned")
-        
-        # Check if we have any agents with greetings
-        greeting_count_result = db.execute(text("""
-            SELECT COUNT(*) 
-            FROM voice_agents 
-            WHERE greeting IS NOT NULL AND TRIM(greeting) != ''
-        """))
-        greeting_count = greeting_count_result.scalar() or 0
-        logger.info(f"🔍 Found {greeting_count} agents with greetings set")
-        
-        # Query all phone numbers with their agent greetings
-        result = db.execute(text("""
-            SELECT pn.phone_number, a.greeting, a.language, a.id as agent_id, pn.id as phone_id
-            FROM phone_numbers pn
-            INNER JOIN voice_agents a ON pn.agent_id = a.id
-            WHERE pn.agent_id IS NOT NULL 
-              AND a.greeting IS NOT NULL 
-              AND TRIM(a.greeting) != ''
-        """))
-        
-        new_cache = {}
-        row_count = 0
-        for row in result:
-            row_count += 1
-            phone_number = row[0]
-            greeting = row[1]
-            language = row[2] or "en"
-            agent_id = row[3]
-            phone_id = row[4]
-            
-            logger.debug(f"Processing: phone_id={phone_id}, agent_id={agent_id}, phone={phone_number}, greeting_len={len(greeting) if greeting else 0}")
-            
-            if phone_number and greeting and greeting.strip():
-                # Store multiple variations for fast lookup
-                new_cache[phone_number] = (greeting.strip(), language)
-                
-                # Also store normalized version
-                try:
-                    normalized = normalize_phone_for_matching(phone_number)
-                    if normalized and normalized != phone_number:
-                        new_cache[normalized] = (greeting.strip(), language)
-                except Exception as norm_error:
-                    logger.debug(f"Normalization failed for {phone_number}: {norm_error}")
-                
-                # Store without + prefix
-                if phone_number.startswith("+"):
-                    new_cache[phone_number[1:]] = (greeting.strip(), language)
-        
-        _agent_greeting_cache = new_cache
-        _cache_last_refresh = time.time()
-        logger.info(f"✅ Greeting cache refreshed: {row_count} rows processed, {len(new_cache)} cache entries (including variations)")
-        if new_cache:
-            # Log first few entries for debugging
-            sample_entries = list(new_cache.items())[:3]
-            for phone, (greeting, lang) in sample_entries:
-                logger.info(f"  Sample: {phone} -> {greeting[:30]}... ({lang})")
-        else:
-            logger.warning(f"⚠️ Cache refresh completed but cache is EMPTY!")
-            logger.warning(f"   Phone numbers with agents: {phone_count}")
-            logger.warning(f"   Agents with greetings: {greeting_count}")
-            logger.warning(f"   Rows processed: {row_count}")
-            logger.warning(f"   Check: Do phone_numbers have agent_id? Do agents have greeting field set?")
-            logger.warning(f"   Try: SELECT pn.phone_number, a.greeting FROM phone_numbers pn INNER JOIN voice_agents a ON pn.agent_id = a.id WHERE a.greeting IS NOT NULL")
-    except Exception as e:
-        logger.error(f"❌ Failed to refresh greeting cache: {e}", exc_info=True)
-
-
-async def _refresh_cache_background(db: Session):
-    """Refresh cache in background (non-blocking)"""
-    try:
-        from app.models.database import SessionLocal
-        bg_db = SessionLocal()
-        try:
-            _refresh_greeting_cache_sync(bg_db)
-        finally:
-            bg_db.close()
-    except Exception as e:
-        logger.debug(f"Background cache refresh failed: {e}")
-
-
-def _get_cached_greeting(phone_number: str) -> Optional[tuple]:
-    """Get greeting from cache (instant, no DB query)"""
-    # Try exact match first
-    if phone_number in _agent_greeting_cache:
-        return _agent_greeting_cache[phone_number]
-    
-    # Try normalized version
-    normalized = normalize_phone_for_matching(phone_number)
-    if normalized and normalized != phone_number and normalized in _agent_greeting_cache:
-        return _agent_greeting_cache[normalized]
-    
-    # Try without + prefix
-    if phone_number.startswith("+"):
-        without_plus = phone_number[1:]
-        if without_plus in _agent_greeting_cache:
-            return _agent_greeting_cache[without_plus]
-    
-    return None
 
 
 def verify_zadarma_signature(payload: str, signature: str) -> bool:
@@ -616,8 +496,6 @@ async def zadarma_webhook(
     - NOTIFY_IVR: Caller response to IVR action (can return call flow control)
     """
     # Log immediately at function entry - this should ALWAYS appear
-    import time
-    webhook_start_time = time.time()
     print("=" * 80)
     print("🔔 ZADARMA WEBHOOK RECEIVED (PRINT)")
     print(f"Request method: {request.method}")
@@ -766,68 +644,11 @@ async def zadarma_webhook(
         logger.info(f"🔍 Event type: {event}")
         
         if event == "NOTIFY_START":
-            pre_handler_time = (time.time() - webhook_start_time) * 1000
-            print(f"📞 NOTIFY_START received - Incoming call initiated (PRINT) - {pre_handler_time:.1f}ms elapsed")
-            logger.info(f"📞 NOTIFY_START received - Incoming call initiated ({pre_handler_time:.1f}ms to handler)")
-            logger.info("ℹ️ Direct DID webhook (no PBX extension) - must respond IMMEDIATELY")
-            
-            # CRITICAL: For direct DID webhooks, Zadarma has strict timeout (< 1 second)
-            # Use in-memory cache for INSTANT greeting lookup (zero DB queries, zero delay)
-            response_start = time.time()
-            
-            # Instant cache lookup (dict lookup, < 0.1ms)
-            cached = _get_cached_greeting(called_did)
-            agent_greeting = None
-            agent_language = "en"
-            
-            if cached:
-                agent_greeting, agent_language = cached
-                logger.info(f"✅ Cache hit: Found greeting for {called_did} ({len(agent_greeting)} chars)")
-            else:
-                logger.info(f"⚠️ Cache miss: No greeting cached for {called_did} (cache size: {len(_agent_greeting_cache)})")
-            
-            # Determine language code
-            zadarma_language_map = {"fr": "fr", "en": "en", "es": "es", "de": "de", "it": "it", "pl": "pl", "ru": "ru"}
-            zadarma_lang = zadarma_language_map.get(agent_language[:2] if agent_language else "en", "en")
-            
-            # Use agent's greeting if available and reasonable length for IVR
-            if agent_greeting and len(agent_greeting) <= 200:
-                response = {
-                    "ivr_say": agent_greeting,
-                    "language": zadarma_lang
-                }
-                logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
-            else:
-                # Fallback to simple greeting if no cached greeting or too long
-                response = {
-                    "ivr_saypopular": 1,
-                    "language": zadarma_lang
-                }
-                if agent_greeting:
-                    logger.info(f"⚠️ Agent greeting too long ({len(agent_greeting)} chars), using simple greeting")
-                else:
-                    logger.info(f"Using simple greeting (ivr_saypopular: 1) - cache miss")
-            
-            response_time = (time.time() - response_start) * 1000
-            total_time = (time.time() - webhook_start_time) * 1000
-            
-            print(f"📤 RETURNING IMMEDIATE RESPONSE in {response_time:.1f}ms (PRINT)")
-            print(f"📤 Total time from webhook start: {total_time:.1f}ms (PRINT)")
-            print(f"📤 Response: {json.dumps(response)} (PRINT)")
-            logger.info(f"📤 RETURNING IMMEDIATE RESPONSE in {response_time:.1f}ms - {json.dumps(response)}")
-            logger.info(f"📤 Total time from webhook start: {total_time:.1f}ms")
-            
-            # Start background task for agent lookup and call record creation
-            # This runs AFTER response is returned
-            try:
-                asyncio.create_task(_handle_call_start_background(
-                    db, caller_id, called_did, zadarma_call_id, data, None
-                ))
-            except Exception as e:
-                logger.warning(f"Failed to start background task (non-critical): {e}")
-            
-            # Return response IMMEDIATELY - this is critical for direct DID webhooks
-            return response
+            print("📞 NOTIFY_START received - Incoming call initiated (PRINT)")
+            logger.info("📞 NOTIFY_START received - Incoming call initiated")
+            logger.info("ℹ️ NOTE: For PBX extensions, the call will only be answered if the extension is registered via SIP")
+            logger.info("ℹ️ If you see NOTIFY_INTERNAL next, it means the call reached the extension")
+            return await handle_call_start(db, data, caller_id, called_did, zadarma_call_id)
         
         elif event == "NOTIFY_INTERNAL":
             logger.info("📞 NOTIFY_INTERNAL received - Call reached PBX extension")
@@ -860,17 +681,7 @@ async def zadarma_webhook(
     except HTTPException:
         raise
     except Exception as e:
-        total_time = (time.time() - webhook_start_time) * 1000
-        logger.error(f"❌ ERROR processing Zadarma webhook after {total_time:.1f}ms: {e}", exc_info=True)
-        print(f"❌ ERROR processing webhook after {total_time:.1f}ms: {e} (PRINT)")
-        # For NOTIFY_START, still return IVR response to answer call
-        # This prevents Zadarma from retrying and causing "circling error"
-        if event == "NOTIFY_START":
-            logger.warning("⚠️ Returning default IVR response despite error to answer call")
-            return JSONResponse(
-                content={"ivr_saypopular": 1, "language": "en"},
-                status_code=200
-            )
+        logger.error(f"Error processing Zadarma webhook: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
@@ -951,163 +762,60 @@ async def handle_call_start(
     """
     Handle incoming call start (NOTIFY_START)
     
-    CRITICAL: Must return IVR response IMMEDIATELY to answer call before timeout.
-    NO database queries or blocking operations before returning response.
-    Following simple_agent pattern exactly: return response first, everything else in background.
+    For PBX extension webhooks, this can return call flow control responses:
     """
-    import time
-    start_time = time.time()
+    logger.info("=" * 80)
+    logger.info("📞 HANDLING CALL START (NOTIFY_START)")
+    logger.info(f"Caller ID: {caller_id}")
+    logger.info(f"Called DID: {called_did}")
+    logger.info(f"Zadarma Call ID: {zadarma_call_id}")
+    logger.info(f"Data: {data}")
+    logger.info("=" * 80)
+    logger.info("⚠️ IMPORTANT: NOTIFY_START is just a notification. The call will only be answered")
+    logger.info("   if the PBX extension is registered via SIP. Check extension status in Zadarma dashboard.")
+    logger.info("   You should receive NOTIFY_INTERNAL when the call reaches the extension.")
+    logger.info("=" * 80)
     
-    try:
-        # CRITICAL: Return response IMMEDIATELY with ZERO database operations
-        # Use in-memory cache for instant greeting lookup (no DB query)
-        
-        # Try to get agent's greeting from cache (instant lookup)
-        logger.info(f"🔍 Cache lookup for {called_did} - Cache size: {len(_agent_greeting_cache)}")
-        cached = _get_cached_greeting(called_did)
-        agent_greeting = None
-        agent_language = "en"
-        
-        if cached:
-            agent_greeting, agent_language = cached
-            logger.info(f"✅ Cache hit: Found greeting for {called_did} ({len(agent_greeting)} chars, lang: {agent_language})")
-        else:
-            # Cache miss - refresh cache in background if empty (non-blocking)
-            if not _agent_greeting_cache:
-                logger.warning(f"⚠️ Cache is EMPTY! Size: {len(_agent_greeting_cache)} - refreshing in background")
-                asyncio.create_task(_refresh_cache_background(db))
-            else:
-                logger.info(f"Cache miss: No greeting cached for {called_did} (cache has {len(_agent_greeting_cache)} entries)")
-        
-        # Determine language code
-        zadarma_language_map = {"fr": "fr", "en": "en", "es": "es", "de": "de", "it": "it", "pl": "pl", "ru": "ru"}
-        zadarma_lang = zadarma_language_map.get(agent_language[:2] if agent_language else "en", "en")
-        
-        # Use agent's greeting if available and reasonable length for IVR
-        # ivr_say has limits - keep it under 200 chars for reliability
-        if agent_greeting and len(agent_greeting) <= 200:
-            response = {
-                "ivr_say": agent_greeting,
-                "language": zadarma_lang
-            }
-            logger.info(f"✅ Using agent's greeting via ivr_say: {agent_greeting[:50]}...")
-        else:
-            # Fallback to simple greeting if no cached greeting or too long
-            response = {
-                "ivr_saypopular": 1,
-                "language": zadarma_lang
-            }
-            if agent_greeting:
-                logger.info(f"⚠️ Agent greeting too long ({len(agent_greeting)} chars), using simple greeting")
-            else:
-                logger.info(f"Using simple greeting (ivr_saypopular: 1) - cache miss or no greeting")
-        
-        elapsed = (time.time() - start_time) * 1000
-        print(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms (PRINT)")
-        print(f"📤 Response content: {json.dumps(response)} (PRINT)")
-        logger.info(f"📤 RETURNING IVR RESPONSE in {elapsed:.1f}ms - {json.dumps(response)}")
-        logger.info(f"Called DID: {called_did}, Call ID: {zadarma_call_id}")
-        
-        # Start background task AFTER creating response (non-blocking)
-        # This will lookup agent and use their greeting for future calls if needed
-        try:
-            asyncio.create_task(_handle_call_start_background(
-                db, caller_id, called_did, zadarma_call_id, data, None
-            ))
-        except Exception as e:
-            logger.warning(f"Failed to start background task (non-critical): {e}")
-        
-        # Return response immediately (critical for call to be answered)
-        # For direct DID webhooks (not PBX extensions), return plain dict
-        # FastAPI will automatically serialize it to JSON, matching Flask's jsonify()
-        # This is faster and simpler than JSONResponse
-        return response
+    """
+    - redirect: Redirect to extension/scenario
+    - hangup: End the call
+    - caller_name: Set caller name
+    - wait_dtmf: Wait for DTMF input
+    - ivr_play: Play audio file
+    - ivr_saypopular: Play popular phrase
+    - ivr_saydigits: Play digits
+    - ivr_saynumber: Play number
     
-    except Exception as e:
-        # If anything fails, still return IVR response to answer call
-        # This prevents "circling error" from Zadarma retries
-        elapsed = (time.time() - start_time) * 1000
-        logger.error(f"❌ Error in handle_call_start after {elapsed:.1f}ms: {e}", exc_info=True)
-        print(f"❌ Error in handle_call_start: {e} (PRINT)")
-        
-        # Return default response to answer call despite error
-        error_response = {"ivr_saypopular": 1, "language": "en"}
-        logger.error(f"❌ Returning fallback response due to error: {json.dumps(error_response)}")
-        return error_response
-
-
-async def _handle_call_start_background(
-    db: Session,
-    caller_id: str,
-    called_did: str,
-    zadarma_call_id: str,
-    data: Dict[str, Any],
-    fast_lookup_agent: Optional[Dict] = None
-):
+    Currently, we return audio streaming endpoints for direct call handling.
+    You can modify this to return call flow control responses if needed.
     """
-    Background task to handle agent lookup and call record creation
-    This runs AFTER the IVR response is returned
     
-    Args:
-        fast_lookup_agent: Agent info from fast lookup (if available)
-    """
+    # Find agent assigned to this phone number
+    logger.info(f"🔍 Looking up agent for phone number: {called_did}")
+    agent = await get_agent_for_phone_number(db, called_did)
+    
+    if not agent:
+        logger.error(f"❌ NO AGENT FOUND for phone number {called_did}")
+        logger.warning(f"No agent found for phone number {called_did}")
+        # Option: Return hangup response to reject the call
+        # return build_call_flow_response("hangup")
+        return {
+            "status": "error",
+            "message": f"No agent configured for number {called_did}"
+        }
+    
+    logger.info(f"✅ Agent found: {agent.id} ({agent.name})")
+    
+    # Create call record
+    logger.info(f"📝 Creating call record...")
+    call = await create_call_record(
+        db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_START"
+    )
+    logger.info(f"✅ Call record created: ID={call.id}, Session ID={call.session_id}")
+    
+    # Start voice session for phone call
+    # This sets up the audio bridge between Zadarma and Gemini
     try:
-        from app.models.database import SessionLocal
-        bg_db = SessionLocal()
-        try:
-            # Use fast lookup agent if available, otherwise do full lookup
-            if fast_lookup_agent:
-                logger.info(f"🔄 Background: Using agent from fast lookup: {fast_lookup_agent['id']}")
-                # Get full agent object
-                agent = bg_db.query(VoiceAgent).filter(VoiceAgent.id == fast_lookup_agent['id']).first()
-            else:
-                logger.info(f"🔄 Background: Looking up agent for {called_did}")
-                agent = await get_agent_for_phone_number(bg_db, called_did)
-            
-            if not agent:
-                logger.warning(f"⚠️ Background: No agent found for {called_did}")
-                return
-            
-            logger.info(f"✅ Background: Agent found: {agent.id} ({agent.name})")
-            
-            # Create call record
-            call = await create_call_record(
-                bg_db, agent, caller_id, called_did, zadarma_call_id, "NOTIFY_START"
-            )
-            logger.info(f"✅ Background: Call record created: ID={call.id}")
-            
-            # Refresh cache if it's stale (non-blocking)
-            global _cache_last_refresh
-            if time.time() - _cache_last_refresh > CACHE_TTL:
-                try:
-                    _refresh_greeting_cache_sync(bg_db)
-                except Exception as e:
-                    logger.debug(f"Cache refresh failed (non-critical): {e}")
-            
-            # Start agent service setup in background
-            asyncio.create_task(_setup_agent_service_background(
-                bg_db, call, agent, zadarma_call_id
-            ))
-            
-        finally:
-            bg_db.close()
-    except Exception as e:
-        logger.error(f"❌ Background call start handling failed: {e}", exc_info=True)
-
-
-async def _setup_agent_service_background(
-    db: Session,
-    call: Call,
-    agent: VoiceAgent,
-    zadarma_call_id: str
-):
-    """
-    Background task to set up agent service and audio bridge
-    This runs asynchronously after the IVR response is returned
-    """
-    try:
-        logger.info(f"🔄 Starting background setup for call {call.id}")
-        
         from app.services.agent_service import FrenchVoiceAgentService
         from app.api.websocket import manager
         from app.services.phone_audio_bridge import phone_audio_manager
@@ -1116,58 +824,113 @@ async def _setup_agent_service_background(
         import uuid
         session_id = call.session_id or f"phone_{zadarma_call_id}_{uuid.uuid4().hex[:8]}"
         call.session_id = session_id
+        db.commit()
+        db.refresh(call)
         
-        # Get a new DB session for background task
-        from app.models.database import SessionLocal
-        bg_db = SessionLocal()
-        try:
-            # Refresh call in new session
-            call = bg_db.query(Call).filter(Call.id == call.id).first()
-            if call:
-                call.session_id = session_id
-                bg_db.commit()
-                bg_db.refresh(call)
-            
-            # Initialize agent service
-            agent_service = FrenchVoiceAgentService(agent, call)
-            manager.agent_services[session_id] = agent_service
-            
-            # Start the voice session
-            # IMPORTANT: We DO trigger the greeting here because we want the agent's
-            # full greeting and conversation capability, not just the simple IVR "Hello"
-            # The IVR "Hello" was just to answer the call quickly - now we transition to agent
-            await agent_service.start_session()
-            logger.info(f"✅ Background: Started voice session for call {call.id}")
-            logger.info(f"ℹ️ Agent greeting will play via audio streaming (agent's custom greeting)")
-            
-            # Create phone audio bridge for bidirectional audio streaming
-            # This connects Zadarma phone call to Gemini agent for full conversation
-            bridge = await phone_audio_manager.create_bridge(
-                agent_service,
-                str(call.id),
-                zadarma_call_id
-            )
-            logger.info(f"✅ Background: Started audio bridge for call {call.id}")
-            logger.info(f"ℹ️ Audio bridge ready - agent can now have full conversation with caller")
-            
-            # Send notification to user (non-blocking)
-            try:
-                from app.services.notification_service import get_notification_service
-                from app.models import User
-                notification_service = get_notification_service()
-                user = bg_db.query(User).filter(User.id == agent.user_id).first()
-                if user and user.email:
-                    await notification_service.send_call_notification(bg_db, call, "incoming")
-                    logger.info(f"✅ Background: Sent notification for call {call.id}")
-            except Exception as e:
-                logger.error(f"Failed to send notification: {e}")
-            
-        finally:
-            bg_db.close()
-            
+        # Initialize agent service
+        agent_service = FrenchVoiceAgentService(agent, call)
+        manager.agent_services[session_id] = agent_service
+        
+        # Start the voice session (this will trigger the greeting)
+        await agent_service.start_session()
+        logger.info(f"Started voice session for phone call {call.id} with session {session_id}")
+        
+        # Create and start phone audio bridge
+        # This handles bidirectional audio streaming between Zadarma and Gemini
+        bridge = await phone_audio_manager.create_bridge(
+            agent_service,
+            str(call.id),
+            zadarma_call_id
+        )
+        logger.info(f"Started phone audio bridge for call {call.id}")
+        
+        # ⚠️ IMPORTANT: For PBX extensions with webhook forwarding, audio flows through SIP, not HTTP
+        # The webhook only handles call control. For audio to work, you need:
+        # 1. SIP client registered to the extension
+        # 2. RTP audio streaming through SIP
+        # 3. Audio bridge between SIP and Gemini API
+        # 
+        # Currently, the phone_audio_bridge expects HTTP audio endpoints, which don't work with
+        # PBX extension webhook forwarding. Audio must flow through SIP connection.
+        logger.warning(
+            "⚠️ AUDIO WARNING: PBX extensions with webhook forwarding require SIP connection for audio. "
+            "The call will be answered but no audio will be transmitted until SIP client is implemented. "
+            "See docs/ZADARMA_INCOMING_CALL_SCENARIO_SETUP.md for details."
+        )
+    
     except Exception as e:
-        logger.error(f"❌ Background setup failed for call {call.id}: {e}", exc_info=True)
-        # Don't fail the call - IVR greeting already played
+        logger.error(f"Failed to start voice session for phone call {call.id}: {e}", exc_info=True)
+        # Continue anyway - the call record is created
+    
+    # Send notification to user
+    notification_service = get_notification_service()
+    try:
+        user = db.query(User).filter(User.id == agent.user_id).first()
+        if user and user.email:
+            await notification_service.send_call_notification(db, call, "incoming")
+    except Exception as e:
+        logger.error(f"Failed to send notification: {e}")
+    
+    logger.info("=" * 80)
+    logger.info(f"✅ CALL START HANDLING COMPLETE")
+    logger.info(f"Call ID: {call.id}")
+    logger.info(f"Session ID: {call.session_id}")
+    logger.info(f"Agent: {agent.id} ({agent.name})")
+    logger.info("=" * 80)
+    logger.info("⚠️ DIAGNOSTIC: If call keeps ringing but doesn't answer:")
+    logger.info("   1. Check if you receive NOTIFY_INTERNAL webhook (call reached extension)")
+    logger.info("   2. Check extension status in Zadarma: My PBX → Extensions")
+    logger.info("   3. Extension MUST be ONLINE (green) for call to be answered")
+    logger.info("   4. If offline, you need SIP client registration (not yet implemented)")
+    logger.info("=" * 80)
+    
+    # Return response to Zadarma
+    # For PBX extension webhooks, you can return call flow control responses.
+    # For now, we return a standard response with audio endpoints.
+    # 
+    # Example: To redirect to an extension instead:
+    # return build_call_flow_response("redirect", "2001")  # Redirect to extension 2001
+    #
+    # Example: To play a greeting and wait for DTMF:
+    # return {
+    #     "ivr_saypopular": 1,
+    #     "language": "en",
+    #     "wait_dtmf": {
+    #         "timeout": 10,
+    #         "attempts": 3,
+    #         "maxdigits": 1,
+    #         "name": "menu_choice"
+    #     }
+    # }
+    
+    from app.core.config import settings
+    
+    # Provide audio streaming endpoints for Zadarma to use
+    base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
+    api_prefix = settings.API_V1_STR
+    
+    response = {
+        "status": "ok",
+        "call_id": call.id,
+        "message": "Call initiated successfully, audio bridge ready",
+        "session_id": call.session_id,
+        # Audio streaming endpoints for Zadarma
+        "audio": {
+            "input_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/input",
+            "output_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/output",
+            "end_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/end",
+            "format": "audio/pcm;rate=16000",  # Input format (caller's voice)
+            "output_format": "audio/pcm;rate=24000"  # Output format (AI responses)
+        },
+        "agent": {
+            "id": agent.id,
+            "name": agent.name,
+            "greeting": agent.greeting
+        }
+    }
+    
+    logger.info(f"📤 Returning response to Zadarma for call {call.id}: {json.dumps(response, indent=2)}")
+    return response
 
 
 async def handle_call_answer(
@@ -1458,13 +1221,8 @@ async def handle_ivr_response(
     """
     Handle IVR response from caller (NOTIFY_IVR)
     
-    This event is triggered after an IVR action completes (e.g., after greeting is played).
-    Following simple_agent pattern: after greeting, we acknowledge to prevent infinite loop.
-    
-    For wee-voice: After greeting, we want to continue with full conversation.
-    However, since Zadarma IVR is limited, we acknowledge the greeting completion
-    and the call will continue. The audio bridge set up in NOTIFY_START will handle
-    the actual conversation if audio streaming is configured.
+    This event is triggered when the caller responds to an IVR action (e.g., presses a digit).
+    For NOTIFY_IVR, we can return call flow control responses similar to NOTIFY_START.
     
     Parameters:
     - event: NOTIFY_IVR
@@ -1473,27 +1231,16 @@ async def handle_ivr_response(
     - caller_id: Caller's phone number
     - called_did: Called phone number
     - digits: (optional) Digits entered by caller
-    - wait_dtmf[digits]: (optional) DTMF digits from wait_dtmf
-    - wait_dtmf[ERROR]: (optional) Error message if DTMF timeout
     - ivr_saydigits: (optional) "COMPLETE" if digits were played
     - ivr_saynumber: (optional) "COMPLETE" if number was played
-    - ivr_saypopular: (optional) "COMPLETE" if popular phrase was played
-    - ivr_say: (optional) "COMPLETE" if custom text was played
     """
-    logger.info("=" * 80)
-    logger.info("📞 HANDLING IVR RESPONSE (NOTIFY_IVR)")
-    logger.info(f"Zadarma Call ID: {zadarma_call_id}")
+    logger.info(f"IVR response received: {zadarma_call_id}")
     logger.info(f"IVR data: {data}")
-    logger.info("=" * 80)
     
-    # Extract IVR completion status
+    # Extract digits entered by caller
     digits = data.get('digits', '')
-    wait_dtmf_digits = data.get('wait_dtmf[digits]', '')
-    wait_dtmf_error = data.get('wait_dtmf[ERROR]', '')
     ivr_saydigits = data.get('ivr_saydigits', '')
     ivr_saynumber = data.get('ivr_saynumber', '')
-    ivr_saypopular = data.get('ivr_saypopular', '')
-    ivr_say = data.get('ivr_say', '')
     
     # Find call record
     call = db.query(Call).filter(
@@ -1505,55 +1252,36 @@ async def handle_ivr_response(
         # Return empty response - call will continue with default behavior
         return {}
     
-    logger.info(f"IVR response for call {call.id}")
-    logger.info(f"  - Digits: {digits}")
-    logger.info(f"  - Wait DTMF digits: {wait_dtmf_digits}")
-    logger.info(f"  - Wait DTMF error: {wait_dtmf_error}")
-    logger.info(f"  - IVR saypopular: {ivr_saypopular}")
-    logger.info(f"  - IVR say: {ivr_say}")
+    logger.info(f"IVR response for call {call.id}: digits={digits}, saydigits={ivr_saydigits}, saynumber={ivr_saynumber}")
     
-    # Check if this is after greeting completion
-    greeting_completed = (
-        ivr_saypopular == "COMPLETE" or
-        ivr_say == "COMPLETE" or
-        (not wait_dtmf_error and not wait_dtmf_digits and not digits)
-    )
+    # For now, we return an empty response which means "continue with default behavior"
+    # In the future, you can implement logic to:
+    # - Redirect based on digits entered
+    # - Play additional files
+    # - Wait for more DTMF input
+    # - Hang up the call
     
-    if greeting_completed:
-        logger.info("✅ IVR greeting completed - transitioning to agent conversation")
-        logger.info("ℹ️ Audio bridge should be active for full conversation")
-        logger.info("ℹ️ Agent will now handle the conversation (like web agent)")
-        
-        # After IVR greeting completes, the agent service should take over
-        # The audio bridge set up in background should be ready
-        # Return acknowledgment - the call continues with agent via audio streaming
-        # This is different from simple_agent which just ends the call
-        return {"status": "ok"}
+    # Example: If you want to redirect to extension based on digits
+    # if digits == "1":
+    #     return build_call_flow_response("redirect", "2001")  # Redirect to extension 2001
+    # elif digits == "2":
+    #     return build_call_flow_response("redirect", "2002")  # Redirect to extension 2002
+    # elif digits == "0":
+    #     return build_call_flow_response("hangup")  # Hang up the call
     
-    # If user provided DTMF input, handle it
-    if wait_dtmf_digits or digits:
-        user_input = wait_dtmf_digits or digits
-        logger.info(f"User provided DTMF input: {user_input}")
-        
-        # For now, acknowledge and continue
-        # In the future, you could implement menu navigation based on digits
-        # Example:
-        # if user_input == "1":
-        #     return build_call_flow_response("redirect", "2001")
-        # elif user_input == "0":
-        #     return build_call_flow_response("hangup")
-        
-        return {"status": "ok"}
+    # Example: Play a message and wait for more input
+    # return {
+    #     "ivr_saypopular": 1,
+    #     "language": "en",
+    #     "wait_dtmf": {
+    #         "timeout": 10,
+    #         "attempts": 3,
+    #         "maxdigits": 1,
+    #         "name": "menu_choice"
+    #     }
+    # }
     
-    # If there was an error (timeout, etc.)
-    if wait_dtmf_error:
-        logger.warning(f"IVR Error: {wait_dtmf_error}")
-        # On timeout or error, just acknowledge - call will continue or end
-        return {"status": "ok"}
-    
-    # Default: acknowledge to prevent infinite loop
-    logger.info("Returning acknowledgment to prevent infinite loop")
-    return {"status": "ok"}
+    return {}
 
 
 @router.get("/health")

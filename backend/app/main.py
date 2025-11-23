@@ -26,30 +26,6 @@ async def lifespan(app: FastAPI):
     logger.info("Starting VoiceAgent SaaS application...")
     logger.info("Skipping automatic table creation - use database SQL schema instead")
     
-    # Initialize greeting cache for fast phone call responses
-    try:
-        from app.models.database import SessionLocal
-        from app.api.zadarma_webhook import _refresh_greeting_cache_sync, _agent_greeting_cache
-        logger.info("🔄 Initializing agent greeting cache...")
-        db = SessionLocal()
-        try:
-            _refresh_greeting_cache_sync(db)
-            cache_size = len(_agent_greeting_cache)
-            if cache_size > 0:
-                logger.info(f"✅ Agent greeting cache initialized successfully with {cache_size} entries")
-            else:
-                logger.warning("⚠️ Agent greeting cache initialized but is EMPTY - no agents with greetings found in database")
-        except Exception as cache_error:
-            logger.error(f"❌ Failed to refresh cache: {cache_error}", exc_info=True)
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize greeting cache: {e}", exc_info=True)
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-    
     yield
     
     # Shutdown
