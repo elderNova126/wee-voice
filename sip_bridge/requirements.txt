@@ -1,0 +1,27 @@
+# SIP Bridge Server Requirements
+# For Python 3.9+
+
+# SIP and RTP handling
+aiortc==1.6.0
+aioice==0.9.0
+pyee==11.0.1
+
+# WebSocket client
+websockets==12.0
+
+# Audio processing
+numpy==1.24.3
+av==11.0.0
+
+# Async utilities
+aiofiles==23.2.1
+
+# Configuration
+python-dotenv==1.0.0
+
+# Logging
+colorlog==6.8.0
+
+# Optional: For better SIP handling
+# dnspython==2.4.2
+
