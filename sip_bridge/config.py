@@ -29,9 +29,4 @@ OUTPUT_SAMPLE_RATE = 24000  # Sample rate for audio from backend
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Security - Zadarma IPs to whitelist
-ZADARMA_ALLOWED_IPS = [
-    # Add Zadarma IP ranges here
-    # "185.45.152.0/24",
-    # "185.45.153.0/24",
-]
-
+ZADARMA_ALLOWED_IPS = os.getenv("ZADARMA_ALLOWED_IPS", "")
