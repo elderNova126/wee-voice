@@ -298,7 +298,19 @@ async def voice_websocket(
             """Receive audio from client and send to agent"""
             try:
                 while not stop_flag.is_set():
-                    data = await websocket.receive()
+                    try:
+                        data = await websocket.receive()
+                    except RuntimeError as e:
+                        # Handle "Cannot call receive once a disconnect message has been received"
+                        if "disconnect" in str(e).lower() or "receive" in str(e).lower():
+                            logger.info(f"WebSocket disconnected (RuntimeError): {session_id}")
+                            break
+                        raise
+                    
+                    # Check for disconnect message
+                    if "type" in data and data["type"] == "websocket.disconnect":
+                        logger.info(f"Received disconnect message: {session_id}")
+                        break
                     
                     if "bytes" in data:
                         # Audio data
@@ -354,7 +366,7 @@ async def voice_websocket(
                             pass
             
             except WebSocketDisconnect:
-                logger.info(f"Client disconnected: {session_id}")
+                logger.info(f"Client disconnected (WebSocketDisconnect): {session_id}")
                 # Update call status immediately on disconnect
                 try:
                     if call and call.status in [CallStatus.IN_PROGRESS, CallStatus.INITIATED]:
@@ -379,6 +391,14 @@ async def voice_websocket(
                 except Exception as e:
                     logger.error(f"Error updating call status on disconnect: {e}")
                 stop_flag.set()
+            except RuntimeError as e:
+                # Handle "Cannot call receive once a disconnect message has been received"
+                if "disconnect" in str(e).lower() or "receive" in str(e).lower():
+                    logger.info(f"WebSocket disconnected (RuntimeError in outer handler): {session_id}")
+                    stop_flag.set()
+                else:
+                    logger.error(f"RuntimeError receiving from client: {e}", exc_info=True)
+                    stop_flag.set()
             except Exception as e:
                 logger.error(f"Error receiving from client: {e}", exc_info=True)
                 stop_flag.set()
