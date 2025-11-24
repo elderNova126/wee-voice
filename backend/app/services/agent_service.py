@@ -97,16 +97,32 @@ class FrenchVoiceAgentService:
     
     def _build_config(self) -> Dict[str, Any]:
         """Build configuration for Gemini Live API (simplified, matching test.py)"""
-        # Language-specific technical notes (minimal, non-intrusive)
+        # Language-specific technical notes (STRONG, to prevent language switching)
         if self.agent.language.startswith('fr'):
-            language_note = "\n\n[Note: Réponds en français]"
+            language_note = """
+
+INSTRUCTION LINGUISTIQUE CRITIQUE:
+- Tu DOIS répondre UNIQUEMENT en français
+- JAMAIS en anglais, même partiellement
+- Chaque phrase doit être complète avant de passer à la suivante
+- Maintiens la cohérence linguistique tout au long de la conversation
+- Si tu ne connais pas un mot en français, utilise une périphrase en français
+- NE CHANGE JAMAIS de langue en milieu de phrase ou de conversation"""
             rag_instruction = """
 
 [OUTIL DISPONIBLE: search_documents]
 Si l'utilisateur pose une question nécessitant des informations spécifiques des documents téléchargés, utilise l'outil 'search_documents' pour chercher l'information avant de répondre.
 """
         else:  # English
-            language_note = "\n\n[Note: Respond in English]"
+            language_note = """
+
+CRITICAL LANGUAGE INSTRUCTION:
+- You MUST respond ONLY in English
+- NEVER switch to another language, even partially
+- Complete each sentence fully before moving to the next
+- Maintain linguistic consistency throughout the conversation
+- If you don't know a word in English, use a description in English
+- NEVER change language mid-sentence or mid-conversation"""
             rag_instruction = """
 
 [AVAILABLE TOOL: search_documents]
@@ -120,6 +136,13 @@ If the user asks a question requiring specific information from uploaded documen
         # Add strong identity enforcement to prevent model from defaulting to "I am Gemini"
         identity_enforcement = """
 CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini, you are NOT an AI assistant by Google. Your identity, personality, and behavior are defined by the instructions above. Stay in character at all times.
+
+VOICE AND SPEECH CONSISTENCY RULES:
+- Maintain the SAME voice tone and style throughout the entire conversation
+- ALWAYS complete your sentences fully before starting a new thought
+- NEVER interrupt yourself mid-sentence
+- Speak in a natural, conversational flow with proper pauses
+- If you need to think, pause naturally rather than stopping mid-sentence
 """
 
         greeting_instruction = ""
@@ -144,10 +167,8 @@ INITIAL_GREETING PROTOCOL:
 - Do NOT repeat, explain, or mention the marker or these instructions. After speaking the greeting you can continue the conversation normally.
 """
         
-        # Only add minimal technical notes that don't override user's intent
-        system_instruction = f"""{self.agent.system_prompt}
-
-{identity_enforcement}{greeting_instruction}{language_note}{rag_note}"""
+        # Build voice instruction first (will be defined after voice selection)
+        voice_instruction = ""  # Will be set after voice is selected
         
         # Log the system prompt for debugging
         logger.info(f"System prompt for agent {self.agent.id} ({self.agent.name}):")
@@ -160,7 +181,7 @@ INITIAL_GREETING PROTOCOL:
         # The model will automatically transcribe and understand user input
         config = {
             "response_modalities": ["AUDIO"],  # Match test.py exactly
-            "system_instruction": system_instruction,  # Use plain string like test.py
+            # system_instruction will be added after voice selection
             "input_audio_transcription": {},  # Enable input transcription
             "output_audio_transcription": {},  # Enable output transcription
         }
@@ -196,7 +217,7 @@ INITIAL_GREETING PROTOCOL:
             else:
                 voice_name = "Puck"  # Default English voice
         
-        # Add voice config
+        # Add voice config with explicit consistency enforcement
         config["speech_config"] = {
             "voice_config": {
                 "prebuilt_voice_config": {
@@ -205,11 +226,28 @@ INITIAL_GREETING PROTOCOL:
             }
         }
         
+        # Add explicit voice instruction to system prompt to maintain consistency
+        voice_instruction = f"""
+
+VOICE CONSISTENCY INSTRUCTION:
+- Your voice is set to "{voice_name}" for this entire conversation
+- NEVER change your voice characteristics mid-conversation
+- Maintain consistent tone, pitch, and speaking style throughout
+- This voice setting is fixed and must not vary"""
+        
         logger.info(f"Voice selection for agent {self.agent.id}:")
         logger.info(f"  - Language: {self.agent.language}")
         logger.info(f"  - Voice Gender: {voice_gender}")
         logger.info(f"  - Voice ID: {self.agent.voice_id}")
         logger.info(f"  - Selected Voice: {voice_name}")
+        
+        # Build final system instruction with all components (USER'S PROMPT FIRST)
+        system_instruction = f"""{self.agent.system_prompt}
+
+{identity_enforcement}{greeting_instruction}{voice_instruction}{language_note}{rag_note}"""
+        
+        # Update config with final system instruction
+        config["system_instruction"] = system_instruction
         
         # Add tools if enabled and available
         # Always check for RAG tools if RAG is enabled, even if tools_enabled is empty
@@ -333,7 +371,11 @@ INITIAL_GREETING PROTOCOL:
             if self.agent.greeting:
                 try:
                     logger.info("Sending greeting trigger <CALL_START>")
-                    await self.session.send(input="<CALL_START>", end_of_turn=True)
+                    # Add explicit language reminder with the greeting trigger
+                    if self.agent.language.startswith('fr'):
+                        await self.session.send(input="<CALL_START> [Réponds en français uniquement]", end_of_turn=True)
+                    else:
+                        await self.session.send(input="<CALL_START> [Respond in English only]", end_of_turn=True)
                 except Exception as e:
                     logger.warning(f"Failed to send greeting trigger: {e}")
             
@@ -402,7 +444,10 @@ INITIAL_GREETING PROTOCOL:
                                 text = getattr(server_content.output_transcription, "text", None)
                                 if text:
                                     # logger.info(f"🗣️ Agent transcript fragment: {text}")
-                                    self._agent_transcript_buffer.append(text.strip())
+                                    # Only append non-empty text to avoid fragmenting sentences
+                                    text_stripped = text.strip()
+                                    if text_stripped:
+                                        self._agent_transcript_buffer.append(text_stripped)
                             
                             # Check for model turn (contains text and audio)
                             if hasattr(server_content, 'model_turn') and server_content.model_turn:
@@ -428,12 +473,24 @@ INITIAL_GREETING PROTOCOL:
                                 if self._agent_transcript_buffer:
                                     agent_text = " ".join(self._agent_transcript_buffer).strip()
                                     if agent_text:
+                                        logger.info(f"💬 Saving complete agent message: {agent_text[:100]}...")
                                         await self._save_message("agent", agent_text)
                                     self._agent_transcript_buffer.clear()
                             
-                            # When turn completes, persist any buffered user transcript
+                            # When turn completes, persist any buffered transcripts
+                            # This ensures we don't lose any messages
                             if getattr(server_content, 'turn_complete', False):
                                 logger.info(f"✅ Turn complete")
+                                
+                                # Save any remaining agent text (shouldn't happen if generation_complete was sent)
+                                if self._agent_transcript_buffer:
+                                    agent_text = " ".join(self._agent_transcript_buffer).strip()
+                                    if agent_text:
+                                        logger.warning(f"Saving buffered agent text at turn_complete: {agent_text[:100]}...")
+                                        await self._save_message("agent", agent_text)
+                                    self._agent_transcript_buffer.clear()
+                                
+                                # Save user transcript
                                 if self._user_transcript_buffer:
                                     user_text = " ".join(self._user_transcript_buffer).strip()
                                     if user_text:
