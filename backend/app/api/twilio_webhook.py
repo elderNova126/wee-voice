@@ -166,9 +166,10 @@ async def twilio_voice_webhook(
         api_key = os.getenv("TWILIO_API_KEY", "")
         
         # Build WebSocket URL
-        websocket_url = f"{base_url}/api/v1/ws/voice/{phone_record.agent_id}"
+        # Add twilio=true parameter to indicate this is a Twilio Media Streams connection
+        websocket_url = f"{base_url}/api/v1/ws/voice/{phone_record.agent_id}?twilio=true"
         if api_key:
-            websocket_url += f"?api_key={api_key}"
+            websocket_url += f"&api_key={api_key}"
         
         logger.info(f"🔗 Forwarding to WebSocket: {websocket_url}")
         

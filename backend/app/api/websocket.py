@@ -1,11 +1,12 @@
 import asyncio
 import json
 import logging
+import base64
 from typing import Optional
 from datetime import datetime
 import uuid
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.models import get_db, User, VoiceAgent, Call, CallStatus, CallMessage
@@ -44,9 +45,20 @@ class ConnectionManager:
         if session_id in self.active_connections:
             await self.active_connections[session_id].send_json(message)
     
-    async def send_audio(self, session_id: str, audio_data: bytes):
+    async def send_audio(self, session_id: str, audio_data: bytes, is_twilio: bool = False):
         if session_id in self.active_connections:
-            await self.active_connections[session_id].send_bytes(audio_data)
+            if is_twilio:
+                # Twilio requires JSON format with base64-encoded audio
+                message = {
+                    "event": "media",
+                    "media": {
+                        "payload": base64.b64encode(audio_data).decode('utf-8')
+                    }
+                }
+                await self.active_connections[session_id].send_json(message)
+            else:
+                # Regular WebSocket clients can receive binary
+                await self.active_connections[session_id].send_bytes(audio_data)
 
 
 manager = ConnectionManager()
@@ -154,6 +166,7 @@ async def voice_websocket(
     agent_id: int,
     api_key: Optional[str] = Query(None),
     token: Optional[str] = Query(None),
+    twilio: Optional[bool] = Query(False),  # Detect Twilio connections
     db: Session = Depends(get_db)
 ):
     """WebSocket endpoint for real-time voice conversations"""
@@ -161,9 +174,19 @@ async def voice_websocket(
     user: Optional[User] = None
     call: Optional[Call] = None
     agent_service: Optional[FrenchVoiceAgentService] = None
+    is_twilio_connection = twilio  # Will also check User-Agent
     
-    logger.info(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
-    print(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
+    # Check User-Agent to detect Twilio
+    try:
+        user_agent = websocket.headers.get("user-agent", "").lower()
+        if "twilio" in user_agent:
+            is_twilio_connection = True
+            logger.info("🔵 Detected Twilio Media Streams connection")
+    except:
+        pass
+    
+    logger.info(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}, twilio={is_twilio_connection}")
+    print(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}, twilio={is_twilio_connection}")
     try:
         # Verify authentication (API key or JWT token)
         logger.info(f"🔐 Checking authentication...")
@@ -281,13 +304,22 @@ async def voice_websocket(
         
         # Send session started message
         logger.info(f"📤 Sending session_started message to client")
-        await websocket.send_json({
-            "type": "session_started",
-            "session_id": session_id,
-            "call_id": call.id,
-            "agent_name": agent.name,
-            "language": agent.language
-        })
+        if is_twilio_connection:
+            # Twilio expects a "connected" event
+            await websocket.send_json({
+                "event": "connected",
+                "protocol": "Call",
+                "version": "1.0.0"
+            })
+        else:
+            # Regular WebSocket clients
+            await websocket.send_json({
+                "type": "session_started",
+                "session_id": session_id,
+                "call_id": call.id,
+                "agent_name": agent.name,
+                "language": agent.language
+            })
         logger.info(f"🎧 Starting audio processing tasks...")
         
         # Create tasks for bidirectional communication
@@ -312,13 +344,44 @@ async def voice_websocket(
                         logger.info(f"Received disconnect message: {session_id}")
                         break
                     
-                    if "bytes" in data:
-                        # Audio data
+                    if is_twilio_connection:
+                        # Twilio sends JSON messages only
+                        if "text" in data:
+                            try:
+                                message = json.loads(data["text"])
+                                event_type = message.get("event")
+                                
+                                if event_type == "media":
+                                    # Twilio media event - contains base64 audio
+                                    media = message.get("media", {})
+                                    payload = media.get("payload", "")
+                                    if payload:
+                                        # Decode base64 audio
+                                        audio_data = base64.b64decode(payload)
+                                        await agent_service.send_audio(audio_data)
+                                
+                                elif event_type == "start":
+                                    # Twilio stream started
+                                    logger.info("Twilio stream started")
+                                
+                                elif event_type == "stop":
+                                    # Twilio stream stopped
+                                    logger.info("Twilio stream stopped")
+                                    stop_flag.set()
+                                    break
+                                
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Failed to parse Twilio JSON message: {e}")
+                                continue
+                        # Ignore binary from Twilio (shouldn't happen, but just in case)
+                    
+                    elif "bytes" in data:
+                        # Regular WebSocket: binary audio data
                         audio_data = data["bytes"]
                         await agent_service.send_audio(audio_data)
                     
                     elif "text" in data:
-                        # Control messages
+                        # Control messages (for regular WebSocket clients)
                         message = json.loads(data["text"])
                         
                         if message.get("type") == "end_session":
@@ -411,7 +474,7 @@ async def voice_websocket(
                         logger.info(f"Stop flag set in send_audio_to_client, breaking loop")
                         break
                     try:
-                        await manager.send_audio(session_id, audio_data)
+                        await manager.send_audio(session_id, audio_data, is_twilio=is_twilio_connection)
                     except Exception as send_error:
                         logger.error(f"Error sending audio to client: {send_error}")
                         if stop_flag.is_set():
