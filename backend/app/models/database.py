@@ -40,8 +40,9 @@ if "postgresql" in db_url:
         db_url,
         pool_pre_ping=True,  # Verify connections before using
         pool_recycle=300,  # Recycle connections after 5 minutes
-        pool_size=10,  # Maintain a pool of connections
-        max_overflow=20,  # Allow overflow connections
+        pool_size=20,  # Increased from 10 for better concurrency
+        max_overflow=40,  # Increased from 20 for high-traffic scenarios  
+        pool_timeout=30,  # Timeout for getting connection from pool
         echo=False,
         connect_args=connect_args
     )

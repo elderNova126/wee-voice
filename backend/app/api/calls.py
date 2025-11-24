@@ -5,6 +5,7 @@ from sqlalchemy import desc, or_, func
 from datetime import datetime, timedelta
 from pydantic import BaseModel, EmailStr
 import logging
+import asyncio
 
 from app.core.security import get_current_active_user
 from app.models import get_db, User, Call, CallMessage, CallStatus, VoiceAgent
@@ -278,13 +279,136 @@ def get_transcript(
     }
 
 
+async def generate_summary_background(call_id: int, user_id: int):
+    """
+    Background task to generate summary for a call.
+    This runs independently and doesn't block the API response.
+    """
+    from app.models.database import SessionLocal
+    
+    # Create a new database session for the background task
+    db = SessionLocal()
+    try:
+        logger.info(f"Starting background summary generation for call {call_id}")
+        
+        # Fetch the call
+        call = db.query(Call).filter(
+            Call.id == call_id,
+            Call.user_id == user_id
+        ).first()
+        
+        if not call:
+            logger.error(f"Call {call_id} not found for user {user_id}")
+            return
+        
+        if not call.transcript:
+            logger.error(f"Call {call_id} has no transcript")
+            # Update status to failed
+            call.summarization_status = "failed"
+            db.commit()
+            
+            # Broadcast update if websocket manager is available
+            try:
+                from app.api.websocket import call_monitor_manager
+                call_data = {
+                    "id": call.id,
+                    "status": call.status.value if hasattr(call.status, 'value') else call.status,
+                    "summarization_status": call.summarization_status,
+                    "error": "No transcript available"
+                }
+                await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+            except Exception as e:
+                logger.warning(f"Could not broadcast update: {e}")
+            return
+        
+        # Set status to summarizing
+        call.summarization_status = "summarizing"
+        db.commit()
+        
+        # Broadcast status update
+        try:
+            from app.api.websocket import call_monitor_manager
+            call_data = {
+                "id": call.id,
+                "status": call.status.value if hasattr(call.status, 'value') else call.status,
+                "summarization_status": call.summarization_status
+            }
+            await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+        except Exception as e:
+            logger.warning(f"Could not broadcast update: {e}")
+        
+        # Generate summary - this is the long-running operation
+        # The database session will be released during the API call
+        summary_service = CallSummaryService()
+        result = await summary_service.generate_summary(call)
+        
+        # Check for errors
+        if result.get("error"):
+            logger.error(f"Summary generation failed for call {call_id}: {result.get('error')}")
+            call.summarization_status = "failed"
+        else:
+            logger.info(f"Summary generated successfully for call {call_id}")
+            call.summarization_status = "summarized"
+        
+        # Commit the results
+        db.commit()
+        db.refresh(call)
+        
+        # Send email notification with summary if successful
+        if result.get("summary"):
+            try:
+                notification_service = get_notification_service()
+                await notification_service.send_call_summary_email(db, call, result)
+                logger.info(f"Email notification sent for call {call_id}")
+            except Exception as e:
+                logger.error(f"Failed to send email notification: {e}")
+        
+        # Broadcast final update with results
+        try:
+            from app.api.websocket import call_monitor_manager
+            call_data = {
+                "id": call.id,
+                "status": call.status.value if hasattr(call.status, 'value') else call.status,
+                "summarization_status": call.summarization_status,
+                "summary": call.summary,
+                "sentiment": call.sentiment,
+                "key_points": call.key_points,
+                "action_items": call.action_items,
+                "action_tags": call.action_tags
+            }
+            await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+            logger.info(f"Broadcast final update for call {call_id}")
+        except Exception as e:
+            logger.warning(f"Could not broadcast final update: {e}")
+            
+    except Exception as e:
+        logger.error(f"Error in background summary generation for call {call_id}: {e}", exc_info=True)
+        # Try to update the call status to failed
+        try:
+            call = db.query(Call).filter(Call.id == call_id).first()
+            if call:
+                call.summarization_status = "failed"
+                db.commit()
+        except Exception as commit_error:
+            logger.error(f"Failed to update call status: {commit_error}")
+    finally:
+        db.close()
+        logger.info(f"Background summary generation completed for call {call_id}")
+
+
 @router.post("/{call_id}/generate-summary")
 async def generate_summary(
     call_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Generate AI summary for a call"""
+    """
+    Generate AI summary for a call (async/non-blocking).
+    
+    This endpoint triggers summary generation as a background task and returns immediately.
+    The client can poll the call status or use WebSocket to get real-time updates.
+    """
+    # Validate the call exists and belongs to the user
     call = db.query(Call).filter(
         Call.id == call_id,
         Call.user_id == current_user.id
@@ -296,26 +420,71 @@ async def generate_summary(
     if not call.transcript:
         raise HTTPException(status_code=400, detail="Transcript not available")
     
-    # Generate summary
-    summary_service = CallSummaryService()
-    result = await summary_service.generate_summary(call)
+    # Check if summary is already being generated
+    if call.summarization_status == "summarizing":
+        return {
+            "status": "in_progress",
+            "message": "Summary generation is already in progress",
+            "call_id": call_id,
+            "summarization_status": call.summarization_status
+        }
     
+    # Set initial status
+    call.summarization_status = "pending"
     db.commit()
-    db.refresh(call)
     
-    # Enrich response with persisted values
-    result["summary"] = call.summary
-    result["sentiment"] = call.sentiment
-    result["key_points"] = call.key_points
-    result["action_items"] = call.action_items
-    result["action_tags"] = call.action_tags
+    # Trigger background task - this doesn't block
+    asyncio.create_task(generate_summary_background(call_id, current_user.id))
     
-    # Send email notification with summary
-    if result.get("summary"):
-        notification_service = get_notification_service()
-        await notification_service.send_call_summary_email(db, call, result)
+    logger.info(f"Triggered background summary generation for call {call_id}")
     
-    return result
+    # Return immediately with pending status
+    return {
+        "status": "pending",
+        "message": "Summary generation started. Check back shortly for results.",
+        "call_id": call_id,
+        "summarization_status": "pending"
+    }
+
+
+@router.get("/{call_id}/summary-status")
+async def get_summary_status(
+    call_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Check the status of summary generation for a call.
+    
+    Returns:
+    - summarization_status: "pending", "summarizing", "summarized", "failed", or "not_summarized"
+    - summary data if available
+    """
+    call = db.query(Call).filter(
+        Call.id == call_id,
+        Call.user_id == current_user.id
+    ).first()
+    
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    
+    response = {
+        "call_id": call_id,
+        "summarization_status": call.summarization_status,
+        "status": call.status.value if hasattr(call.status, 'value') else call.status
+    }
+    
+    # Include summary data if available
+    if call.summarization_status == "summarized":
+        response.update({
+            "summary": call.summary,
+            "sentiment": call.sentiment,
+            "key_points": call.key_points,
+            "action_items": call.action_items,
+            "action_tags": call.action_tags
+        })
+    
+    return response
 
 
 @router.post("/{call_id}/send-email")

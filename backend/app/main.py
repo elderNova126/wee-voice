@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, twilio_webhook
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, twilio_webhook, performance
+from app.middleware.rate_limit import RateLimitMiddleware, cleanup_rate_limits
 
 # Set up logging
 logging.basicConfig(
@@ -18,18 +20,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Background task for rate limit cleanup
+_cleanup_task = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
+    global _cleanup_task
+    
     # Startup
     logger.info("Starting VoiceAgent SaaS application...")
     logger.info("Skipping automatic table creation - use database SQL schema instead")
+    
+    # Start background cleanup task
+    _cleanup_task = asyncio.create_task(cleanup_rate_limits())
+    logger.info("Started rate limit cleanup background task")
     
     yield
     
     # Shutdown
     logger.info("Shutting down application...")
+    if _cleanup_task:
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            logger.info("Rate limit cleanup task cancelled")
+    logger.info("Application shutdown complete")
 
 
 app = FastAPI(
@@ -48,6 +66,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Rate limiting middleware (if enabled)
+if getattr(settings, 'ENABLE_RATE_LIMITING', True):
+    rate_limit = getattr(settings, 'RATE_LIMIT_PER_MINUTE', 100)
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit)
+    logger.info(f"Rate limiting enabled: {rate_limit} requests/minute")
 
 # Mount static files for voice widget
 static_path = Path(__file__).parent.parent / "static"
@@ -98,6 +122,7 @@ app.include_router(phone_audio.router, prefix=f"{settings.API_V1_STR}/phone", ta
 app.include_router(admin.router, prefix=f"{settings.API_V1_STR}/admin", tags=["Admin"])
 app.include_router(libraries.router, prefix=f"{settings.API_V1_STR}/libraries", tags=["Agent Libraries"])
 app.include_router(collaborators.router, prefix=f"{settings.API_V1_STR}", tags=["Collaborators"])
+app.include_router(performance.router, prefix=f"{settings.API_V1_STR}/performance", tags=["Performance"])
 
 
 # Global exception handler
