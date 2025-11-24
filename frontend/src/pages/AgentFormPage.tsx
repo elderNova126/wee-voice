@@ -557,13 +557,14 @@ export default function AgentFormPage() {
                 </span>
               </label>
 
-              <label className="flex cursor-pointer items-center gap-2">
+              <label className={`flex items-center gap-2 ${isEdit ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
                 <input
                   type="checkbox"
                   name="rag_enabled"
                   checked={formData.rag_enabled}
                   onChange={handleChange}
-                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  disabled={isEdit}
+                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">
                   {t.agentForm.ragEnabled}
