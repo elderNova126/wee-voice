@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.services.email_service import send_email
+from app.services.async_email_service import send_email
 from app.models import Call, CallbackRequest, User, VoiceAgent
 from app.core.config import settings
 
