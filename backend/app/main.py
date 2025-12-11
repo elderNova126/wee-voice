@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Background tasks
 _cleanup_task = None
 _sip_handler = None
+_audiosocket_server = None
 
 
 @asynccontextmanager
@@ -38,26 +39,58 @@ async def lifespan(app: FastAPI):
     _cleanup_task = asyncio.create_task(cleanup_rate_limits())
     logger.info("Started rate limit cleanup background task")
     
+    # Start AudioSocket server for Asterisk audio streaming
+    global _audiosocket_server
+    print("[AudioSocket] Starting AudioSocket server...")
+    try:
+        from app.services.audiosocket_handler import audiosocket_server
+        _audiosocket_server = audiosocket_server
+        await _audiosocket_server.start()
+        print("[AudioSocket] ✅ AudioSocket server started on port 9092")
+        logger.info("✅ AudioSocket server started on port 9092")
+    except Exception as e:
+        print(f"[AudioSocket] ❌ Error: {e}")
+        logger.error(f"Error starting AudioSocket server: {e}", exc_info=True)
+    
     # Start SIP call handler - loads phone numbers with SIP config from database
+    print(f"[SIP] SIP_ENABLED setting: {settings.SIP_ENABLED}")
+    logger.info(f"SIP_ENABLED setting: {settings.SIP_ENABLED}")
     if settings.SIP_ENABLED:
+        print("[SIP] Starting SIP call handler...")
+        logger.info("Starting SIP call handler...")
         try:
             from app.services.sip_call_handler import sip_call_handler
+            print("[SIP] SIP call handler imported successfully")
+            logger.info("SIP call handler imported successfully")
             _sip_handler = sip_call_handler
             success = await _sip_handler.start()
+            print(f"[SIP] Handler start result: {success}")
             if success:
+                print("[SIP] ✅ SIP call handler started successfully")
                 logger.info("✅ SIP call handler started - phone numbers loaded from database")
             else:
+                print("[SIP] ⚠️ SIP call handler failed to start")
                 logger.warning("⚠️ SIP call handler: No phone numbers with SIP config found in database")
                 logger.info("   Add phone numbers with SIP credentials via the Phone Numbers page")
         except Exception as e:
+            print(f"[SIP] ❌ Error: {e}")
             logger.error(f"Error starting SIP call handler: {e}", exc_info=True)
     else:
+        print("[SIP] SIP call handler disabled (SIP_ENABLED=false)")
         logger.info("SIP call handler disabled (SIP_ENABLED=false)")
     
     yield
     
     # Shutdown
     logger.info("Shutting down application...")
+    
+    # Stop AudioSocket server
+    if _audiosocket_server:
+        try:
+            await _audiosocket_server.stop()
+            logger.info("AudioSocket server stopped")
+        except Exception as e:
+            logger.error(f"Error stopping AudioSocket server: {e}")
     
     # Stop SIP handler
     if _sip_handler:

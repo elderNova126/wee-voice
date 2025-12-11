@@ -39,11 +39,18 @@ class SIPCallHandler:
     
     async def start(self) -> bool:
         """Start the SIP call handler - loads phone numbers from database"""
+        print("[SIP Handler] start() called")
+        logger.info("=" * 50)
+        logger.info("SIP Call Handler starting...")
+        logger.info("=" * 50)
         try:
             db = SessionLocal()
             try:
                 # Load all phone numbers with SIP configuration
+                print("[SIP Handler] Loading phone numbers from DB...")
+                logger.info("Loading phone numbers with SIP config from database...")
                 phone_numbers = await self._load_phone_numbers_with_sip(db)
+                print(f"[SIP Handler] Found {len(phone_numbers) if phone_numbers else 0} phone numbers")
                 
                 if not phone_numbers:
                     logger.warning("⚠️ No phone numbers with SIP configuration found in database")

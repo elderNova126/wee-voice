@@ -1,13 +1,14 @@
 """
-SIP Client Service for Dialsense WebSocket SIP Server
-Handles SIP registration and call management
+SIP Client Service for WebSocket SIP (RFC 7118)
+Handles SIP registration and call management using proper SIP protocol over WebSocket
 """
 import asyncio
 import logging
-import json
 import hashlib
-import base64
 import audioop
+import re
+import random
+import string
 from typing import Optional, Dict, Callable
 from datetime import datetime
 import uuid
@@ -16,6 +17,21 @@ import websockets
 from websockets.client import WebSocketClientProtocol
 
 logger = logging.getLogger(__name__)
+
+
+def generate_branch():
+    """Generate a unique branch parameter for Via header"""
+    return "z9hG4bK" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
+
+
+def generate_tag():
+    """Generate a unique tag for From/To headers"""
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+
+def generate_call_id():
+    """Generate a unique Call-ID"""
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
 
 
 class SIPCallSession:
@@ -41,6 +57,11 @@ class SIPCallSession:
         # Associated backend call and agent service
         self.backend_call_id = None
         self.agent_service = None
+        
+        # SIP dialog info
+        self.sip_call_id = None
+        self.local_tag = None
+        self.remote_tag = None
     
     def end(self):
         """Mark call as ended"""
@@ -50,7 +71,7 @@ class SIPCallSession:
 
 class SIPClientService:
     """
-    SIP WebSocket client for Dialsense server
+    SIP WebSocket client implementing RFC 7118 (SIP over WebSocket)
     Handles SIP signaling and audio streaming
     """
     
@@ -59,50 +80,72 @@ class SIPClientService:
         self.is_connected = False
         self.is_registered = False
         
-        # SIP credentials - provided per phone number from database
+        # SIP credentials
         self.username = username
         self.password = password
         self.domain = domain
         self.ws_url = ws_url
         
+        # Extract host from ws_url for Via header
+        self.local_ip = "127.0.0.1"  # Will be updated on connection
+        self.local_port = 5060
+        
+        # SIP state
+        self.cseq = 1
+        self.register_call_id = generate_call_id()
+        self.from_tag = generate_tag()
+        
         # Active calls: call_id -> SIPCallSession
         self.active_calls: Dict[str, SIPCallSession] = {}
         
+        # Response queue for registration and other requests
+        self.response_queue: asyncio.Queue = asyncio.Queue()
+        
         # Callbacks for application
         self.on_incoming_call: Optional[Callable] = None
-        self.on_call_answered: Optional[Callable] = None  # For both inbound and outbound
+        self.on_call_answered: Optional[Callable] = None
         self.on_call_ended: Optional[Callable] = None
-        self.on_call_ringing: Optional[Callable] = None  # Outbound call ringing
-        self.on_call_failed: Optional[Callable] = None   # Outbound call failed
+        self.on_call_ringing: Optional[Callable] = None
+        self.on_call_failed: Optional[Callable] = None
         
         # Background tasks
         self.message_handler_task = None
         self.keepalive_task = None
+        self.register_refresh_task = None
         
-        logger.info(f"Initialized SIP client for {self.domain} (ws: {self.ws_url})")
+        logger.info(f"Initialized SIP client for {self.username}@{self.domain}")
     
     async def connect(self) -> bool:
         """Connect to SIP WebSocket server"""
         try:
+            print(f"[SIP Client] Connecting to: {self.ws_url}")
             logger.info(f"Connecting to SIP server: {self.ws_url}")
+            
+            # SIP over WebSocket requires the 'sip' subprotocol
             self.ws = await websockets.connect(
                 self.ws_url,
+                subprotocols=["sip"],
                 ping_interval=30,
                 ping_timeout=10
             )
             self.is_connected = True
+            print("[SIP Client] ✅ WebSocket connected!")
             logger.info("✅ Connected to SIP WebSocket server")
             
-            # Start message handler
+            # Start message handler FIRST (handles all incoming messages)
             self.message_handler_task = asyncio.create_task(self._message_handler())
             
-            # Start keepalive
-            self.keepalive_task = asyncio.create_task(self._keepalive())
+            # Small delay to ensure message handler is running
+            await asyncio.sleep(0.1)
             
             # Register with SIP server
-            await self.register()
+            success = await self.register()
             
-            return True
+            if success:
+                # Start keepalive/re-registration
+                self.register_refresh_task = asyncio.create_task(self._register_refresh())
+            
+            return success
             
         except Exception as e:
             logger.error(f"Failed to connect to SIP server: {e}")
@@ -113,10 +156,10 @@ class SIPClientService:
         """Disconnect from SIP server"""
         try:
             # Cancel background tasks
-            if self.keepalive_task:
-                self.keepalive_task.cancel()
+            if self.register_refresh_task:
+                self.register_refresh_task.cancel()
                 try:
-                    await self.keepalive_task
+                    await self.register_refresh_task
                 except asyncio.CancelledError:
                     pass
             
@@ -143,96 +186,263 @@ class SIPClientService:
         except Exception as e:
             logger.error(f"Error disconnecting from SIP server: {e}")
     
-    async def register(self) -> bool:
-        """Register with SIP server"""
-        try:
-            # Generate authentication
-            register_message = {
-                "type": "register",
-                "username": self.username,
-                "domain": self.domain,
-                "auth": self._generate_auth()
-            }
-            
-            await self._send_message(register_message)
-            logger.info(f"Sent SIP REGISTER for {self.username}@{self.domain}")
-            
-            # Wait for registration response
-            await asyncio.sleep(2)
-            
-            if self.is_registered:
-                logger.info("✅ SIP registration successful")
-                return True
-            else:
-                logger.warning("⚠️ SIP registration pending or failed")
-                return False
-            
-        except Exception as e:
-            logger.error(f"SIP registration failed: {e}")
-            return False
+    def _build_sip_uri(self, user: str = None) -> str:
+        """Build a SIP URI"""
+        if user:
+            return f"sip:{user}@{self.domain}"
+        return f"sip:{self.domain}"
     
-    def _generate_auth(self, challenge: Optional[Dict] = None) -> str:
-        """Generate SIP authentication"""
-        if not challenge:
-            # Basic auth
-            credentials = f"{self.username}:{self.password}"
-            return base64.b64encode(credentials.encode()).decode()
+    def _build_register_request(self, auth_header: str = None) -> str:
+        """Build a SIP REGISTER request"""
+        branch = generate_branch()
+        self.cseq += 1
         
-        # Digest authentication
+        # Build headers
+        headers = [
+            f"REGISTER {self._build_sip_uri()} SIP/2.0",
+            f"Via: SIP/2.0/WSS {self.domain};branch={branch};rport",
+            f"Max-Forwards: 70",
+            f"From: <{self._build_sip_uri(self.username)}>;tag={self.from_tag}",
+            f"To: <{self._build_sip_uri(self.username)}>",
+            f"Call-ID: {self.register_call_id}",
+            f"CSeq: {self.cseq} REGISTER",
+            f"Contact: <sip:{self.username}@{self.domain};transport=ws>",
+            f"Expires: 600",
+            f"Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE",
+            f"Supported: outbound, path, gruu",
+            f"User-Agent: WeeVoice/1.0",
+            f"Content-Length: 0",
+        ]
+        
+        # Add authorization if provided
+        if auth_header:
+            headers.insert(-1, auth_header)
+        
+        return "\r\n".join(headers) + "\r\n\r\n"
+    
+    def _build_auth_header(self, challenge: dict, method: str = "REGISTER") -> str:
+        """Build Authorization header for digest authentication"""
         realm = challenge.get('realm', self.domain)
         nonce = challenge.get('nonce', '')
-        method = 'REGISTER'
-        uri = f"sip:{self.domain}"
+        uri = self._build_sip_uri()
         
+        # Calculate digest response
         ha1 = hashlib.md5(f"{self.username}:{realm}:{self.password}".encode()).hexdigest()
         ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
         response = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
         
-        return response
+        auth = f'Authorization: Digest username="{self.username}", realm="{realm}", '
+        auth += f'nonce="{nonce}", uri="{uri}", response="{response}", algorithm=MD5'
+        
+        return auth
+    
+    def _parse_challenge(self, www_authenticate: str) -> dict:
+        """Parse WWW-Authenticate header"""
+        challenge = {}
+        
+        # Remove "Digest " prefix
+        if www_authenticate.lower().startswith("digest "):
+            www_authenticate = www_authenticate[7:]
+        
+        # Parse parameters
+        pattern = r'(\w+)=["\']?([^"\'>,]+)["\']?'
+        matches = re.findall(pattern, www_authenticate)
+        for key, value in matches:
+            challenge[key.lower()] = value
+        
+        return challenge
+    
+    def _parse_sip_response(self, message: str) -> dict:
+        """Parse a SIP response message"""
+        lines = message.split("\r\n")
+        if not lines:
+            return {}
+        
+        result = {
+            "headers": {},
+            "body": ""
+        }
+        
+        # Parse status line
+        status_line = lines[0]
+        if status_line.startswith("SIP/2.0"):
+            parts = status_line.split(" ", 2)
+            if len(parts) >= 2:
+                result["status_code"] = int(parts[1])
+                result["status_text"] = parts[2] if len(parts) > 2 else ""
+        elif " SIP/2.0" in status_line:
+            # This is a request, not a response
+            parts = status_line.split(" ")
+            result["method"] = parts[0]
+            result["request_uri"] = parts[1] if len(parts) > 1 else ""
+        
+        # Parse headers
+        body_start = len(lines)
+        for i, line in enumerate(lines[1:], 1):
+            if line == "":
+                body_start = i + 1
+                break
+            if ":" in line:
+                key, value = line.split(":", 1)
+                result["headers"][key.strip().lower()] = value.strip()
+        
+        # Parse body
+        if body_start < len(lines):
+            result["body"] = "\r\n".join(lines[body_start:])
+        
+        return result
+    
+    async def register(self) -> bool:
+        """Register with SIP server"""
+        try:
+            print(f"[SIP Client] Sending REGISTER for {self.username}@{self.domain}")
+            logger.info(f"Sending REGISTER for {self.username}@{self.domain}")
+            
+            # Clear any old responses in queue
+            while not self.response_queue.empty():
+                try:
+                    self.response_queue.get_nowait()
+                except:
+                    break
+            
+            # Send initial REGISTER
+            register_msg = self._build_register_request()
+            logger.debug(f"REGISTER message:\n{register_msg[:500]}...")
+            await self._send_message(register_msg)
+            
+            # Wait for response
+            response = await self._wait_for_response(timeout=10)
+            
+            if not response:
+                logger.error("No response to REGISTER (timeout)")
+                return False
+            
+            status_code = response.get("status_code", 0)
+            logger.info(f"REGISTER response: {status_code}")
+            
+            if status_code == 200:
+                self.is_registered = True
+                logger.info("✅ SIP registration successful")
+                return True
+            
+            elif status_code == 401 or status_code == 407:
+                # Authentication required
+                www_auth = response["headers"].get("www-authenticate", "")
+                if not www_auth:
+                    www_auth = response["headers"].get("proxy-authenticate", "")
+                
+                logger.info(f"Auth challenge: {www_auth[:100]}...")
+                
+                if www_auth:
+                    logger.info("Authentication required, sending credentials...")
+                    challenge = self._parse_challenge(www_auth)
+                    auth_header = self._build_auth_header(challenge)
+                    
+                    # Resend with auth
+                    register_msg = self._build_register_request(auth_header)
+                    await self._send_message(register_msg)
+                    
+                    # Wait for response
+                    response = await self._wait_for_response(timeout=10)
+                    
+                    if response and response.get("status_code") == 200:
+                        self.is_registered = True
+                        logger.info("✅ SIP registration successful (with auth)")
+                        return True
+                    else:
+                        status = response.get("status_code") if response else "timeout"
+                        logger.error(f"Registration failed after auth: {status}")
+                        if response:
+                            logger.error(f"Response headers: {response.get('headers', {})}")
+                        return False
+                else:
+                    logger.error("401 response but no WWW-Authenticate header")
+                    logger.error(f"Headers received: {response.get('headers', {})}")
+                    return False
+            
+            else:
+                logger.error(f"Registration failed with status {status_code}")
+                logger.error(f"Response: {response}")
+                return False
+            
+        except Exception as e:
+            logger.error(f"SIP registration failed: {e}", exc_info=True)
+            return False
     
     async def _send_unregister(self):
-        """Unregister from SIP server"""
+        """Unregister from SIP server (Expires: 0)"""
         try:
-            unregister_message = {
-                "type": "unregister",
-                "username": self.username,
-                "domain": self.domain
-            }
-            await self._send_message(unregister_message)
+            self.cseq += 1
+            branch = generate_branch()
+            
+            headers = [
+                f"REGISTER {self._build_sip_uri()} SIP/2.0",
+                f"Via: SIP/2.0/WSS {self.domain};branch={branch};rport",
+                f"Max-Forwards: 70",
+                f"From: <{self._build_sip_uri(self.username)}>;tag={self.from_tag}",
+                f"To: <{self._build_sip_uri(self.username)}>",
+                f"Call-ID: {self.register_call_id}",
+                f"CSeq: {self.cseq} REGISTER",
+                f"Contact: *",
+                f"Expires: 0",
+                f"Content-Length: 0",
+            ]
+            
+            msg = "\r\n".join(headers) + "\r\n\r\n"
+            await self._send_message(msg)
+            logger.info("Sent UNREGISTER")
         except Exception as e:
             logger.error(f"Error sending UNREGISTER: {e}")
     
-    async def _send_message(self, message: Dict):
-        """Send JSON message to SIP server"""
+    async def _send_message(self, message: str):
+        """Send SIP message to server"""
         if not self.ws or not self.is_connected:
             logger.error("Cannot send message: not connected")
             return
         
         try:
-            await self.ws.send(json.dumps(message))
-            logger.debug(f"Sent SIP message: {message.get('type')}")
+            await self.ws.send(message)
+            # Log first line of message
+            first_line = message.split("\r\n")[0]
+            logger.info(f"📤 Sent: {first_line}")
         except Exception as e:
             logger.error(f"Error sending SIP message: {e}")
     
-    async def _keepalive(self):
-        """Send periodic keepalive messages"""
+    async def _wait_for_response(self, timeout: float = 5) -> Optional[dict]:
+        """Wait for a SIP response from the response queue"""
         try:
-            while self.is_connected:
-                await asyncio.sleep(30)
-                if self.ws and self.is_connected:
-                    await self._send_message({"type": "keepalive"})
+            response = await asyncio.wait_for(self.response_queue.get(), timeout=timeout)
+            return response
+        except asyncio.TimeoutError:
+            logger.warning("Timeout waiting for SIP response")
+            return None
+        except Exception as e:
+            logger.error(f"Error waiting for response: {e}")
+            return None
+    
+    async def _register_refresh(self):
+        """Periodically refresh registration"""
+        try:
+            while self.is_connected and self.is_registered:
+                await asyncio.sleep(300)  # Re-register every 5 minutes
+                if self.is_connected:
+                    logger.info("Refreshing SIP registration...")
+                    await self.register()
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"Error in keepalive: {e}")
+            logger.error(f"Error in register refresh: {e}")
     
     async def _message_handler(self):
-        """Handle incoming messages from SIP server"""
+        """Handle incoming SIP messages"""
+        logger.info("Message handler started")
         try:
             async for message in self.ws:
                 if isinstance(message, str):
-                    # JSON signaling message
-                    await self._handle_signaling(json.loads(message))
+                    # Log first line of received message
+                    first_line = message.split("\r\n")[0] if message else "(empty)"
+                    logger.info(f"📨 Received: {first_line}")
+                    await self._handle_sip_message(message)
                 elif isinstance(message, bytes):
                     # Binary audio data
                     await self._handle_audio(message)
@@ -245,164 +455,251 @@ class SIPClientService:
             logger.error(f"Error in message handler: {e}", exc_info=True)
             self.is_connected = False
     
-    async def _handle_signaling(self, message: Dict):
-        """Handle SIP signaling messages"""
-        msg_type = message.get('type')
+    async def _handle_sip_message(self, message: str):
+        """Handle incoming SIP message"""
+        parsed = self._parse_sip_response(message)
         
-        if msg_type == 'register_response':
-            status = message.get('status')
-            if status == 'success':
-                self.is_registered = True
-                logger.info("✅ SIP registration successful")
-            elif status == 'challenge':
-                # Re-register with digest auth
-                challenge = message.get('challenge', {})
-                auth_response = self._generate_auth(challenge)
-                register_message = {
-                    "type": "register",
-                    "username": self.username,
-                    "domain": self.domain,
-                    "auth": auth_response,
-                    "challenge": challenge
-                }
-                await self._send_message(register_message)
-            else:
-                logger.error(f"SIP registration failed: {message.get('reason')}")
-        
-        elif msg_type == 'invite':
-            # Incoming call
-            await self._handle_incoming_call(message)
-        
-        elif msg_type == 'ringing' or msg_type == 'progress':
-            # Outbound call is ringing
-            call_id = message.get('call_id')
-            if call_id in self.active_calls:
-                call = self.active_calls[call_id]
-                call.status = 'ringing'
-                logger.info(f"🔔 Outbound call {call_id} is ringing")
-                if self.on_call_ringing:
-                    try:
-                        await self.on_call_ringing(call)
-                    except Exception as e:
-                        logger.error(f"Error in on_call_ringing callback: {e}")
-        
-        elif msg_type == 'answered':
-            # Call answered (inbound auto-answer or outbound remote answered)
-            call_id = message.get('call_id')
-            if call_id in self.active_calls:
-                call = self.active_calls[call_id]
-                call.status = 'in_progress'
-                logger.info(f"✅ Call {call_id} answered (direction: {call.direction})")
-                if self.on_call_answered:
-                    try:
-                        await self.on_call_answered(call)
-                    except Exception as e:
-                        logger.error(f"Error in on_call_answered callback: {e}")
-        
-        elif msg_type == 'bye':
-            # Call ended
-            await self._handle_call_ended(message)
-        
-        elif msg_type in ('reject', 'busy', 'unavailable', 'timeout', 'failed'):
-            # Outbound call failed
-            call_id = message.get('call_id')
-            reason = message.get('reason', msg_type)
-            logger.warning(f"❌ Call {call_id} failed: {reason}")
+        if "method" in parsed:
+            # This is a SIP request
+            method = parsed["method"]
+            logger.info(f"📨 Received SIP {method}")
             
-            if call_id in self.active_calls:
-                call = self.active_calls[call_id]
-                call.status = 'failed'
-                call.end()
-                
-                if self.on_call_failed:
-                    try:
-                        await self.on_call_failed(call, reason)
-                    except Exception as e:
-                        logger.error(f"Error in on_call_failed callback: {e}")
-                
-                # Cleanup
-                del self.active_calls[call_id]
-        
-        elif msg_type == 'error':
-            logger.error(f"SIP error: {message.get('reason')}")
-    
-    async def _handle_incoming_call(self, message: Dict):
-        """Handle incoming call (INVITE)"""
-        call_id = message.get('call_id', str(uuid.uuid4()))
-        from_number = message.get('from')
-        to_number = message.get('to')
-        
-        logger.info(f"📞 Incoming SIP call: {from_number} -> {to_number} (call_id: {call_id})")
-        
-        # Create call session
-        call = SIPCallSession(call_id, from_number, to_number, 'inbound')
-        self.active_calls[call_id] = call
-        
-        # Notify application
-        if self.on_incoming_call:
+            if method == "INVITE":
+                await self._handle_invite(parsed, message)
+            elif method == "BYE":
+                await self._handle_bye(parsed, message)
+            elif method == "ACK":
+                pass  # ACK doesn't need response
+            elif method == "CANCEL":
+                await self._handle_cancel(parsed, message)
+            elif method == "OPTIONS":
+                await self._send_options_response(parsed, message)
+        else:
+            # This is a SIP response - put it in the queue for waiting callers
+            status_code = parsed.get("status_code", 0)
+            logger.debug(f"📨 Received SIP {status_code} response")
+            
+            # Put response in queue (non-blocking)
             try:
-                await self.on_incoming_call(call)
-            except Exception as e:
-                logger.error(f"Error in on_incoming_call callback: {e}")
-        
-        # Auto-answer
-        await self.answer_call(call_id)
+                self.response_queue.put_nowait(parsed)
+            except asyncio.QueueFull:
+                logger.warning("Response queue full, discarding response")
     
-    async def answer_call(self, call_id: str) -> bool:
-        """Answer an incoming call"""
+    async def _handle_invite(self, parsed: dict, raw_message: str):
+        """Handle incoming INVITE (incoming call)"""
         try:
-            if call_id not in self.active_calls:
-                logger.error(f"Cannot answer: call {call_id} not found")
-                return False
+            headers = parsed.get("headers", {})
             
-            answer_message = {
-                "type": "answer",
-                "call_id": call_id
-            }
-            await self._send_message(answer_message)
+            # Extract call info
+            from_header = headers.get("from", "")
+            to_header = headers.get("to", "")
+            call_id = headers.get("call-id", str(uuid.uuid4()))
             
-            self.active_calls[call_id].status = 'answered'
-            logger.info(f"✅ Answered SIP call {call_id}")
-            return True
+            # Parse From header to get caller number
+            from_match = re.search(r'<sip:([^@>]+)', from_header)
+            from_number = from_match.group(1) if from_match else "unknown"
             
-        except Exception as e:
-            logger.error(f"Error answering call: {e}")
-            return False
-    
-    async def _handle_call_ended(self, message: Dict):
-        """Handle call ended (BYE)"""
-        call_id = message.get('call_id')
-        
-        if call_id in self.active_calls:
-            call = self.active_calls[call_id]
-            call.end()
+            # Parse To header to get called number
+            to_match = re.search(r'<sip:([^@>]+)', to_header)
+            to_number = to_match.group(1) if to_match else self.username
             
-            logger.info(f"📞 SIP call {call_id} ended")
+            logger.info(f"📞 Incoming call: {from_number} -> {to_number}")
+            
+            # Send 100 Trying
+            await self._send_response(parsed, raw_message, 100, "Trying")
+            
+            # Send 180 Ringing
+            await self._send_response(parsed, raw_message, 180, "Ringing")
+            
+            # Create call session
+            session = SIPCallSession(call_id, from_number, to_number, 'inbound')
+            session.sip_call_id = call_id
+            
+            # Extract tags
+            from_tag_match = re.search(r'tag=([^;>\s]+)', from_header)
+            if from_tag_match:
+                session.remote_tag = from_tag_match.group(1)
+            session.local_tag = generate_tag()
+            
+            self.active_calls[call_id] = session
             
             # Notify application
+            if self.on_incoming_call:
+                try:
+                    await self.on_incoming_call(session)
+                except Exception as e:
+                    logger.error(f"Error in on_incoming_call callback: {e}")
+            
+            # Auto-answer with 200 OK
+            await self._send_answer(parsed, raw_message, session)
+            
+        except Exception as e:
+            logger.error(f"Error handling INVITE: {e}", exc_info=True)
+    
+    async def _send_response(self, parsed: dict, raw_message: str, status_code: int, status_text: str):
+        """Send a SIP response"""
+        headers = parsed.get("headers", {})
+        
+        # Build response
+        via = headers.get("via", "")
+        from_h = headers.get("from", "")
+        to_h = headers.get("to", "")
+        call_id = headers.get("call-id", "")
+        cseq = headers.get("cseq", "")
+        
+        response_lines = [
+            f"SIP/2.0 {status_code} {status_text}",
+            f"Via: {via}",
+            f"From: {from_h}",
+            f"To: {to_h}",
+            f"Call-ID: {call_id}",
+            f"CSeq: {cseq}",
+            f"Content-Length: 0",
+        ]
+        
+        response = "\r\n".join(response_lines) + "\r\n\r\n"
+        await self._send_message(response)
+    
+    async def _send_answer(self, parsed: dict, raw_message: str, session: SIPCallSession):
+        """Send 200 OK to answer a call"""
+        headers = parsed.get("headers", {})
+        
+        via = headers.get("via", "")
+        from_h = headers.get("from", "")
+        to_h = headers.get("to", "")
+        call_id = headers.get("call-id", "")
+        cseq = headers.get("cseq", "")
+        
+        # Add tag to To header if not present
+        if "tag=" not in to_h:
+            to_h = f"{to_h};tag={session.local_tag}"
+        
+        # Simple SDP for audio
+        sdp = self._build_sdp()
+        
+        response_lines = [
+            f"SIP/2.0 200 OK",
+            f"Via: {via}",
+            f"From: {from_h}",
+            f"To: {to_h}",
+            f"Call-ID: {call_id}",
+            f"CSeq: {cseq}",
+            f"Contact: <sip:{self.username}@{self.domain};transport=ws>",
+            f"Content-Type: application/sdp",
+            f"Content-Length: {len(sdp)}",
+        ]
+        
+        response = "\r\n".join(response_lines) + "\r\n\r\n" + sdp
+        await self._send_message(response)
+        
+        session.status = 'in_progress'
+        logger.info(f"✅ Answered call {call_id}")
+        
+        if self.on_call_answered:
+            try:
+                await self.on_call_answered(session)
+            except Exception as e:
+                logger.error(f"Error in on_call_answered callback: {e}")
+    
+    def _build_sdp(self) -> str:
+        """Build SDP for audio"""
+        # Simple SDP offering audio
+        sdp_lines = [
+            "v=0",
+            f"o=- {int(datetime.utcnow().timestamp())} 1 IN IP4 127.0.0.1",
+            "s=WeeVoice",
+            "c=IN IP4 0.0.0.0",
+            "t=0 0",
+            "m=audio 9 UDP/TLS/RTP/SAVPF 0 8 101",
+            "a=rtpmap:0 PCMU/8000",
+            "a=rtpmap:8 PCMA/8000",
+            "a=rtpmap:101 telephone-event/8000",
+            "a=sendrecv",
+        ]
+        return "\r\n".join(sdp_lines) + "\r\n"
+    
+    async def _handle_bye(self, parsed: dict, raw_message: str):
+        """Handle BYE (call ended)"""
+        headers = parsed.get("headers", {})
+        call_id = headers.get("call-id", "")
+        
+        # Send 200 OK
+        await self._send_response(parsed, raw_message, 200, "OK")
+        
+        if call_id in self.active_calls:
+            session = self.active_calls[call_id]
+            session.end()
+            
+            logger.info(f"📞 Call {call_id} ended (BYE received)")
+            
             if self.on_call_ended:
                 try:
-                    await self.on_call_ended(call)
+                    await self.on_call_ended(session)
                 except Exception as e:
                     logger.error(f"Error in on_call_ended callback: {e}")
             
-            # Cleanup
             del self.active_calls[call_id]
     
+    async def _handle_cancel(self, parsed: dict, raw_message: str):
+        """Handle CANCEL"""
+        headers = parsed.get("headers", {})
+        call_id = headers.get("call-id", "")
+        
+        # Send 200 OK to CANCEL
+        await self._send_response(parsed, raw_message, 200, "OK")
+        
+        if call_id in self.active_calls:
+            session = self.active_calls[call_id]
+            session.status = 'cancelled'
+            session.end()
+            
+            logger.info(f"📞 Call {call_id} cancelled")
+            
+            if self.on_call_ended:
+                try:
+                    await self.on_call_ended(session)
+                except Exception as e:
+                    logger.error(f"Error in on_call_ended callback: {e}")
+            
+            del self.active_calls[call_id]
+    
+    async def _send_options_response(self, parsed: dict, raw_message: str):
+        """Respond to OPTIONS (keepalive/ping)"""
+        await self._send_response(parsed, raw_message, 200, "OK")
+    
+    async def answer_call(self, call_id: str) -> bool:
+        """Answer an incoming call (already handled in _handle_invite)"""
+        return call_id in self.active_calls
+    
     async def hangup_call(self, call_id: str) -> bool:
-        """Hangup a call"""
+        """Hangup a call by sending BYE"""
         try:
             if call_id not in self.active_calls:
                 return False
             
-            bye_message = {
-                "type": "bye",
-                "call_id": call_id
-            }
-            await self._send_message(bye_message)
+            session = self.active_calls[call_id]
             
-            self.active_calls[call_id].end()
+            # Build BYE request
+            self.cseq += 1
+            branch = generate_branch()
+            
+            bye_lines = [
+                f"BYE {self._build_sip_uri(session.from_number if session.direction == 'inbound' else session.to_number)} SIP/2.0",
+                f"Via: SIP/2.0/WSS {self.domain};branch={branch};rport",
+                f"Max-Forwards: 70",
+                f"From: <{self._build_sip_uri(self.username)}>;tag={session.local_tag}",
+                f"To: <{self._build_sip_uri(session.from_number if session.direction == 'inbound' else session.to_number)}>;tag={session.remote_tag}",
+                f"Call-ID: {session.sip_call_id}",
+                f"CSeq: {self.cseq} BYE",
+                f"Content-Length: 0",
+            ]
+            
+            bye_msg = "\r\n".join(bye_lines) + "\r\n\r\n"
+            await self._send_message(bye_msg)
+            
+            session.end()
             logger.info(f"Sent BYE for call {call_id}")
+            
             return True
             
         except Exception as e:
@@ -410,51 +707,64 @@ class SIPClientService:
             return False
     
     async def make_call(self, to_number: str, from_number: Optional[str] = None) -> Optional[SIPCallSession]:
-        """
-        Initiate an outbound call
-        
-        Args:
-            to_number: The number to call
-            from_number: Caller ID (defaults to SIP username)
-            
-        Returns:
-            SIPCallSession if call initiated successfully, None otherwise
-        """
+        """Initiate an outbound call"""
         if not self.is_connected or not self.is_registered:
             logger.error("Cannot make call: not connected or registered")
             return None
         
         try:
-            call_id = str(uuid.uuid4())
+            call_id = generate_call_id()
+            local_tag = generate_tag()
+            branch = generate_branch()
+            self.cseq += 1
+            
             caller_id = from_number or self.username
             
             logger.info(f"📞 Initiating outbound call: {caller_id} -> {to_number}")
             
-            # Create call session
-            call = SIPCallSession(call_id, caller_id, to_number, 'outbound')
-            call.status = 'calling'
-            self.active_calls[call_id] = call
+            # Build SDP
+            sdp = self._build_sdp()
             
-            # Send INVITE to SIP server
-            invite_message = {
-                "type": "invite",
-                "call_id": call_id,
-                "from": caller_id,
-                "to": to_number,
-                "domain": self.domain
-            }
-            await self._send_message(invite_message)
+            # Build INVITE
+            invite_lines = [
+                f"INVITE {self._build_sip_uri(to_number)} SIP/2.0",
+                f"Via: SIP/2.0/WSS {self.domain};branch={branch};rport",
+                f"Max-Forwards: 70",
+                f"From: <{self._build_sip_uri(caller_id)}>;tag={local_tag}",
+                f"To: <{self._build_sip_uri(to_number)}>",
+                f"Call-ID: {call_id}",
+                f"CSeq: {self.cseq} INVITE",
+                f"Contact: <sip:{self.username}@{self.domain};transport=ws>",
+                f"Content-Type: application/sdp",
+                f"Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE",
+                f"Supported: outbound, path, gruu",
+                f"User-Agent: WeeVoice/1.0",
+                f"Content-Length: {len(sdp)}",
+            ]
+            
+            invite_msg = "\r\n".join(invite_lines) + "\r\n\r\n" + sdp
+            
+            # Create session
+            session = SIPCallSession(call_id, caller_id, to_number, 'outbound')
+            session.sip_call_id = call_id
+            session.local_tag = local_tag
+            session.status = 'calling'
+            
+            self.active_calls[call_id] = session
+            
+            # Send INVITE
+            await self._send_message(invite_msg)
             
             logger.info(f"📤 Sent INVITE for outbound call {call_id}")
-            return call
+            return session
             
         except Exception as e:
             logger.error(f"Error making outbound call: {e}", exc_info=True)
             return None
     
     async def _handle_audio(self, audio_data: bytes):
-        """Handle incoming audio from SIP (caller's voice)"""
-        # Route to appropriate call's inbound queue
+        """Handle incoming audio from SIP"""
+        # Route to active call's inbound queue
         for call_id, call in self.active_calls.items():
             if call.status == 'in_progress':
                 try:
@@ -468,7 +778,6 @@ class SIPClientService:
     def _convert_to_gemini_format(self, audio_data: bytes, call: SIPCallSession) -> bytes:
         """Convert SIP audio (8kHz) to Gemini format (16kHz PCM16)"""
         try:
-            # Resample from 8kHz to 16kHz
             converted, call.inbound_resample_state = audioop.ratecv(
                 audio_data,
                 2,  # 2 bytes per sample (PCM16)
@@ -505,7 +814,6 @@ class SIPClientService:
     def _convert_to_sip_format(self, audio_data: bytes, call: SIPCallSession) -> bytes:
         """Convert Gemini audio (24kHz) to SIP format (8kHz PCM16)"""
         try:
-            # Resample from 24kHz to 8kHz
             converted, call.outbound_resample_state = audioop.ratecv(
                 audio_data,
                 2,  # 2 bytes per sample (PCM16)
@@ -527,12 +835,6 @@ class SIPClientService:
 def create_sip_client_from_phone_number(phone_number) -> SIPClientService:
     """
     Create a SIP client configured with phone number's SIP settings
-    
-    Args:
-        phone_number: PhoneNumber object with SIP configuration
-        
-    Returns:
-        SIPClientService configured with the phone number's credentials
     """
     if not (hasattr(phone_number, 'sip_websocket_url') and phone_number.sip_websocket_url):
         raise ValueError(f"Phone number {phone_number.phone_number} has no SIP configuration")
@@ -543,6 +845,3 @@ def create_sip_client_from_phone_number(phone_number) -> SIPClientService:
         password=phone_number.sip_password,
         domain=phone_number.sip_domain
     )
-
-
-
