@@ -1,127 +1,162 @@
 #!/bin/bash
 
+# =============================================================================
 # WeeVoice Deployment Script (No Docker)
-# Deploys Backend, Frontend, and configures Nginx on the same VPS as Asterisk
+# =============================================================================
+# 
+# Prerequisites:
+#   1. Ubuntu 20.04/22.04 VPS with Asterisk installed
+#   2. Domain pointing to VPS (or use IP for testing)
+#   3. backend/.env file with GOOGLE_API_KEY configured
+#
+# Usage:
+#   cd deploy
+#   sudo ./deploy-no-docker.sh weevoice.weedoo.be
+#
+# =============================================================================
 
 set -e
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+echo ""
 echo "============================================"
 echo "  WeeVoice Deployment (No Docker)"
 echo "============================================"
+echo ""
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root (sudo ./deploy-no-docker.sh)"
+    log_error "Please run as root: sudo ./deploy-no-docker.sh <domain>"
     exit 1
 fi
 
-# Get configuration
-read -p "Enter your domain name (e.g., voice.example.com): " DOMAIN
-read -p "Enter your Google API Key: " GOOGLE_API_KEY
-read -p "Enter your OpenAI API Key (optional, press Enter to skip): " OPENAI_API_KEY
-
-# Generate secret key
-SECRET_KEY=$(openssl rand -hex 32)
-
-echo ""
-echo "Step 1: Installing system dependencies..."
-
-# Update system
-apt-get update
-apt-get install -y \
-    python3.11 \
-    python3.11-venv \
-    python3-pip \
-    nodejs \
-    npm \
-    nginx \
-    certbot \
-    python3-certbot-nginx \
-    git \
-    supervisor
-
-# Install Node.js 18 if not present
-if ! node -v | grep -q "v18"; then
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-    apt-get install -y nodejs
+# Get domain from argument or prompt
+DOMAIN=${1:-}
+if [ -z "$DOMAIN" ]; then
+    log_error "Usage: sudo ./deploy-no-docker.sh <domain_or_ip>"
+    log_error "Example: sudo ./deploy-no-docker.sh weevoice.weedoo.be"
+    exit 1
 fi
 
-echo ""
-echo "Step 2: Setting up directory structure..."
+# Check for backend/.env
+if [ ! -f "../backend/.env" ]; then
+    log_error "backend/.env file not found!"
+    log_error "Please create backend/.env with at least GOOGLE_API_KEY"
+    exit 1
+fi
 
-# Create directories
-mkdir -p /opt/weevoice
-mkdir -p /opt/weevoice/backend
-mkdir -p /opt/weevoice/frontend
-mkdir -p /opt/weevoice/data
-mkdir -p /opt/weevoice/uploads
+# Load existing .env
+source ../backend/.env
+
+# Validate GOOGLE_API_KEY
+if [ -z "$GOOGLE_API_KEY" ]; then
+    log_error "GOOGLE_API_KEY not found in backend/.env"
+    exit 1
+fi
+
+# Generate SECRET_KEY if not set
+SECRET_KEY=${SECRET_KEY:-$(openssl rand -hex 32)}
+
+# Determine protocol
+if [[ $DOMAIN =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    PROTOCOL="http"
+    USE_SSL=false
+    log_warn "IP address detected - using HTTP (no SSL)"
+else
+    PROTOCOL="https"
+    USE_SSL=true
+fi
+
+log_info "Domain: $DOMAIN"
+log_info "Protocol: $PROTOCOL"
+log_info "Google API Key: ${GOOGLE_API_KEY:0:15}..."
+
+# =============================================================================
+# Step 1: Install Dependencies
+# =============================================================================
+log_info "Step 1/8: Installing system dependencies..."
+
+apt-get update -qq
+apt-get install -y -qq python3 python3-venv python3-pip nginx certbot python3-certbot-nginx supervisor curl > /dev/null
+
+# Install Node.js 22
+if ! command -v node &> /dev/null || ! node -v | grep -q "v22"; then
+    log_info "Installing Node.js 22..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - > /dev/null 2>&1
+    apt-get install -y -qq nodejs > /dev/null
+fi
+
+# =============================================================================
+# Step 2: Create Directory Structure
+# =============================================================================
+log_info "Step 2/8: Setting up directories..."
+
+mkdir -p /opt/weevoice/{backend,frontend,data,uploads}
 mkdir -p /var/log/weevoice
 
-# Copy files (assuming we're in the deploy directory)
+# Copy application files
 cp -r ../backend/* /opt/weevoice/backend/
 cp -r ../frontend/* /opt/weevoice/frontend/
 
-echo ""
-echo "Step 3: Setting up Backend..."
+# =============================================================================
+# Step 3: Setup Backend
+# =============================================================================
+log_info "Step 3/8: Setting up backend..."
 
 cd /opt/weevoice/backend
 
-# Create virtual environment
-python3.11 -m venv venv
-source venv/bin/activate
+# Create virtual environment and install dependencies
+python3 -m venv venv
+./venv/bin/pip install --upgrade pip -q
+./venv/bin/pip install -r requirements.txt -q
 
-# Install dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# Create .env file
-cat > /opt/weevoice/backend/.env << EOF
-# App Settings
+# Create production .env
+cat > .env << EOF
 DEBUG=false
 SECRET_KEY=$SECRET_KEY
-BASE_URL=https://$DOMAIN
-
-# API Keys
+BASE_URL=$PROTOCOL://$DOMAIN
 GOOGLE_API_KEY=$GOOGLE_API_KEY
-OPENAI_API_KEY=$OPENAI_API_KEY
-
-# Database
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
 DATABASE_URL=sqlite:////opt/weevoice/data/voiceagent.db
-
-# URLs
-FRONTEND_URL=https://$DOMAIN
-BACKEND_URL=https://$DOMAIN/api
-
-# Storage
+FRONTEND_URL=$PROTOCOL://$DOMAIN
+BACKEND_URL=$PROTOCOL://$DOMAIN/api
 UPLOAD_DIR=/opt/weevoice/uploads
 CALL_RECORDINGS_PATH=/opt/weevoice/data/recordings
 TRANSCRIPTS_PATH=/opt/weevoice/data/transcripts
-
-# SIP (disabled, using AudioSocket)
-SIP_ENABLED=false
+SIP_ENABLED=true
 EOF
 
-deactivate
-
-echo ""
-echo "Step 4: Setting up Frontend..."
+# =============================================================================
+# Step 4: Setup Frontend
+# =============================================================================
+log_info "Step 4/8: Setting up frontend..."
 
 cd /opt/weevoice/frontend
 
-# Create .env file for frontend
+# Create frontend .env
 cat > .env.local << EOF
-NEXT_PUBLIC_API_URL=https://$DOMAIN/api
+NEXT_PUBLIC_API_URL=$PROTOCOL://$DOMAIN/api
 EOF
 
-# Install dependencies and build
-npm ci
-npm run build
+# Install and build
+npm ci --silent
+npm run build --silent
 
-echo ""
-echo "Step 5: Configuring Supervisor (process manager)..."
+# =============================================================================
+# Step 5: Configure Supervisor
+# =============================================================================
+log_info "Step 5/8: Configuring process manager..."
 
-# Create supervisor config for backend
-cat > /etc/supervisor/conf.d/weevoice-backend.conf << EOF
+cat > /etc/supervisor/conf.d/weevoice.conf << EOF
 [program:weevoice-backend]
 command=/opt/weevoice/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 directory=/opt/weevoice/backend
@@ -130,11 +165,7 @@ autostart=true
 autorestart=true
 stderr_logfile=/var/log/weevoice/backend.err.log
 stdout_logfile=/var/log/weevoice/backend.out.log
-environment=PATH="/opt/weevoice/backend/venv/bin"
-EOF
 
-# Create supervisor config for frontend
-cat > /etc/supervisor/conf.d/weevoice-frontend.conf << EOF
 [program:weevoice-frontend]
 command=/usr/bin/npm start
 directory=/opt/weevoice/frontend
@@ -146,63 +177,20 @@ stdout_logfile=/var/log/weevoice/frontend.out.log
 environment=NODE_ENV="production",PORT="3000"
 EOF
 
-# Set permissions
-chown -R www-data:www-data /opt/weevoice
-chown -R www-data:www-data /var/log/weevoice
+chown -R www-data:www-data /opt/weevoice /var/log/weevoice
 
-# Reload supervisor
-supervisorctl reread
-supervisorctl update
+# =============================================================================
+# Step 6: Configure Nginx
+# =============================================================================
+log_info "Step 6/8: Configuring Nginx..."
 
-echo ""
-echo "Step 6: Configuring Nginx..."
-
-# Create nginx config
-cat > /etc/nginx/sites-available/weevoice << EOF
+if [ "$USE_SSL" = true ]; then
+    # HTTPS config (SSL will be added by certbot)
+    cat > /etc/nginx/sites-available/weevoice << EOF
 server {
     listen 80;
     server_name $DOMAIN;
-    return 301 https://\$server_name\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name $DOMAIN;
-
-    # SSL will be configured by certbot
-    # ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    # ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-
-    # API routes -> Backend
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-    }
-
-    # WebSocket
-    location /api/v1/ws/ {
-        proxy_pass http://127.0.0.1:8000/api/v1/ws/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_read_timeout 86400;
-    }
-
-    # Frontend
+    
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -213,66 +201,121 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+    }
+
+    location /api/v1/ws/ {
+        proxy_pass http://127.0.0.1:8000/api/v1/ws/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_read_timeout 86400;
+    }
 }
 EOF
+else
+    # HTTP only config (for IP address)
+    cat > /etc/nginx/sites-available/weevoice << EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
 
-# Enable site
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 86400;
+    }
+
+    location /api/v1/ws/ {
+        proxy_pass http://127.0.0.1:8000/api/v1/ws/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_read_timeout 86400;
+    }
+}
+EOF
+fi
+
 ln -sf /etc/nginx/sites-available/weevoice /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
+nginx -t -q
 
-# Test nginx config
-nginx -t
+# =============================================================================
+# Step 7: SSL Certificate (if domain)
+# =============================================================================
+if [ "$USE_SSL" = true ]; then
+    log_info "Step 7/8: Getting SSL certificate..."
+    certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN 2>/dev/null || {
+        log_warn "SSL failed - you can run manually: certbot --nginx -d $DOMAIN"
+    }
+else
+    log_info "Step 7/8: Skipping SSL (using IP address)..."
+fi
 
-echo ""
-echo "Step 7: Getting SSL certificate..."
+# =============================================================================
+# Step 8: Start Services
+# =============================================================================
+log_info "Step 8/8: Starting services..."
 
-# Get SSL certificate
-certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN || {
-    echo "SSL certificate failed. You can run this manually later:"
-    echo "  certbot --nginx -d $DOMAIN"
-}
-
-# Restart nginx
 systemctl restart nginx
+supervisorctl reread > /dev/null
+supervisorctl update > /dev/null
+supervisorctl restart weevoice-backend weevoice-frontend 2>/dev/null || supervisorctl start all
 
-echo ""
-echo "Step 8: Starting services..."
+# Configure firewall (if ufw is active)
+if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
+    ufw allow 80/tcp > /dev/null
+    ufw allow 443/tcp > /dev/null
+    ufw allow 5060/udp > /dev/null
+    ufw allow 8089/tcp > /dev/null
+fi
 
-supervisorctl start weevoice-backend
-supervisorctl start weevoice-frontend
-
-echo ""
-echo "Step 9: Configuring firewall..."
-
-# Configure firewall
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw allow 5060/udp   # SIP
-ufw allow 8089/tcp   # WebSocket SIP
-ufw allow 10000:20000/udp  # RTP
-
+# =============================================================================
+# Done!
+# =============================================================================
 echo ""
 echo "============================================"
-echo "  Deployment Complete!"
+echo -e "  ${GREEN}Deployment Complete!${NC}"
 echo "============================================"
 echo ""
-echo "Your WeeVoice is now running at:"
-echo "  Frontend: https://$DOMAIN"
-echo "  API:      https://$DOMAIN/api"
+echo "URLs:"
+echo "  Frontend: $PROTOCOL://$DOMAIN"
+echo "  API:      $PROTOCOL://$DOMAIN/api"
+echo "  API Docs: $PROTOCOL://$DOMAIN/api/docs"
 echo ""
-echo "AudioSocket is listening on:"
-echo "  127.0.0.1:9092 (localhost only)"
+echo "AudioSocket: 127.0.0.1:9092"
 echo ""
-echo "Service management:"
-echo "  supervisorctl status"
-echo "  supervisorctl restart weevoice-backend"
-echo "  supervisorctl restart weevoice-frontend"
+echo "Commands:"
+echo "  Status:  supervisorctl status"
+echo "  Logs:    tail -f /var/log/weevoice/backend.out.log"
+echo "  Restart: supervisorctl restart weevoice-backend weevoice-frontend"
 echo ""
-echo "Logs:"
-echo "  tail -f /var/log/weevoice/backend.out.log"
-echo "  tail -f /var/log/weevoice/frontend.out.log"
+echo "Asterisk extensions.conf:"
+echo '  AudioSocket(${CALL_UUID},127.0.0.1:9092)'
 echo ""
-echo "Make sure your Asterisk extensions.conf uses:"
-echo "  AudioSocket(\${CALL_UUID},127.0.0.1:9092)"
-echo ""
-
