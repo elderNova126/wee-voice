@@ -50,12 +50,28 @@ class AudioSocketSession:
         """Main handler for AudioSocket connection"""
         addr = self.writer.get_extra_info('peername')
         logger.info(f"📞 AudioSocket connection from {addr}")
+        print(f"[AudioSocket] 📞 Connection from {addr}")
         
         try:
             self.is_running = True
             
+            # First message from Asterisk is UUID (36 bytes, NO header)
+            # Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+            uuid_data = await self.reader.read(36)
+            if len(uuid_data) < 36:
+                logger.error(f"Failed to read UUID, got {len(uuid_data)} bytes")
+                return
+            
+            self.call_uuid = uuid_data.decode('utf-8').strip()
+            logger.info(f"📞 AudioSocket call UUID: {self.call_uuid}")
+            print(f"[AudioSocket] 📞 Call UUID: {self.call_uuid}")
+            
+            # Initialize call (look up in DB or create)
+            await self._setup_call()
+            
+            # Now read audio packets with 3-byte headers
             while self.is_running:
-                # Read message header (3 bytes)
+                # Read message header (3 bytes): type + length
                 header = await self.reader.read(3)
                 if len(header) < 3:
                     logger.info("Connection closed (incomplete header)")
@@ -73,9 +89,7 @@ class AudioSocketSession:
                         break
                 
                 # Handle message
-                if msg_type == MSG_UUID:
-                    await self._handle_uuid(payload)
-                elif msg_type == MSG_AUDIO:
+                if msg_type == MSG_AUDIO:
                     await self._handle_audio(payload)
                 elif msg_type == MSG_HANGUP:
                     logger.info(f"📞 Hangup received for {self.call_uuid}")
@@ -84,18 +98,19 @@ class AudioSocketSession:
                     error_msg = payload.decode('utf-8', errors='ignore')
                     logger.error(f"AudioSocket error: {error_msg}")
                     break
+                else:
+                    logger.warning(f"Unknown message type: {msg_type:#x}")
                     
         except asyncio.CancelledError:
             logger.info("AudioSocket session cancelled")
         except Exception as e:
             logger.error(f"AudioSocket error: {e}", exc_info=True)
+            print(f"[AudioSocket] ERROR: {e}")
         finally:
             await self._cleanup()
     
-    async def _handle_uuid(self, payload: bytes):
-        """Handle UUID message - call setup"""
-        self.call_uuid = payload.decode('utf-8').strip()
-        logger.info(f"📞 AudioSocket call UUID: {self.call_uuid}")
+    async def _setup_call(self):
+        """Set up the call after receiving UUID"""
         
         # Look up call in database or create new one
         self.db = SessionLocal()
