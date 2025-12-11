@@ -884,3 +884,184 @@ def bulk_toggle_favorite(
         "requested_count": len(request.call_ids)
     }
 
+
+# ============================================================================
+# Outbound Calling
+# ============================================================================
+
+class OutboundCallRequest(BaseModel):
+    """Request to initiate an outbound call"""
+    from_phone_number: str  # Phone number to call from (must be registered)
+    to_number: str  # Number to call
+    agent_id: int  # AI agent to use
+
+
+class OutboundCallResponse(BaseModel):
+    """Response for outbound call initiation"""
+    success: bool
+    message: str
+    call_id: Optional[int] = None
+    sip_call_id: Optional[str] = None
+    status: Optional[str] = None
+    from_number: Optional[str] = None
+    to_number: Optional[str] = None
+    agent_id: Optional[int] = None
+
+
+@router.post("/outbound", response_model=OutboundCallResponse)
+async def make_outbound_call(
+    request: OutboundCallRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Initiate an outbound call using AI agent.
+    
+    The call will be placed from the specified phone number to the target number.
+    Once the call is answered, the AI agent will handle the conversation.
+    
+    Requirements:
+    - from_phone_number must be a registered phone number with SIP credentials
+    - agent_id must be an agent owned by the current user (or any agent for admins)
+    - The phone number's SIP client must be registered with the SIP server
+    """
+    logger.info(f"Outbound call request: {request.from_phone_number} -> {request.to_number} (agent: {request.agent_id})")
+    
+    # Verify agent exists and user has access
+    agent = db.query(VoiceAgent).filter(VoiceAgent.id == request.agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    if not current_user.is_superuser and agent.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied to this agent")
+    
+    # Import SIP call handler
+    try:
+        from app.services.sip_call_handler import sip_call_handler
+    except ImportError as e:
+        logger.error(f"Failed to import sip_call_handler: {e}")
+        raise HTTPException(status_code=500, detail="SIP call handler not available")
+    
+    # Check if the from_phone_number is registered
+    if request.from_phone_number not in sip_call_handler.sip_clients:
+        # List available phone numbers for debugging
+        available = list(sip_call_handler.sip_clients.keys())
+        logger.error(f"Phone number {request.from_phone_number} not registered. Available: {available}")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Phone number {request.from_phone_number} is not registered for SIP calls"
+        )
+    
+    # Make the outbound call
+    result = await sip_call_handler.make_outbound_call(
+        from_phone_number=request.from_phone_number,
+        to_number=request.to_number,
+        agent_id=request.agent_id,
+        user_id=current_user.id
+    )
+    
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to initiate outbound call")
+    
+    logger.info(f"Outbound call initiated: {result}")
+    
+    return OutboundCallResponse(
+        success=True,
+        message="Outbound call initiated successfully",
+        call_id=result.get("call_id"),
+        sip_call_id=result.get("sip_call_id"),
+        status=result.get("status"),
+        from_number=result.get("from_number"),
+        to_number=result.get("to_number"),
+        agent_id=result.get("agent_id")
+    )
+
+
+@router.get("/outbound/phone-numbers")
+async def get_available_phone_numbers(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get list of phone numbers available for outbound calls.
+    
+    Returns phone numbers that are registered with the SIP server
+    and can be used to make outbound calls.
+    """
+    try:
+        from app.services.sip_call_handler import sip_call_handler
+        
+        phone_numbers = sip_call_handler.get_registered_phone_numbers()
+        
+        # Filter by user's phone numbers (unless admin)
+        if not current_user.is_superuser:
+            from app.models import PhoneNumber
+            user_phones = db.query(PhoneNumber.phone_number).filter(
+                PhoneNumber.user_id == current_user.id
+            ).all()
+            user_phone_set = {p[0] for p in user_phones}
+            phone_numbers = [p for p in phone_numbers if p["phone_number"] in user_phone_set]
+        
+        return {
+            "phone_numbers": phone_numbers,
+            "count": len(phone_numbers)
+        }
+        
+    except ImportError:
+        return {
+            "phone_numbers": [],
+            "count": 0,
+            "error": "SIP call handler not available"
+        }
+
+
+@router.post("/{call_id}/hangup")
+async def hangup_call(
+    call_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Hangup an active call.
+    
+    This can be used for both inbound and outbound calls that are currently in progress.
+    """
+    # Get the call
+    call = db.query(Call).filter(Call.id == call_id).first()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    
+    # Check access
+    if not current_user.is_superuser:
+        agent = db.query(VoiceAgent).filter(
+            VoiceAgent.id == call.agent_id,
+            VoiceAgent.user_id == current_user.id
+        ).first()
+        if not agent:
+            raise HTTPException(status_code=403, detail="Access denied to this call")
+    
+    # Check if call is active
+    if call.status not in [CallStatus.INITIATED, CallStatus.IN_PROGRESS]:
+        raise HTTPException(status_code=400, detail="Call is not active")
+    
+    # Get the SIP call ID
+    sip_call_id = call.zadarma_call_id
+    if not sip_call_id:
+        raise HTTPException(status_code=400, detail="No SIP call ID found")
+    
+    try:
+        from app.services.sip_call_handler import sip_call_handler
+        
+        # Find the SIP client that has this call
+        for phone_number, sip_client in sip_call_handler.sip_clients.items():
+            if sip_call_id in sip_client.active_calls:
+                success = await sip_client.hangup_call(sip_call_id)
+                if success:
+                    return {"message": "Call hangup initiated", "call_id": call_id}
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to hangup call")
+        
+        raise HTTPException(status_code=404, detail="Active SIP call not found")
+        
+    except ImportError:
+        raise HTTPException(status_code=500, detail="SIP call handler not available")

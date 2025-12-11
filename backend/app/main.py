@@ -38,18 +38,17 @@ async def lifespan(app: FastAPI):
     _cleanup_task = asyncio.create_task(cleanup_rate_limits())
     logger.info("Started rate limit cleanup background task")
     
-    # Start SIP call handler if enabled
+    # Start SIP call handler - loads phone numbers with SIP config from database
     if settings.SIP_ENABLED:
         try:
             from app.services.sip_call_handler import sip_call_handler
             _sip_handler = sip_call_handler
             success = await _sip_handler.start()
             if success:
-                logger.info("✅ SIP call handler started successfully")
-                logger.info(f"   SIP Server: {settings.SIP_WS_URL}")
-                logger.info(f"   SIP Username: {settings.SIP_USERNAME}")
+                logger.info("✅ SIP call handler started - phone numbers loaded from database")
             else:
-                logger.warning("⚠️ SIP call handler failed to start")
+                logger.warning("⚠️ SIP call handler: No phone numbers with SIP config found in database")
+                logger.info("   Add phone numbers with SIP credentials via the Phone Numbers page")
         except Exception as e:
             logger.error(f"Error starting SIP call handler: {e}", exc_info=True)
     else:

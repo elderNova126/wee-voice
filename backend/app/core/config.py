@@ -75,12 +75,10 @@ class Settings(BaseSettings):
     ZADARMA_PBX_PASSWORD: str = os.getenv("ZADARMA_PBX_PASSWORD", "")
     ZADARMA_PBX_ID: str = os.getenv("ZADARMA_PBX_ID", "")
     
-    # SIP Server Settings (Dialsense WebSocket SIP Server)
-    SIP_WS_URL: str = os.getenv("SIP_WS_URL", "wss://weevoice.weedoo.com:8089/ws")
-    SIP_USERNAME: str = os.getenv("SIP_USERNAME", "55555")
-    SIP_PASSWORD: str = os.getenv("SIP_PASSWORD", "")
-    SIP_DOMAIN: str = os.getenv("SIP_DOMAIN", "weevoice.weedoo.com")
-    SIP_ENABLED: bool = os.getenv("SIP_ENABLED", "true").lower() == "true"
+    # SIP Settings
+    # Note: SIP credentials are now loaded from phone_numbers table in database
+    # Each phone number can have its own SIP configuration (set via Phone Numbers page)
+    SIP_ENABLED: bool = os.getenv("SIP_ENABLED", "true").lower() == "true"  # Master switch for SIP functionality
     
     # Legacy Zadarma SIP Settings (for backward compatibility)
     ZADARMA_SIP_SERVER: str = os.getenv("ZADARMA_SIP_SERVER", "sip.zadarma.com")

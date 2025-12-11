@@ -15,8 +15,6 @@ import uuid
 import websockets
 from websockets.client import WebSocketClientProtocol
 
-from app.core.config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -56,25 +54,26 @@ class SIPClientService:
     Handles SIP signaling and audio streaming
     """
     
-    def __init__(self, ws_url: Optional[str] = None, username: Optional[str] = None, 
-                 password: Optional[str] = None, domain: Optional[str] = None):
+    def __init__(self, ws_url: str, username: str, password: str, domain: str):
         self.ws: Optional[WebSocketClientProtocol] = None
         self.is_connected = False
         self.is_registered = False
         
-        # SIP credentials - use provided values or fall back to settings
-        self.username = username or settings.SIP_USERNAME
-        self.password = password or settings.SIP_PASSWORD
-        self.domain = domain or settings.SIP_DOMAIN
-        self.ws_url = ws_url or settings.SIP_WS_URL
+        # SIP credentials - provided per phone number from database
+        self.username = username
+        self.password = password
+        self.domain = domain
+        self.ws_url = ws_url
         
         # Active calls: call_id -> SIPCallSession
         self.active_calls: Dict[str, SIPCallSession] = {}
         
         # Callbacks for application
         self.on_incoming_call: Optional[Callable] = None
-        self.on_call_answered: Optional[Callable] = None
+        self.on_call_answered: Optional[Callable] = None  # For both inbound and outbound
         self.on_call_ended: Optional[Callable] = None
+        self.on_call_ringing: Optional[Callable] = None  # Outbound call ringing
+        self.on_call_failed: Optional[Callable] = None   # Outbound call failed
         
         # Background tasks
         self.message_handler_task = None
@@ -274,18 +273,55 @@ class SIPClientService:
             # Incoming call
             await self._handle_incoming_call(message)
         
-        elif msg_type == 'answered':
-            # Call answered
+        elif msg_type == 'ringing' or msg_type == 'progress':
+            # Outbound call is ringing
             call_id = message.get('call_id')
             if call_id in self.active_calls:
-                self.active_calls[call_id].status = 'in_progress'
-                logger.info(f"✅ Call {call_id} answered")
+                call = self.active_calls[call_id]
+                call.status = 'ringing'
+                logger.info(f"🔔 Outbound call {call_id} is ringing")
+                if self.on_call_ringing:
+                    try:
+                        await self.on_call_ringing(call)
+                    except Exception as e:
+                        logger.error(f"Error in on_call_ringing callback: {e}")
+        
+        elif msg_type == 'answered':
+            # Call answered (inbound auto-answer or outbound remote answered)
+            call_id = message.get('call_id')
+            if call_id in self.active_calls:
+                call = self.active_calls[call_id]
+                call.status = 'in_progress'
+                logger.info(f"✅ Call {call_id} answered (direction: {call.direction})")
                 if self.on_call_answered:
-                    await self.on_call_answered(self.active_calls[call_id])
+                    try:
+                        await self.on_call_answered(call)
+                    except Exception as e:
+                        logger.error(f"Error in on_call_answered callback: {e}")
         
         elif msg_type == 'bye':
             # Call ended
             await self._handle_call_ended(message)
+        
+        elif msg_type in ('reject', 'busy', 'unavailable', 'timeout', 'failed'):
+            # Outbound call failed
+            call_id = message.get('call_id')
+            reason = message.get('reason', msg_type)
+            logger.warning(f"❌ Call {call_id} failed: {reason}")
+            
+            if call_id in self.active_calls:
+                call = self.active_calls[call_id]
+                call.status = 'failed'
+                call.end()
+                
+                if self.on_call_failed:
+                    try:
+                        await self.on_call_failed(call, reason)
+                    except Exception as e:
+                        logger.error(f"Error in on_call_failed callback: {e}")
+                
+                # Cleanup
+                del self.active_calls[call_id]
         
         elif msg_type == 'error':
             logger.error(f"SIP error: {message.get('reason')}")
@@ -373,6 +409,49 @@ class SIPClientService:
             logger.error(f"Error hanging up call: {e}")
             return False
     
+    async def make_call(self, to_number: str, from_number: Optional[str] = None) -> Optional[SIPCallSession]:
+        """
+        Initiate an outbound call
+        
+        Args:
+            to_number: The number to call
+            from_number: Caller ID (defaults to SIP username)
+            
+        Returns:
+            SIPCallSession if call initiated successfully, None otherwise
+        """
+        if not self.is_connected or not self.is_registered:
+            logger.error("Cannot make call: not connected or registered")
+            return None
+        
+        try:
+            call_id = str(uuid.uuid4())
+            caller_id = from_number or self.username
+            
+            logger.info(f"📞 Initiating outbound call: {caller_id} -> {to_number}")
+            
+            # Create call session
+            call = SIPCallSession(call_id, caller_id, to_number, 'outbound')
+            call.status = 'calling'
+            self.active_calls[call_id] = call
+            
+            # Send INVITE to SIP server
+            invite_message = {
+                "type": "invite",
+                "call_id": call_id,
+                "from": caller_id,
+                "to": to_number,
+                "domain": self.domain
+            }
+            await self._send_message(invite_message)
+            
+            logger.info(f"📤 Sent INVITE for outbound call {call_id}")
+            return call
+            
+        except Exception as e:
+            logger.error(f"Error making outbound call: {e}", exc_info=True)
+            return None
+    
     async def _handle_audio(self, audio_data: bytes):
         """Handle incoming audio from SIP (caller's voice)"""
         # Route to appropriate call's inbound queue
@@ -455,20 +534,15 @@ def create_sip_client_from_phone_number(phone_number) -> SIPClientService:
     Returns:
         SIPClientService configured with the phone number's credentials
     """
-    if hasattr(phone_number, 'sip_websocket_url') and phone_number.sip_websocket_url:
-        return SIPClientService(
-            ws_url=phone_number.sip_websocket_url,
-            username=phone_number.sip_username,
-            password=phone_number.sip_password,
-            domain=phone_number.sip_domain
-        )
-    else:
-        # Fall back to global settings
-        return SIPClientService()
-
-
-# Global SIP client instance (uses default settings)
-sip_client = SIPClientService()
+    if not (hasattr(phone_number, 'sip_websocket_url') and phone_number.sip_websocket_url):
+        raise ValueError(f"Phone number {phone_number.phone_number} has no SIP configuration")
+    
+    return SIPClientService(
+        ws_url=phone_number.sip_websocket_url,
+        username=phone_number.sip_username,
+        password=phone_number.sip_password,
+        domain=phone_number.sip_domain
+    )
 
 
 

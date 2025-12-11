@@ -1,90 +1,249 @@
 """
 SIP Call Handler Service
 Bridges SIP calls with Gemini voice agent service
+
+This version loads SIP credentials from phone_numbers table in the database,
+registering each phone number's SIP client separately.
 """
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime
 
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
-from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
+from app.models import Call, VoiceAgent, CallStatus, PhoneNumber, PhoneNumberStatus
 from app.models.database import SessionLocal
 from app.services.agent_service import FrenchVoiceAgentService
-from app.services.sip_client_service import sip_client, SIPCallSession, create_sip_client_from_phone_number
+from app.services.sip_client_service import SIPClientService, SIPCallSession
 from app.api.websocket import call_monitor_manager, auto_summarize_call
-from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
 
 class SIPCallHandler:
     """
-    Handles SIP call lifecycle and bridges audio with Gemini agent
+    Handles SIP call lifecycle and bridges audio with Gemini agent.
+    Loads SIP credentials from database phone_numbers table.
     """
     
     def __init__(self):
-        self.active_handlers: dict[str, 'SIPCallBridge'] = {}
-        logger.info("SIP Call Handler initialized")
+        # Map: phone_number -> SIPClientService
+        self.sip_clients: Dict[str, SIPClientService] = {}
+        # Map: phone_number -> PhoneNumber record
+        self.phone_records: Dict[str, PhoneNumber] = {}
+        # Map: call_id -> SIPCallBridge
+        self.active_handlers: Dict[str, 'SIPCallBridge'] = {}
+        logger.info("SIP Call Handler initialized (database mode)")
     
-    async def start(self):
-        """Start the SIP call handler"""
-        # Register callbacks with SIP client
-        sip_client.on_incoming_call = self.handle_incoming_call
-        sip_client.on_call_answered = self.handle_call_answered
-        sip_client.on_call_ended = self.handle_call_ended
-        
-        # Connect to SIP server
-        success = await sip_client.connect()
-        if success:
-            logger.info("✅ SIP Call Handler started and connected to SIP server")
-        else:
-            logger.error("❌ Failed to connect to SIP server")
-        
-        return success
+    async def start(self) -> bool:
+        """Start the SIP call handler - loads phone numbers from database"""
+        try:
+            db = SessionLocal()
+            try:
+                # Load all phone numbers with SIP configuration
+                phone_numbers = await self._load_phone_numbers_with_sip(db)
+                
+                if not phone_numbers:
+                    logger.warning("⚠️ No phone numbers with SIP configuration found in database")
+                    return False
+                
+                logger.info(f"Found {len(phone_numbers)} phone number(s) with SIP configuration")
+                
+                # Register each phone number's SIP client
+                success_count = 0
+                for phone in phone_numbers:
+                    if await self._register_phone_number(phone):
+                        success_count += 1
+                
+                if success_count > 0:
+                    logger.info(f"✅ SIP Call Handler started: {success_count}/{len(phone_numbers)} phone numbers registered")
+                    return True
+                else:
+                    logger.error("❌ No phone numbers successfully registered")
+                    return False
+                    
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Error starting SIP call handler: {e}", exc_info=True)
+            return False
+    
+    async def _load_phone_numbers_with_sip(self, db: Session) -> list:
+        """Load all phone numbers that have SIP configuration from database"""
+        try:
+            # Query phone numbers with SIP config
+            result = db.execute(text("""
+                SELECT id, user_id, agent_id, phone_number, country_code, number_type,
+                       sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
+                       status, status_message, monthly_cost, per_minute_cost,
+                       business_name, business_type, business_address,
+                       created_at, updated_at, activated_at
+                FROM phone_numbers
+                WHERE sip_websocket_url IS NOT NULL 
+                  AND sip_username IS NOT NULL 
+                  AND sip_password IS NOT NULL
+                  AND sip_domain IS NOT NULL
+            """)).fetchall()
+            
+            phone_numbers = []
+            for row in result:
+                phone = PhoneNumber()
+                phone.id = row[0]
+                phone.user_id = row[1]
+                phone.agent_id = row[2]
+                phone.phone_number = row[3]
+                phone.country_code = row[4]
+                phone.number_type = row[5]
+                phone.sip_websocket_url = row[6]
+                phone.sip_transport = row[7]
+                phone.sip_username = row[8]
+                phone.sip_password = row[9]
+                phone.sip_domain = row[10]
+                phone.status = row[11]
+                phone.status_message = row[12]
+                phone.monthly_cost = row[13]
+                phone.per_minute_cost = row[14]
+                phone.business_name = row[15]
+                phone.business_type = row[16]
+                phone.business_address = row[17]
+                phone.created_at = row[18]
+                phone.updated_at = row[19]
+                phone.activated_at = row[20]
+                phone_numbers.append(phone)
+            
+            return phone_numbers
+            
+        except Exception as e:
+            logger.error(f"Error loading phone numbers: {e}", exc_info=True)
+            return []
+    
+    async def _register_phone_number(self, phone: PhoneNumber) -> bool:
+        """Register a single phone number's SIP client"""
+        try:
+            logger.info(f"📞 Registering SIP for {phone.phone_number} ({phone.sip_username}@{phone.sip_domain})")
+            logger.info(f"   WebSocket: {phone.sip_websocket_url}")
+            
+            # Create SIP client for this phone number
+            sip_client = SIPClientService(
+                ws_url=phone.sip_websocket_url,
+                username=phone.sip_username,
+                password=phone.sip_password,
+                domain=phone.sip_domain
+            )
+            
+            # Set callbacks for inbound and outbound calls
+            sip_client.on_incoming_call = lambda call: self.handle_incoming_call(call, phone)
+            sip_client.on_call_answered = lambda call: self.handle_call_answered(call, phone)
+            sip_client.on_call_ended = self.handle_call_ended
+            sip_client.on_call_ringing = self.handle_call_ringing
+            sip_client.on_call_failed = self.handle_call_failed
+            
+            # Connect and register
+            success = await sip_client.connect()
+            
+            if success:
+                # Store the client and phone record
+                self.sip_clients[phone.phone_number] = sip_client
+                self.phone_records[phone.phone_number] = phone
+                logger.info(f"✅ Registered: {phone.phone_number} ({phone.sip_username})")
+                return True
+            else:
+                logger.error(f"❌ Failed to register: {phone.phone_number}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error registering phone {phone.phone_number}: {e}", exc_info=True)
+            return False
     
     async def stop(self):
         """Stop the SIP call handler"""
+        logger.info("Stopping SIP Call Handler...")
+        
         # End all active calls
         for handler in list(self.active_handlers.values()):
-            await handler.stop()
+            try:
+                await handler.stop()
+            except Exception as e:
+                logger.error(f"Error stopping call handler: {e}")
         
-        # Disconnect from SIP server
-        await sip_client.disconnect()
+        # Disconnect all SIP clients
+        for phone_number, sip_client in self.sip_clients.items():
+            try:
+                await sip_client.disconnect()
+                logger.info(f"Disconnected SIP client for {phone_number}")
+            except Exception as e:
+                logger.error(f"Error disconnecting {phone_number}: {e}")
+        
+        self.sip_clients.clear()
+        self.phone_records.clear()
+        self.active_handlers.clear()
+        
         logger.info("SIP Call Handler stopped")
     
-    async def handle_incoming_call(self, sip_call: SIPCallSession):
+    async def reload_phone_numbers(self):
+        """Reload phone numbers from database (for dynamic updates)"""
+        logger.info("Reloading phone numbers from database...")
+        
+        db = SessionLocal()
+        try:
+            phone_numbers = await self._load_phone_numbers_with_sip(db)
+            
+            # Find new phone numbers to register
+            current_numbers = set(self.sip_clients.keys())
+            db_numbers = {p.phone_number for p in phone_numbers}
+            
+            # Register new phone numbers
+            new_numbers = db_numbers - current_numbers
+            for phone in phone_numbers:
+                if phone.phone_number in new_numbers:
+                    await self._register_phone_number(phone)
+            
+            # Optionally disconnect removed phone numbers
+            removed_numbers = current_numbers - db_numbers
+            for number in removed_numbers:
+                if number in self.sip_clients:
+                    await self.sip_clients[number].disconnect()
+                    del self.sip_clients[number]
+                    del self.phone_records[number]
+                    logger.info(f"Removed SIP client for {number}")
+            
+            logger.info(f"Phone numbers reloaded: {len(self.sip_clients)} active")
+            
+        finally:
+            db.close()
+    
+    async def handle_incoming_call(self, sip_call: SIPCallSession, phone: PhoneNumber):
         """Handle incoming SIP call"""
         try:
-            logger.info(f"📞 Handling incoming SIP call: {sip_call.from_number} -> {sip_call.to_number}")
+            logger.info(f"📞 Incoming call on {phone.phone_number}: {sip_call.from_number} -> {sip_call.to_number}")
             
-            # Find agent and phone config for the called number
             db = SessionLocal()
             try:
-                agent, phone_record = await self._get_agent_and_phone_for_number(db, sip_call.to_number)
+                # Get the agent for this phone number
+                agent = None
+                if phone.agent_id:
+                    agent = db.query(VoiceAgent).filter(VoiceAgent.id == phone.agent_id).first()
                 
                 if not agent:
-                    logger.error(f"No agent found for number {sip_call.to_number}")
+                    logger.error(f"No agent assigned to phone number {phone.phone_number}")
                     # Hangup call
-                    await sip_client.hangup_call(sip_call.call_id)
+                    sip_client = self.sip_clients.get(phone.phone_number)
+                    if sip_client:
+                        await sip_client.hangup_call(sip_call.call_id)
                     return
-                
-                # Log SIP configuration status
-                if phone_record and phone_record.sip_websocket_url:
-                    logger.info(f"✅ Using phone-specific SIP config: {phone_record.sip_websocket_url}")
-                else:
-                    logger.info("⚠️ Using default SIP configuration")
                 
                 # Create call record
                 call = Call(
-                    user_id=agent.user_id,
+                    user_id=phone.user_id,
                     agent_id=agent.id,
                     caller_phone=sip_call.from_number,
                     caller_name=sip_call.from_number,
                     direction="inbound",
                     status=CallStatus.INITIATED,
-                    zadarma_call_id=sip_call.call_id,  # Use SIP call_id
+                    zadarma_call_id=sip_call.call_id,
                     session_id=f"sip_{sip_call.call_id}",
                     started_at=datetime.utcnow()
                 )
@@ -92,10 +251,13 @@ class SIPCallHandler:
                 db.commit()
                 db.refresh(call)
                 
-                logger.info(f"✅ Created call record: ID={call.id} for agent {agent.id}")
+                logger.info(f"✅ Created call record: ID={call.id} for agent {agent.id} ({agent.name})")
                 
-                # Create bridge between SIP and Gemini, passing phone record for SIP config
-                bridge = SIPCallBridge(sip_call, agent, call, db, phone_record)
+                # Get the SIP client for this phone number
+                sip_client = self.sip_clients.get(phone.phone_number)
+                
+                # Create bridge between SIP and Gemini
+                bridge = SIPCallBridge(sip_call, sip_client, agent, call, db, phone)
                 self.active_handlers[sip_call.call_id] = bridge
                 
                 # Start the bridge
@@ -120,13 +282,55 @@ class SIPCallHandler:
         except Exception as e:
             logger.error(f"Error handling incoming SIP call: {e}", exc_info=True)
     
-    async def handle_call_answered(self, sip_call: SIPCallSession):
-        """Handle call answered event"""
-        logger.info(f"✅ SIP call answered: {sip_call.call_id}")
+    async def handle_call_answered(self, sip_call: SIPCallSession, phone: PhoneNumber):
+        """Handle call answered event (for both inbound and outbound)"""
+        logger.info(f"✅ SIP call answered: {sip_call.call_id} (direction: {sip_call.direction})")
+        
+        if sip_call.call_id in self.active_handlers:
+            # Call bridge already exists (inbound calls)
+            bridge = self.active_handlers[sip_call.call_id]
+            await bridge.on_answered()
+        elif sip_call.direction == 'outbound':
+            # Outbound call answered - need to create bridge and start Gemini
+            await self._setup_outbound_call_bridge(sip_call, phone)
+    
+    async def handle_call_ringing(self, sip_call: SIPCallSession):
+        """Handle outbound call ringing event"""
+        logger.info(f"🔔 Outbound call ringing: {sip_call.call_id} -> {sip_call.to_number}")
+        
+        # Update call status if we have a pending call record
+        if sip_call.call_id in self.active_handlers:
+            bridge = self.active_handlers[sip_call.call_id]
+            try:
+                bridge.call.status = CallStatus.INITIATED
+                bridge.db.commit()
+            except Exception as e:
+                logger.error(f"Error updating call status to ringing: {e}")
+    
+    async def handle_call_failed(self, sip_call: SIPCallSession, reason: str):
+        """Handle outbound call failed event"""
+        logger.warning(f"❌ Outbound call failed: {sip_call.call_id} - {reason}")
         
         if sip_call.call_id in self.active_handlers:
             bridge = self.active_handlers[sip_call.call_id]
-            await bridge.on_answered()
+            try:
+                # Update call record
+                bridge.call.status = CallStatus.FAILED
+                bridge.call.ended_at = datetime.utcnow()
+                bridge.db.commit()
+                
+                # Broadcast update
+                call_data = {
+                    "id": bridge.call.id,
+                    "status": "failed",
+                    "reason": reason
+                }
+                await call_monitor_manager.broadcast_call_update(bridge.call.user_id, call_data)
+                
+            except Exception as e:
+                logger.error(f"Error updating failed call: {e}")
+            finally:
+                del self.active_handlers[sip_call.call_id]
     
     async def handle_call_ended(self, sip_call: SIPCallSession):
         """Handle call ended event"""
@@ -137,70 +341,166 @@ class SIPCallHandler:
             await bridge.stop()
             del self.active_handlers[sip_call.call_id]
     
-    async def _get_agent_and_phone_for_number(self, db: Session, phone_number: str) -> tuple[Optional[VoiceAgent], Optional[PhoneNumber]]:
-        """Get agent and phone record for a phone number"""
-        # Normalize phone number
-        normalized = phone_number.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    async def make_outbound_call(
+        self, 
+        from_phone_number: str, 
+        to_number: str, 
+        agent_id: int,
+        user_id: int
+    ) -> Optional[dict]:
+        """
+        Initiate an outbound call
         
-        # Try to find phone number record with SIP config using raw SQL
-        try:
-            result = db.execute(text("""
-                SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-                       sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
-                       status, status_message, monthly_cost, per_minute_cost,
-                       business_name, business_type, business_address,
-                       created_at, updated_at, activated_at
-                FROM phone_numbers
-                WHERE phone_number = :phone_number
-                LIMIT 1
-            """), {"phone_number": normalized}).first()
+        Args:
+            from_phone_number: The phone number to call from (must be registered)
+            to_number: The number to call
+            agent_id: The AI agent to use for the call
+            user_id: The user initiating the call
             
-            if result and result[2]:  # agent_id exists
-                phone_record = PhoneNumber()
-                phone_record.id = result[0]
-                phone_record.user_id = result[1]
-                phone_record.agent_id = result[2]
-                phone_record.phone_number = result[3]
-                phone_record.country_code = result[4]
-                phone_record.number_type = result[5]
-                phone_record.sip_websocket_url = result[6]
-                phone_record.sip_transport = result[7]
-                phone_record.sip_username = result[8]
-                phone_record.sip_password = result[9]
-                phone_record.sip_domain = result[10]
-                phone_record.status = result[11]
-                phone_record.status_message = result[12]
-                phone_record.monthly_cost = result[13]
-                phone_record.per_minute_cost = result[14]
-                phone_record.business_name = result[15]
-                phone_record.business_type = result[16]
-                phone_record.business_address = result[17]
-                phone_record.created_at = result[18]
-                phone_record.updated_at = result[19]
-                phone_record.activated_at = result[20]
+        Returns:
+            dict with call info if successful, None if failed
+        """
+        try:
+            logger.info(f"📤 Initiating outbound call: {from_phone_number} -> {to_number}")
+            
+            # Get SIP client for the from number
+            sip_client = self.sip_clients.get(from_phone_number)
+            phone_record = self.phone_records.get(from_phone_number)
+            
+            if not sip_client or not phone_record:
+                logger.error(f"No SIP client registered for {from_phone_number}")
+                return None
+            
+            if not sip_client.is_registered:
+                logger.error(f"SIP client for {from_phone_number} is not registered")
+                return None
+            
+            db = SessionLocal()
+            try:
+                # Get the agent
+                agent = db.query(VoiceAgent).filter(VoiceAgent.id == agent_id).first()
+                if not agent:
+                    logger.error(f"Agent {agent_id} not found")
+                    return None
                 
-                agent = db.query(VoiceAgent).filter(
-                    VoiceAgent.id == phone_record.agent_id
-                ).first()
+                # Initiate the SIP call
+                sip_call = await sip_client.make_call(to_number, from_phone_number)
+                if not sip_call:
+                    logger.error("Failed to initiate SIP call")
+                    return None
                 
-                if agent:
-                    return agent, phone_record
+                # Create call record
+                call = Call(
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    caller_phone=to_number,  # The person being called
+                    caller_name=to_number,
+                    direction="outbound",
+                    status=CallStatus.INITIATED,
+                    zadarma_call_id=sip_call.call_id,
+                    session_id=f"sip_{sip_call.call_id}",
+                    started_at=datetime.utcnow()
+                )
+                db.add(call)
+                db.commit()
+                db.refresh(call)
+                
+                logger.info(f"✅ Created outbound call record: ID={call.id}")
+                
+                # Create bridge (will start when call is answered)
+                bridge = SIPCallBridge(sip_call, sip_client, agent, call, db, phone_record)
+                bridge.is_outbound = True  # Mark as outbound
+                self.active_handlers[sip_call.call_id] = bridge
+                
+                # Broadcast call creation
+                try:
+                    call_data = {
+                        "id": call.id,
+                        "status": call.status.value,
+                        "direction": "outbound",
+                        "agent_id": call.agent_id,
+                        "to_number": to_number,
+                        "from_number": from_phone_number,
+                        "session_id": call.session_id,
+                        "started_at": call.started_at.isoformat() if call.started_at else None
+                    }
+                    await call_monitor_manager.broadcast_call_update(user_id, call_data)
+                except Exception as e:
+                    logger.error(f"Error broadcasting call update: {e}")
+                
+                return {
+                    "call_id": call.id,
+                    "sip_call_id": sip_call.call_id,
+                    "status": "calling",
+                    "from_number": from_phone_number,
+                    "to_number": to_number,
+                    "agent_id": agent_id
+                }
+                
+            except Exception as e:
+                logger.error(f"Error creating outbound call: {e}", exc_info=True)
+                db.close()
+                return None
+                
         except Exception as e:
-            logger.error(f"Error getting agent for phone number: {e}")
-        
-        logger.warning(f"No agent found for phone number: {phone_number}")
-        return None, None
+            logger.error(f"Error making outbound call: {e}", exc_info=True)
+            return None
+    
+    async def _setup_outbound_call_bridge(self, sip_call: SIPCallSession, phone: PhoneNumber):
+        """Set up bridge for an outbound call that was just answered"""
+        try:
+            if sip_call.call_id not in self.active_handlers:
+                logger.error(f"No handler found for answered outbound call {sip_call.call_id}")
+                return
+            
+            bridge = self.active_handlers[sip_call.call_id]
+            
+            # Update call status
+            bridge.call.status = CallStatus.IN_PROGRESS
+            bridge.db.commit()
+            
+            # Start the Gemini bridge
+            await bridge.start()
+            
+            logger.info(f"✅ Outbound call bridge started: {sip_call.call_id}")
+            
+            # Broadcast update
+            try:
+                call_data = {
+                    "id": bridge.call.id,
+                    "status": "in_progress",
+                    "direction": "outbound"
+                }
+                await call_monitor_manager.broadcast_call_update(bridge.call.user_id, call_data)
+            except Exception as e:
+                logger.error(f"Error broadcasting call update: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error setting up outbound call bridge: {e}", exc_info=True)
+    
+    def get_registered_phone_numbers(self) -> list:
+        """Get list of registered phone numbers that can make outbound calls"""
+        return [
+            {
+                "phone_number": phone,
+                "is_registered": self.sip_clients[phone].is_registered,
+                "agent_id": self.phone_records[phone].agent_id
+            }
+            for phone in self.sip_clients.keys()
+        ]
 
 
 class SIPCallBridge:
     """
-    Bridges a single SIP call with Gemini voice agent
-    Handles bidirectional audio streaming
+    Bridges a single SIP call with Gemini voice agent.
+    Handles bidirectional audio streaming.
     """
     
-    def __init__(self, sip_call: SIPCallSession, agent: VoiceAgent, call: Call, db: Session, 
-                 phone_record: Optional[PhoneNumber] = None):
+    def __init__(self, sip_call: SIPCallSession, sip_client: SIPClientService, 
+                 agent: VoiceAgent, call: Call, db: Session, 
+                 phone_record: PhoneNumber):
         self.sip_call = sip_call
+        self.sip_client = sip_client
         self.agent = agent
         self.call = call
         self.db = db
@@ -209,16 +509,10 @@ class SIPCallBridge:
         self.agent_service: Optional[FrenchVoiceAgentService] = None
         self.is_running = False
         self.tasks = []
-        self.custom_sip_client = None
         
-        # Log SIP configuration
-        if phone_record and phone_record.sip_websocket_url:
-            logger.info(f"Created SIP bridge for call {call.id} with custom SIP config")
-            logger.info(f"  WebSocket: {phone_record.sip_websocket_url}")
-            logger.info(f"  Username: {phone_record.sip_username}")
-            logger.info(f"  Domain: {phone_record.sip_domain}")
-        else:
-            logger.info(f"Created SIP bridge for call {call.id} (using default SIP config)")
+        logger.info(f"Created SIP bridge for call {call.id}")
+        logger.info(f"  Phone: {phone_record.phone_number}")
+        logger.info(f"  Agent: {agent.name} (ID: {agent.id})")
     
     async def start(self):
         """Start the audio bridge"""
@@ -231,18 +525,6 @@ class SIPCallBridge:
             if not success:
                 logger.error(f"Failed to start Gemini session for call {self.call.id}")
                 return
-            
-            # Create custom SIP client if phone has specific config
-            if self.phone_record and self.phone_record.sip_websocket_url:
-                logger.info(f"🔌 Creating custom SIP client for call {self.call.id}")
-                self.custom_sip_client = create_sip_client_from_phone_number(self.phone_record)
-                
-                # Connect to phone-specific SIP server
-                connected = await self.custom_sip_client.connect()
-                if connected:
-                    logger.info(f"✅ Custom SIP client connected: {self.phone_record.sip_websocket_url}")
-                else:
-                    logger.error(f"❌ Failed to connect custom SIP client")
             
             # Update call status
             self.call.status = CallStatus.IN_PROGRESS
@@ -287,14 +569,6 @@ class SIPCallBridge:
                     await self.agent_service.end_session()
                 except Exception as e:
                     logger.error(f"Error ending Gemini session: {e}")
-            
-            # Disconnect custom SIP client if used
-            if self.custom_sip_client:
-                try:
-                    await self.custom_sip_client.disconnect()
-                    logger.info(f"Disconnected custom SIP client for call {self.call.id}")
-                except Exception as e:
-                    logger.error(f"Error disconnecting custom SIP client: {e}")
             
             # Update call record
             try:
@@ -341,16 +615,14 @@ class SIPCallBridge:
     async def _forward_gemini_to_sip(self):
         """Forward audio from Gemini to SIP caller"""
         try:
-            # Use custom SIP client if available, otherwise use global
-            active_sip_client = self.custom_sip_client or sip_client
-            
             # Receive audio from Gemini
             async for audio_data in self.agent_service.receive_audio():
                 if not self.is_running:
                     break
                 
                 # Send to SIP client (24kHz PCM16 -> will be converted to 8kHz)
-                await active_sip_client.send_audio(self.sip_call.call_id, audio_data)
+                if self.sip_client:
+                    await self.sip_client.send_audio(self.sip_call.call_id, audio_data)
                 
         except asyncio.CancelledError:
             logger.debug("_forward_gemini_to_sip cancelled")
@@ -360,6 +632,3 @@ class SIPCallBridge:
 
 # Global SIP call handler instance
 sip_call_handler = SIPCallHandler()
-
-
-
