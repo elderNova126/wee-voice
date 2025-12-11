@@ -1,10 +1,10 @@
 """
-Phone Numbers and Zadarma Integration API
+Phone Numbers API with SIP Configuration
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import List, Optional, Literal, Dict, Any
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -18,7 +18,6 @@ from app.models import (
     VerificationStatus,
 )
 from app.core.security import get_current_user
-from app.services.zadarma_service import get_zadarma_service
 from app.services.storage_service import get_storage_service
 import logging
 
@@ -29,7 +28,7 @@ router = APIRouter()
 
 def safe_query_phone_number(db: Session, filter_clause: str, params: Dict = None) -> Optional[PhoneNumber]:
     """
-    Safely query PhoneNumber without loading sip_id column (which may not exist in DB)
+    Safely query PhoneNumber
     
     Args:
         db: Database session
@@ -43,9 +42,7 @@ def safe_query_phone_number(db: Session, filter_clause: str, params: Dict = None
     try:
         result = db.execute(text(f"""
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-                   zadarma_number_id, zadarma_status, zadarma_config,
-                   pbx_enabled, pbx_scenario_id, pbx_extension,
-                   business_hours, menu_options, after_hours_routing,
+                   sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address,
                    created_at, updated_at, activated_at
@@ -62,37 +59,31 @@ def safe_query_phone_number(db: Session, filter_clause: str, params: Dict = None
             phone.phone_number = result[3]
             phone.country_code = result[4]
             phone.number_type = result[5]
-            phone.zadarma_number_id = result[6]
-            phone.zadarma_status = result[7]
-            phone.zadarma_config = result[8]
-            phone.pbx_enabled = result[9]
-            phone.pbx_scenario_id = result[10]
-            phone.pbx_extension = result[11]
-            phone.business_hours = result[12]
-            phone.menu_options = result[13]
-            phone.after_hours_routing = result[14]
-            phone.status = result[15]
-            phone.status_message = result[16]
-            phone.monthly_cost = result[17]
-            phone.per_minute_cost = result[18]
-            phone.business_name = result[19]
-            phone.business_type = result[20]
-            phone.business_address = result[21]
-            phone.created_at = result[22]
-            phone.updated_at = result[23]
-            phone.activated_at = result[24]
-            phone.sip_id = None  # Set to None since column may not exist
+            phone.sip_websocket_url = result[6]
+            phone.sip_transport = result[7]
+            phone.sip_username = result[8]
+            phone.sip_password = result[9]
+            phone.sip_domain = result[10]
+            phone.status = result[11]
+            phone.status_message = result[12]
+            phone.monthly_cost = result[13]
+            phone.per_minute_cost = result[14]
+            phone.business_name = result[15]
+            phone.business_type = result[16]
+            phone.business_address = result[17]
+            phone.created_at = result[18]
+            phone.updated_at = result[19]
+            phone.activated_at = result[20]
             return phone
         return None
     except Exception as e:
         logger.error(f"Error in safe_query_phone_number: {e}")
-        # Fallback to regular query if raw SQL fails
         return None
 
 
 def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Dict = None) -> List[PhoneNumber]:
     """
-    Safely query multiple PhoneNumber objects without loading sip_id column
+    Safely query multiple PhoneNumber objects
     
     Args:
         db: Database session
@@ -106,9 +97,7 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
     try:
         result = db.execute(text(f"""
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-                   zadarma_number_id, zadarma_status, zadarma_config,
-                   pbx_enabled, pbx_scenario_id, pbx_extension,
-                   business_hours, menu_options, after_hours_routing,
+                   sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address,
                    created_at, updated_at, activated_at
@@ -125,26 +114,21 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
             phone.phone_number = row[3]
             phone.country_code = row[4]
             phone.number_type = row[5]
-            phone.zadarma_number_id = row[6]
-            phone.zadarma_status = row[7]
-            phone.zadarma_config = row[8]
-            phone.pbx_enabled = row[9]
-            phone.pbx_scenario_id = row[10]
-            phone.pbx_extension = row[11]
-            phone.business_hours = row[12]
-            phone.menu_options = row[13]
-            phone.after_hours_routing = row[14]
-            phone.status = row[15]
-            phone.status_message = row[16]
-            phone.monthly_cost = row[17]
-            phone.per_minute_cost = row[18]
-            phone.business_name = row[19]
-            phone.business_type = row[20]
-            phone.business_address = row[21]
-            phone.created_at = row[22]
-            phone.updated_at = row[23]
-            phone.activated_at = row[24]
-            phone.sip_id = None  # Set to None since column may not exist
+            phone.sip_websocket_url = row[6]
+            phone.sip_transport = row[7]
+            phone.sip_username = row[8]
+            phone.sip_password = row[9]
+            phone.sip_domain = row[10]
+            phone.status = row[11]
+            phone.status_message = row[12]
+            phone.monthly_cost = row[13]
+            phone.per_minute_cost = row[14]
+            phone.business_name = row[15]
+            phone.business_type = row[16]
+            phone.business_address = row[17]
+            phone.created_at = row[18]
+            phone.updated_at = row[19]
+            phone.activated_at = row[20]
             phones.append(phone)
         return phones
     except Exception as e:
@@ -153,18 +137,20 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
 
 
 # Pydantic models
-class PhoneNumberRequest(BaseModel):
-    phone_number: str
-    country_code: str
-    business_name: str
-    business_type: str  # "company" or "individual"
-    business_address: str
+class SIPConfiguration(BaseModel):
+    """SIP configuration for phone number"""
+    websocket_url: str = Field(..., description="WebSocket URL for SIP connection (e.g., wss://weevoice.weedoo.com:8089/ws)")
+    transport: str = Field(default="WSS", description="Transport protocol (WSS)")
+    username: str = Field(..., description="SIP Username")
+    password: str = Field(..., description="SIP Password")
+    domain: str = Field(..., description="SIP Domain/Realm")
 
 
 class PhoneNumberAddExisting(BaseModel):
     phone_number: str
     country_code: str = "BE"
     business_name: Optional[str] = None
+    sip_config: Optional[SIPConfiguration] = None
 
 
 class PhoneNumberResponse(BaseModel):
@@ -178,23 +164,16 @@ class PhoneNumberResponse(BaseModel):
     agent_id: Optional[int]
     created_at: datetime
     activated_at: Optional[datetime]
-    pbx_enabled: bool = False
-    pbx_extension: Optional[str] = None
-    pbx_scenario_id: Optional[str] = None
-    business_hours: Optional[Dict[str, Any]] = None
-    menu_options: Optional[List[Dict[str, Any]]] = None
-    after_hours_routing: Optional[Dict[str, Any]] = None
+    # SIP Configuration fields
+    sip_websocket_url: Optional[str] = None
+    sip_transport: Optional[str] = None
+    sip_username: Optional[str] = None
+    sip_domain: Optional[str] = None
+    # Note: sip_password is not returned for security
+    has_sip_config: bool = False
     
     class Config:
         from_attributes = True
-
-
-class AvailableNumber(BaseModel):
-    number: str
-    country: str
-    type: str
-    monthly_cost: str
-    setup_cost: str
 
 
 class VerificationDocumentResponse(BaseModel):
@@ -217,46 +196,6 @@ class DocumentReviewRequest(BaseModel):
     notes: Optional[str] = None
 
 
-class PBXBusinessHours(BaseModel):
-    timezone: str = Field(default="Europe/Paris", description="IANA timezone identifier")
-    open_time: str = Field(default="09:00", description="Opening time in HH:MM format")
-    close_time: str = Field(default="18:00", description="Closing time in HH:MM format")
-    days: List[str] = Field(default_factory=lambda: ["mon", "tue", "wed", "thu", "fri"])
-
-
-class PBXMenuOption(BaseModel):
-    key: str
-    label: Optional[str] = None
-    destination_type: Literal["agent", "forward", "voicemail", "external"] = "agent"
-    destination_value: Optional[str] = None
-
-
-class AfterHoursRouting(BaseModel):
-    destination_type: Literal["agent", "forward", "voicemail", "external"] = "agent"
-    destination_value: Optional[str] = None
-    message: Optional[str] = Field(
-        default="Our offices are currently closed. Connecting you to our virtual agent."
-    )
-
-
-class PBXConfigurationRequest(BaseModel):
-    business_hours: Optional[PBXBusinessHours] = None
-    menu_options: Optional[List[PBXMenuOption]] = None
-    after_hours_routing: Optional[AfterHoursRouting] = None
-
-
-@router.get("/available", response_model=List[AvailableNumber])
-async def get_available_numbers(
-    country_code: str = "FR",
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get list of available phone numbers for purchase"""
-    zadarma_service = get_zadarma_service()
-    numbers = await zadarma_service.get_available_numbers(country_code)
-    return numbers
-
-
 def normalize_phone_for_storage(phone: str) -> str:
     """
     Normalize phone number for storage in database
@@ -277,16 +216,34 @@ def normalize_phone_for_storage(phone: str) -> str:
         if normalized.startswith("00"):
             normalized = "+" + normalized[2:]
         # If it starts with country code (e.g., 32 for Belgium), add +
-        # Belgian numbers: 32XXXXXXXX (10 digits total)
         elif normalized.startswith("32") and len(normalized) >= 10:
             normalized = "+" + normalized
         # For other cases, try to add + if it looks like an international number
-        # (9+ digits without country code prefix)
         elif len(normalized) >= 9:
-            # If it's a long number, assume it needs + prefix
             normalized = "+" + normalized
     
     return normalized
+
+
+def phone_number_to_response(phone: PhoneNumber) -> dict:
+    """Convert PhoneNumber object to response dict with has_sip_config"""
+    return {
+        "id": phone.id,
+        "phone_number": phone.phone_number,
+        "country_code": phone.country_code,
+        "status": phone.status.value if hasattr(phone.status, 'value') else str(phone.status),
+        "business_name": phone.business_name,
+        "monthly_cost": phone.monthly_cost,
+        "per_minute_cost": phone.per_minute_cost,
+        "agent_id": phone.agent_id,
+        "created_at": phone.created_at,
+        "activated_at": phone.activated_at,
+        "sip_websocket_url": phone.sip_websocket_url,
+        "sip_transport": phone.sip_transport,
+        "sip_username": phone.sip_username,
+        "sip_domain": phone.sip_domain,
+        "has_sip_config": bool(phone.sip_websocket_url and phone.sip_username and phone.sip_password and phone.sip_domain),
+    }
 
 
 @router.post("/add-existing", response_model=PhoneNumberResponse)
@@ -295,14 +252,13 @@ async def add_existing_phone_number(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Add an existing phone number that you already own on Zadarma"""
+    """Add an existing phone number with SIP configuration for incoming calls"""
     # Normalize phone number for storage
     normalized_phone = normalize_phone_for_storage(request.phone_number)
     
     logger.info(f"Adding existing phone number: {request.phone_number} -> normalized: {normalized_phone}")
     
-    # Check if number already exists (try both original and normalized)
-    # Use safe query to avoid sip_id column issue
+    # Check if number already exists
     existing = safe_query_phone_number(
         db, 
         "phone_number = :phone1 OR phone_number = :phone2",
@@ -315,71 +271,35 @@ async def add_existing_phone_number(
             detail="This phone number is already registered"
         )
     
-    # Try to get Zadarma number ID if this is a Zadarma number
-    zadarma_number_id = None
-    if request.zadarma_number_id:
-        zadarma_number_id = request.zadarma_number_id
-        logger.info(f"Using provided Zadarma number ID: {zadarma_number_id}")
-    else:
-        zadarma_service = get_zadarma_service()
-        logger.info(f"Calling Zadarma service to get number ID for: {normalized_phone}")
-        zadarma_number_id = await zadarma_service.get_number_id_by_phone(normalized_phone)
-        logger.info(f"Zadarma number ID result: {zadarma_number_id}")
-    
-    # Create phone number record with normalized number
+    # Create phone number record with SIP config
     phone_record = PhoneNumber(
         user_id=current_user.id,
-        phone_number=normalized_phone,  # Store normalized version
+        phone_number=normalized_phone,
         country_code=request.country_code,
         number_type="local",
-        status=PhoneNumberStatus.ACTIVE,  # Already active since you own it
+        status=PhoneNumberStatus.ACTIVE,
         business_name=request.business_name or current_user.email,
         monthly_cost="4.99",
         per_minute_cost="0.02",
-        zadarma_number_id=zadarma_number_id,
         activated_at=datetime.utcnow()
     )
+    
+    # Add SIP configuration if provided
+    if request.sip_config:
+        phone_record.sip_websocket_url = request.sip_config.websocket_url
+        phone_record.sip_transport = request.sip_config.transport
+        phone_record.sip_username = request.sip_config.username
+        phone_record.sip_password = request.sip_config.password
+        phone_record.sip_domain = request.sip_config.domain
+        logger.info(f"SIP configuration set for phone number: {normalized_phone}")
     
     db.add(phone_record)
     db.commit()
     db.refresh(phone_record)
     
-    # Log warning if number ID wasn't found
-    if not zadarma_number_id:
-        logger.warning(
-            f"Added phone number {normalized_phone} without zadarma_number_id. "
-            "PBX configuration will not be available for this number."
-        )
+    logger.info(f"Added phone number {normalized_phone} with SIP config: {bool(request.sip_config)}")
     
     return phone_record
-
-
-@router.post("/request", response_model=PhoneNumberResponse)
-async def request_phone_number(
-    request: PhoneNumberRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Request a new phone number from Zadarma"""
-    zadarma_service = get_zadarma_service()
-    
-    phone_number = await zadarma_service.request_phone_number(
-        db=db,
-        user_id=current_user.id,
-        phone_number=request.phone_number,
-        country_code=request.country_code,
-        business_name=request.business_name,
-        business_type=request.business_type,
-        business_address=request.business_address
-    )
-    
-    if not phone_number:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to request phone number"
-        )
-    
-    return phone_number
 
 
 @router.get("/", response_model=List[PhoneNumberResponse])
@@ -388,14 +308,13 @@ async def list_phone_numbers(
     db: Session = Depends(get_db)
 ):
     """List all phone numbers for current user"""
-    # Use safe query to avoid sip_id column issue
     phone_numbers = safe_query_phone_numbers(
         db,
         "user_id = :user_id ORDER BY created_at DESC",
         {"user_id": current_user.id}
     )
     
-    return phone_numbers
+    return [phone_number_to_response(phone) for phone in phone_numbers]
 
 
 @router.get("/{phone_number_id}", response_model=PhoneNumberResponse)
@@ -405,7 +324,6 @@ async def get_phone_number(
     db: Session = Depends(get_db)
 ):
     """Get details of a specific phone number"""
-    # Use safe query to avoid sip_id column issue
     phone_number = safe_query_phone_number(
         db,
         "id = :id AND user_id = :user_id",
@@ -419,6 +337,69 @@ async def get_phone_number(
         )
     
     return phone_number
+
+
+@router.post("/{phone_number_id}/activate/{agent_id}")
+async def activate_phone_number_for_agent(
+    phone_number_id: int,
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Assign phone number to an agent"""
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id AND user_id = :user_id",
+        {"id": phone_number_id, "user_id": current_user.id}
+    )
+    
+    if not phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Phone number not found"
+        )
+    
+    # Update phone number with agent assignment
+    db.execute(
+        text("UPDATE phone_numbers SET agent_id = :agent_id, status = :status WHERE id = :id"),
+        {"agent_id": agent_id, "status": PhoneNumberStatus.ACTIVE.value, "id": phone_number_id}
+    )
+    db.commit()
+    
+    logger.info(f"Assigned phone number {phone_number.phone_number} to agent {agent_id}")
+    
+    return {"message": "Phone number activated successfully"}
+
+
+@router.delete("/{phone_number_id}")
+async def delete_phone_number(
+    phone_number_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a phone number"""
+    phone_number = safe_query_phone_number(
+        db,
+        "id = :id AND user_id = :user_id",
+        {"id": phone_number_id, "user_id": current_user.id}
+    )
+    
+    if not phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Phone number not found"
+        )
+    
+    # Delete phone number
+    db.execute(
+        text("DELETE FROM phone_numbers WHERE id = :id"),
+        {"id": phone_number_id}
+    )
+    db.commit()
+    
+    logger.info(f"Deleted phone number {phone_number.phone_number} (ID: {phone_number_id})")
+    
+    return {"message": "Phone number deleted successfully"}
 
 
 @router.post("/{phone_number_id}/upload-document")
@@ -430,8 +411,6 @@ async def upload_verification_document(
     db: Session = Depends(get_db)
 ):
     """Upload verification document for phone number"""
-    # Verify phone number belongs to user
-    # Use safe query to avoid sip_id column issue
     phone_number = safe_query_phone_number(
         db,
         "id = :id AND user_id = :user_id",
@@ -444,7 +423,6 @@ async def upload_verification_document(
             detail="Phone number not found"
         )
     
-    # Validate document type
     try:
         doc_type = DocumentType(document_type)
     except ValueError:
@@ -453,7 +431,6 @@ async def upload_verification_document(
             detail=f"Invalid document type. Must be one of: {[e.value for e in DocumentType]}"
         )
     
-    # Upload file
     storage_service = get_storage_service()
     file_content = await file.read()
     
@@ -464,7 +441,6 @@ async def upload_verification_document(
         content_type=file.content_type
     )
     
-    # Create verification document record
     verification_doc = VerificationDocument(
         phone_number_id=phone_number_id,
         user_id=current_user.id,
@@ -478,9 +454,11 @@ async def upload_verification_document(
     
     db.add(verification_doc)
     
-    # Update phone number status
     if phone_number.status == PhoneNumberStatus.PENDING:
-        phone_number.status = PhoneNumberStatus.DOCUMENTS_SUBMITTED
+        db.execute(
+            text("UPDATE phone_numbers SET status = :status WHERE id = :id"),
+            {"status": PhoneNumberStatus.DOCUMENTS_SUBMITTED.value, "id": phone_number_id}
+        )
     
     db.commit()
     db.refresh(verification_doc)
@@ -499,8 +477,6 @@ async def list_verification_documents(
     db: Session = Depends(get_db)
 ):
     """List all verification documents for a phone number"""
-    # Verify phone number belongs to user
-    # Use safe query to avoid sip_id column issue
     phone_number = safe_query_phone_number(
         db,
         "id = :id AND user_id = :user_id",
@@ -518,189 +494,3 @@ async def list_verification_documents(
     ).order_by(VerificationDocument.created_at.desc()).all()
     
     return documents
-
-
-@router.post("/{phone_number_id}/documents/{document_id}/review")
-async def review_verification_document(
-    phone_number_id: int,
-    document_id: int,
-    review: DocumentReviewRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Review a verification document (admin only)"""
-    # TODO: Add admin check
-    if not current_user.is_superuser:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators can review documents"
-        )
-    
-    document = db.query(VerificationDocument).filter(
-        VerificationDocument.id == document_id,
-        VerificationDocument.phone_number_id == phone_number_id
-    ).first()
-    
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
-    
-    # Update document status
-    if review.status == "accepted":
-        document.status = VerificationStatus.ACCEPTED
-    elif review.status == "rejected":
-        document.status = VerificationStatus.REJECTED
-        document.rejection_reason = review.rejection_reason
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Status must be 'accepted' or 'rejected'"
-        )
-    
-    document.reviewed_by = current_user.email
-    document.reviewed_at = datetime.utcnow()
-    document.notes = review.notes
-    
-    # Check if all required documents are accepted
-    # Use safe query to avoid sip_id column issue
-    phone_number = safe_query_phone_number(
-        db,
-        "id = :id",
-        {"id": phone_number_id}
-    )
-    
-    all_docs = db.query(VerificationDocument).filter(
-        VerificationDocument.phone_number_id == phone_number_id
-    ).all()
-    
-    # Check if we have all required documents accepted
-    required_types = set()
-    if phone_number.business_type == "company":
-        required_types = {DocumentType.COMPANY_REGISTRATION, DocumentType.PROOF_OF_ADDRESS}
-    else:
-        required_types = {DocumentType.PASSPORT, DocumentType.PROOF_OF_ADDRESS}
-    
-    accepted_types = {doc.document_type for doc in all_docs if doc.status == VerificationStatus.ACCEPTED}
-    
-    if required_types.issubset(accepted_types):
-        phone_number.status = PhoneNumberStatus.APPROVED
-        phone_number.status_message = "All documents verified and approved"
-    elif any(doc.status == VerificationStatus.REJECTED for doc in all_docs):
-        phone_number.status = PhoneNumberStatus.DOCUMENTS_SUBMITTED
-        phone_number.status_message = "Some documents rejected. Please resubmit."
-    
-    db.commit()
-    
-    return {
-        "message": "Document reviewed successfully",
-        "document_id": document.id,
-        "status": document.status.value
-    }
-
-
-@router.post("/{phone_number_id}/activate/{agent_id}")
-async def activate_phone_number_for_agent(
-    phone_number_id: int,
-    agent_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Activate phone number and assign to an agent"""
-    zadarma_service = get_zadarma_service()
-    
-    success = await zadarma_service.activate_number_for_agent(
-        db=db,
-        phone_number_id=phone_number_id,
-        agent_id=agent_id
-    )
-    
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to activate phone number"
-        )
-    
-    return {"message": "Phone number activated successfully"}
-
-
-@router.post("/{phone_number_id}/configure-pbx")
-async def configure_pbx_for_phone_number(
-    phone_number_id: int,
-    payload: PBXConfigurationRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Configure PBX call flow for a Zadarma number"""
-    # Use safe query to avoid sip_id column issue
-    phone_number = safe_query_phone_number(
-        db,
-        "id = :id AND user_id = :user_id",
-        {"id": phone_number_id, "user_id": current_user.id}
-    )
-    
-    if not phone_number:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Phone number not found"
-        )
-    
-    if not phone_number.agent:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Assign the phone number to an agent before configuring PBX routing"
-        )
-    
-    zadarma_service = get_zadarma_service()
-    pbx_config = payload.model_dump(exclude_none=True)
-    
-    success = await zadarma_service.configure_pbx_for_number(
-        db=db,
-        phone_number=phone_number,
-        pbx_config=pbx_config
-    )
-    
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to configure PBX routing with Zadarma"
-        )
-    
-    return {
-        "message": "PBX configuration updated successfully",
-        "pbx_extension": phone_number.pbx_extension,
-        "pbx_scenario_id": phone_number.pbx_scenario_id,
-        "business_hours": phone_number.business_hours,
-        "menu_options": phone_number.menu_options,
-        "after_hours_routing": phone_number.after_hours_routing,
-    }
-
-
-@router.get("/{phone_number_id}/status")
-async def check_phone_number_status(
-    phone_number_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Check status of phone number with Zadarma"""
-    zadarma_service = get_zadarma_service()
-    
-    success = await zadarma_service.check_number_status(db, phone_number_id)
-    
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to check phone number status"
-        )
-    
-    # Return updated phone number
-    # Use safe query to avoid sip_id column issue
-    phone_number = safe_query_phone_number(
-        db,
-        "id = :id",
-        {"id": phone_number_id}
-    )
-    
-    return phone_number
-

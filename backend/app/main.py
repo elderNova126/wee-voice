@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, twilio_webhook, performance
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, performance
 from app.middleware.rate_limit import RateLimitMiddleware, cleanup_rate_limits
 
 # Set up logging
@@ -20,14 +20,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Background task for rate limit cleanup
+# Background tasks
 _cleanup_task = None
+_sip_handler = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global _cleanup_task
+    global _cleanup_task, _sip_handler
     
     # Startup
     logger.info("Starting VoiceAgent SaaS application...")
@@ -37,16 +38,44 @@ async def lifespan(app: FastAPI):
     _cleanup_task = asyncio.create_task(cleanup_rate_limits())
     logger.info("Started rate limit cleanup background task")
     
+    # Start SIP call handler if enabled
+    if settings.SIP_ENABLED:
+        try:
+            from app.services.sip_call_handler import sip_call_handler
+            _sip_handler = sip_call_handler
+            success = await _sip_handler.start()
+            if success:
+                logger.info("✅ SIP call handler started successfully")
+                logger.info(f"   SIP Server: {settings.SIP_WS_URL}")
+                logger.info(f"   SIP Username: {settings.SIP_USERNAME}")
+            else:
+                logger.warning("⚠️ SIP call handler failed to start")
+        except Exception as e:
+            logger.error(f"Error starting SIP call handler: {e}", exc_info=True)
+    else:
+        logger.info("SIP call handler disabled (SIP_ENABLED=false)")
+    
     yield
     
     # Shutdown
     logger.info("Shutting down application...")
+    
+    # Stop SIP handler
+    if _sip_handler:
+        try:
+            await _sip_handler.stop()
+            logger.info("SIP call handler stopped")
+        except Exception as e:
+            logger.error(f"Error stopping SIP handler: {e}")
+    
+    # Stop cleanup task
     if _cleanup_task:
         _cleanup_task.cancel()
         try:
             await _cleanup_task
         except asyncio.CancelledError:
             logger.info("Rate limit cleanup task cancelled")
+    
     logger.info("Application shutdown complete")
 
 
@@ -117,7 +146,6 @@ app.include_router(phone_debug.router, prefix=f"{settings.API_V1_STR}/phone-numb
 app.include_router(callbacks.router, prefix=f"{settings.API_V1_STR}/callbacks", tags=["Callbacks"])
 app.include_router(embed.router, prefix=f"{settings.API_V1_STR}/embed", tags=["Embed Widget"])
 app.include_router(zadarma_webhook.router, prefix=f"{settings.API_V1_STR}/zadarma", tags=["Zadarma Webhooks"])
-app.include_router(twilio_webhook.router, prefix=f"{settings.API_V1_STR}", tags=["Twilio Webhooks"])
 app.include_router(phone_audio.router, prefix=f"{settings.API_V1_STR}/phone", tags=["Phone Audio"])
 app.include_router(admin.router, prefix=f"{settings.API_V1_STR}/admin", tags=["Admin"])
 app.include_router(libraries.router, prefix=f"{settings.API_V1_STR}/libraries", tags=["Agent Libraries"])

@@ -14,10 +14,7 @@ import {
   XCircleIcon,
   ClockIcon,
   ExclamationTriangleIcon,
-  Cog6ToothIcon,
-  PlusCircleIcon,
   TrashIcon,
-  PlayCircleIcon,
 } from '@heroicons/react/24/outline'
 
 interface PhoneNumber {
@@ -31,13 +28,12 @@ interface PhoneNumber {
   agent_id: number | null;
   created_at: string;
   activated_at: string | null;
-  zadarma_number_id?: string | null;
-  pbx_enabled?: boolean;
-  pbx_extension?: string | null;
-  pbx_scenario_id?: string | null;
-  business_hours?: PBXBusinessHours | null;
-  menu_options?: StoredPBXMenuOption[] | null;
-  after_hours_routing?: StoredAfterHoursRouting | null;
+  // SIP Configuration
+  sip_websocket_url?: string | null;
+  sip_transport?: string | null;
+  sip_username?: string | null;
+  sip_domain?: string | null;
+  has_sip_config?: boolean;
 }
 
 interface Agent {
@@ -54,48 +50,6 @@ interface VerificationDocument {
   status: string;
   rejection_reason: string | null;
   created_at: string;
-}
-
-type DayCode = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
-
-interface PBXBusinessHours {
-  timezone: string;
-  open_time: string;
-  close_time: string;
-  days: DayCode[];
-}
-
-interface PBXMenuOption {
-  key: string;
-  label?: string;
-  destination_type: 'agent' | 'forward' | 'voicemail' | 'external';
-  destination_value?: string;
-}
-
-interface StoredPBXMenuOption extends PBXMenuOption {
-  destination?: {
-    type?: string;
-    value?: string;
-  };
-}
-
-interface AfterHoursRouting {
-  destination_type: 'agent' | 'forward' | 'voicemail' | 'external';
-  destination_value?: string;
-  message?: string;
-}
-
-interface StoredAfterHoursRouting extends AfterHoursRouting {
-  destination?: {
-    type?: string;
-    value?: string;
-  };
-}
-
-interface PBXFormState {
-  business_hours: PBXBusinessHours;
-  menu_options: PBXMenuOption[];
-  after_hours_routing: AfterHoursRouting;
 }
 
 export const PhoneNumbersPage: React.FC = () => {
@@ -124,8 +78,6 @@ export const PhoneNumbersPage: React.FC = () => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showAssignAgentModal, setShowAssignAgentModal] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
-  const [showPBXModal, setShowPBXModal] = useState(false);
-  const [pbxTargetNumber, setPbxTargetNumber] = useState<PhoneNumber | null>(null);
 
   // Form states
   const [formData, setFormData] = useState({
@@ -139,332 +91,23 @@ export const PhoneNumbersPage: React.FC = () => {
   const [existingNumberData, setExistingNumberData] = useState({
     phone_number: '',
     country_code: 'BE',
-    business_name: ''
+    business_name: '',
+    sip_config: {
+      websocket_url: 'wss://weevoice.weedoo.com:8089/ws',
+      transport: 'WSS',
+      username: '',
+      password: '',
+      domain: 'weevoice.weedoo.com'
+    }
   });
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [phoneNumberToDelete, setPhoneNumberToDelete] = useState<PhoneNumber | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const [uploadData, setUploadData] = useState({
     document_type: 'company_registration',
     file: null as File | null
   });
-
-  const defaultBusinessHours: PBXBusinessHours = {
-    timezone: 'Europe/Paris',
-    open_time: '09:00',
-    close_time: '18:00',
-    days: ['mon', 'tue', 'wed', 'thu', 'fri'],
-  };
-
-  const getDefaultPBXForm = (): PBXFormState => {
-    const isFrench = t.common.status === 'Statut';
-    return {
-      business_hours: { ...defaultBusinessHours },
-      menu_options: [
-        {
-          key: '1',
-          label: isFrench ? 'Parler avec notre agent IA' : 'Speak with our AI agent',
-          destination_type: 'agent',
-          destination_value: '',
-        },
-      ],
-      after_hours_routing: {
-        destination_type: 'agent',
-        message: isFrench ? 'Nos bureaux sont actuellement fermés. Connexion à notre agent virtuel.' : 'Our offices are currently closed. Connecting you to our virtual agent.',
-        destination_value: '',
-      },
-    };
-  };
-
-  const [pbxForm, setPbxForm] = useState<PBXFormState>(getDefaultPBXForm());
-  const [pbxSaving, setPbxSaving] = useState(false);
-
-  const dayOptions: { value: DayCode; label: string }[] = [
-    { value: 'mon', label: 'Mon' },
-    { value: 'tue', label: 'Tue' },
-    { value: 'wed', label: 'Wed' },
-    { value: 'thu', label: 'Thu' },
-    { value: 'fri', label: 'Fri' },
-    { value: 'sat', label: 'Sat' },
-    { value: 'sun', label: 'Sun' },
-  ];
-
-  const timezoneOptions = [
-    'Europe/Paris',
-    'Europe/Brussels',
-    'Europe/London',
-    'America/New_York',
-    'America/Los_Angeles',
-    'UTC',
-  ];
-
-  const formatBusinessHoursSummary = (hours?: PBXBusinessHours | null) => {
-    if (!hours) return t?.phoneNumbers?.notConfigured || 'Not configured';
-    const activeDays = Array.isArray(hours.days)
-      ? dayOptions.filter((d) => (hours.days as DayCode[]).includes(d.value))
-      : [];
-    const orderedDays = activeDays
-      .map((d) => d.label)
-      .join(', ');
-
-    const openTime = hours.open_time || defaultBusinessHours.open_time;
-    const closeTime = hours.close_time || defaultBusinessHours.close_time;
-    const timezone = hours.timezone || defaultBusinessHours.timezone;
-    return `${orderedDays || (t.common.status === 'Statut' ? 'Aucun jour sélectionné' : 'No days selected')} • ${openTime} - ${closeTime} (${timezone})`;
-  };
-
-  const describeAfterHoursDestination = (afterHours?: StoredAfterHoursRouting | null) => {
-    if (!afterHours) {
-      return t.common.status === 'Statut' ? 'Par défaut : se connecter à l\'agent IA' : 'Default: connect to AI agent';
-    }
-
-    const destinationType = afterHours.destination_type || afterHours.destination?.type || 'agent';
-    if (destinationType === 'agent') {
-      return t?.phoneNumbers?.connectToAIAgent || 'Connect to AI Agent';
-    }
-    if (destinationType === 'voicemail') {
-      return t?.phoneNumbers?.sendToVoicemail || 'Send to Voicemail';
-    }
-    if (destinationType === 'forward') {
-      return `${t?.phoneNumbers?.forwardTo || 'Forward to'} ${afterHours.destination_value || afterHours.destination?.value || (t?.phoneNumbers?.externalNumber || 'External Number')}`;
-    }
-    if (destinationType === 'external') {
-      return `${t?.phoneNumbers?.externalDestination || 'External Destination'} ${afterHours.destination_value || afterHours.destination?.value || 'N/A'}`;
-    }
-    return t?.phoneNumbers?.customRouting || 'Custom Routing';
-  };
-
-  const initializePBXFormFromNumber = (number: PhoneNumber): PBXFormState => {
-    const form = getDefaultPBXForm();
-
-    if (number.business_hours) {
-      const incomingDays = Array.isArray(number.business_hours.days)
-        ? number.business_hours.days.filter((day: any): day is DayCode =>
-            dayOptions.some((opt) => opt.value === day)
-          )
-        : form.business_hours.days;
-
-      form.business_hours = {
-        timezone: number.business_hours.timezone || form.business_hours.timezone,
-        open_time: number.business_hours.open_time || form.business_hours.open_time,
-        close_time: number.business_hours.close_time || form.business_hours.close_time,
-        days: incomingDays.length ? incomingDays : form.business_hours.days,
-      };
-    }
-
-    if (number.menu_options && number.menu_options.length > 0) {
-      form.menu_options = number.menu_options.map((option) => {
-        const destinationType =
-          (option.destination_type ||
-            option.destination?.type ||
-            'agent') as PBXMenuOption['destination_type'];
-        return {
-          key: option.key ?? '',
-          label: option.label ?? '',
-          destination_type: destinationType,
-          destination_value:
-            destinationType === 'agent'
-              ? ''
-              : option.destination_value ?? option.destination?.value ?? '',
-        };
-      });
-    }
-
-    if (number.after_hours_routing) {
-      const destinationType =
-        (number.after_hours_routing.destination_type ||
-          number.after_hours_routing.destination?.type ||
-          'agent') as AfterHoursRouting['destination_type'];
-
-      form.after_hours_routing = {
-        destination_type: destinationType,
-        destination_value:
-          destinationType === 'agent'
-            ? ''
-            : number.after_hours_routing.destination_value ??
-              number.after_hours_routing.destination?.value ??
-              '',
-        message:
-          number.after_hours_routing.message ??
-          form.after_hours_routing.message,
-      };
-    }
-
-    return form;
-  };
-
-  const openPBXModal = (number: PhoneNumber) => {
-    if (!number.agent_id) {
-      toast.error(t.common.status === 'Statut' ? 'Assignez ce numéro de téléphone à un agent avant de configurer le routage PBX.' : 'Assign this phone number to an agent before configuring PBX routing.');
-      return;
-    }
-    const preparedForm = initializePBXFormFromNumber(number);
-    setPbxForm(preparedForm);
-    setPbxTargetNumber(number);
-    setShowPBXModal(true);
-  };
-
-  const closePBXModal = () => {
-    setShowPBXModal(false);
-    setPbxTargetNumber(null);
-    setPbxForm(getDefaultPBXForm());
-    setPbxSaving(false);
-  };
-
-  const toggleBusinessDay = (day: DayCode) => {
-    setPbxForm((prev) => {
-      const days = prev.business_hours.days.includes(day)
-        ? prev.business_hours.days.filter((d) => d !== day)
-        : [...prev.business_hours.days, day];
-      return {
-        ...prev,
-        business_hours: {
-          ...prev.business_hours,
-          days,
-        },
-      };
-    });
-  };
-
-  const updateBusinessHours = (field: 'timezone' | 'open_time' | 'close_time', value: string) => {
-    setPbxForm((prev) => ({
-      ...prev,
-      business_hours: {
-        ...prev.business_hours,
-        [field]: value,
-      },
-    }));
-  };
-
-  const updateMenuOption = (index: number, field: keyof PBXMenuOption, value: string) => {
-    setPbxForm((prev) => {
-      const next = [...prev.menu_options];
-      const updated: PBXMenuOption = {
-        ...next[index],
-        [field]: value,
-      } as PBXMenuOption;
-
-      if (field === 'destination_type' && value === 'agent') {
-        updated.destination_value = '';
-      }
-      next[index] = updated;
-      return {
-        ...prev,
-        menu_options: next,
-      };
-    });
-  };
-
-  const addMenuOption = () => {
-    setPbxForm((prev) => ({
-      ...prev,
-      menu_options: [
-        ...prev.menu_options,
-        {
-          key: '',
-          label: '',
-          destination_type: 'agent',
-          destination_value: '',
-        },
-      ],
-    }));
-  };
-
-  const removeMenuOption = (index: number) => {
-    setPbxForm((prev) => {
-      if (prev.menu_options.length <= 1) {
-        return prev;
-      }
-      const next = prev.menu_options.filter((_, i) => i !== index);
-      return {
-        ...prev,
-        menu_options: next,
-      };
-    });
-  };
-
-  const updateAfterHours = (field: keyof AfterHoursRouting, value: string) => {
-    setPbxForm((prev) => {
-      const next: AfterHoursRouting = {
-        ...prev.after_hours_routing,
-        [field]: value,
-      };
-      if (field === 'destination_type' && value === 'agent') {
-        next.destination_value = '';
-      }
-      return {
-        ...prev,
-        after_hours_routing: next,
-      };
-    });
-  };
-
-  const handleSavePBX = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!pbxTargetNumber) return;
-
-    setPbxSaving(true);
-
-    const selectedDays = pbxForm.business_hours.days.filter((day): day is DayCode =>
-      dayOptions.some((opt) => opt.value === day)
-    );
-
-    if (selectedDays.length === 0) {
-      toast.error(t.common.status === 'Statut' ? 'Sélectionnez au moins un jour ouvrable pour le menu PBX.' : 'Select at least one business day for the PBX menu.');
-      setPbxSaving(false);
-      return;
-    }
-
-    const menuOptionsPayload = pbxForm.menu_options
-      .filter((option) => option.key.trim().length > 0)
-      .map((option) => {
-        const destinationType = option.destination_type;
-        const payloadOption: Record<string, string> = {
-          key: option.key.trim(),
-          destination_type: destinationType,
-        };
-        if (option.label && option.label.trim()) {
-          payloadOption.label = option.label.trim();
-        }
-        if (destinationType !== 'agent') {
-          payloadOption.destination_value = (option.destination_value || '').trim();
-        }
-        return payloadOption;
-      });
-
-    const afterHoursType = pbxForm.after_hours_routing.destination_type;
-    const afterHoursPayload: Record<string, string> = {
-      destination_type: afterHoursType,
-    };
-    if (pbxForm.after_hours_routing.message) {
-      afterHoursPayload.message = pbxForm.after_hours_routing.message;
-    }
-    if (afterHoursType !== 'agent') {
-      afterHoursPayload.destination_value = (pbxForm.after_hours_routing.destination_value || '').trim();
-    }
-
-    const payload: Record<string, any> = {
-      business_hours: {
-        ...pbxForm.business_hours,
-        days: selectedDays,
-      },
-      after_hours_routing: afterHoursPayload,
-    };
-
-    if (menuOptionsPayload.length > 0) {
-      payload.menu_options = menuOptionsPayload;
-    }
-
-    try {
-      await api.post(`/phone-numbers/${pbxTargetNumber.id}/configure-pbx`, payload);
-      await loadPhoneNumbers();
-      toast.success(t.phoneNumbers.pbxSavedSuccess);
-      closePBXModal();
-    } catch (error: any) {
-      console.error('Error saving PBX configuration:', error);
-      toast.error(t.phoneNumbers.updateError + ': ' + (error.response?.data?.detail || error.message));
-    } finally {
-      setPbxSaving(false);
-    }
-  };
 
   useEffect(() => {
     loadPhoneNumbers();
@@ -507,19 +150,57 @@ export const PhoneNumbersPage: React.FC = () => {
     e.preventDefault();
     setRequestLoading(true);
     try {
-      await api.post('/phone-numbers/add-existing', existingNumberData);
+      // Prepare request data with SIP config
+      const requestData = {
+        phone_number: existingNumberData.phone_number,
+        country_code: existingNumberData.country_code,
+        business_name: existingNumberData.business_name,
+        sip_config: {
+          websocket_url: existingNumberData.sip_config.websocket_url,
+          transport: existingNumberData.sip_config.transport,
+          username: existingNumberData.sip_config.username,
+          password: existingNumberData.sip_config.password,
+          domain: existingNumberData.sip_config.domain
+        }
+      };
+      
+      await api.post('/phone-numbers/add-existing', requestData);
       await loadPhoneNumbers();
       setShowAddExistingModal(false);
       setExistingNumberData({
         phone_number: '',
         country_code: 'BE',
-        business_name: ''
+        business_name: '',
+        sip_config: {
+          websocket_url: 'wss://weevoice.weedoo.com:8089/ws',
+          transport: 'WSS',
+          username: '',
+          password: '',
+          domain: 'weevoice.weedoo.com'
+        }
       });
       toast.success(t.phoneNumbers.phoneNumberAddedSuccess);
     } catch (error: any) {
       toast.error(t.phoneNumbers.createError + ': ' + (error.response?.data?.detail || error.message));
     } finally {
       setRequestLoading(false);
+    }
+  };
+
+  const handleDeletePhoneNumber = async () => {
+    if (!phoneNumberToDelete) return;
+    
+    setDeleteLoading(true);
+    try {
+      await api.delete(`/phone-numbers/${phoneNumberToDelete.id}`);
+      await loadPhoneNumbers();
+      setShowDeleteModal(false);
+      setPhoneNumberToDelete(null);
+      toast.success(t?.phoneNumbers?.phoneNumberDeletedSuccess || 'Phone number deleted successfully');
+    } catch (error: any) {
+      toast.error((t?.phoneNumbers?.deleteError || 'Failed to delete phone number') + ': ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -595,27 +276,6 @@ export const PhoneNumbersPage: React.FC = () => {
     if (!agentId) return t.common.status === 'Statut' ? 'Non assigné' : 'Not assigned';
     const agent = agents.find(a => a.id === agentId);
     return agent ? agent.name : (t?.phoneNumbers?.unknownAgent || 'Unknown Agent');
-  };
-
-  const handleTestCall = async (number: PhoneNumber) => {
-    try {
-      const response = await api.post(
-        `/zadarma/test-call?phone_number=${encodeURIComponent(number.phone_number)}&caller_id=${encodeURIComponent('+33123456789')}`
-      );
-
-      toast.success(
-        t?.phoneNumbers?.testCallSuccess ||
-        `Test call simulated! Call ID: ${response.data.call.id}. The call will progress through: initiated → in_progress → completed over 5 seconds. Navigate to the Calls page to see real-time updates.`
-      );
-
-      // Optionally reload phone numbers to show updated status
-      await loadPhoneNumbers();
-    } catch (error: any) {
-      toast.error(
-        t?.phoneNumbers?.testCallError ||
-        'Failed to simulate test call: ' + (error.response?.data?.detail || error.message)
-      );
-    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -769,26 +429,26 @@ export const PhoneNumbersPage: React.FC = () => {
                     </div>
                     <div className="mt-3 text-sm">
                       <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
-                        {t?.phoneNumbers?.pbxRouting || 'PBX Routing'}
+                        {t?.phoneNumbers?.sipConfiguration || 'SIP Configuration'}
                       </div>
-                      {number.pbx_enabled ? (
-                        <div className="space-y-1 text-gray-700 dark:text-gray-300">
-                          <div>
-                            <span className="font-medium">{t?.phoneNumbers?.extension || 'Extension'}</span>{' '}
-                            {number.pbx_extension || (t?.phoneNumbers?.auto || 'Auto')}
+                      {number.has_sip_config ? (
+                        <div className="space-y-1 text-gray-700 dark:text-gray-300 bg-green-50 dark:bg-green-900/20 p-2 rounded-lg">
+                          <div className="flex items-center gap-1 text-green-700 dark:text-green-400 font-medium">
+                            <CheckCircleIcon className="h-4 w-4" />
+                            {t?.phoneNumbers?.sipConfigured || 'SIP Configured'}
                           </div>
-                          <div>
-                            <span className="font-medium">{t?.phoneNumbers?.businessHours || 'Business Hours'}</span>{' '}
-                            {formatBusinessHoursSummary(number.business_hours || null)}
+                          <div className="text-xs text-gray-600 dark:text-gray-400">
+                            <span className="font-medium">{t?.phoneNumbers?.websocketUrl || 'WebSocket URL'}:</span>{' '}
+                            <span className="font-mono">{number.sip_websocket_url}</span>
                           </div>
-                          <div>
-                            <span className="font-medium">{t?.phoneNumbers?.afterHours || 'After Hours'}</span>{' '}
-                            {describeAfterHoursDestination(number.after_hours_routing || null)}
+                          <div className="text-xs text-gray-600 dark:text-gray-400">
+                            <span className="font-medium">{t?.phoneNumbers?.sipUsername || 'SIP Username'}:</span>{' '}
+                            <span className="font-mono">{number.sip_username}@{number.sip_domain}</span>
                           </div>
                         </div>
                       ) : (
-                        <p className="text-gray-500 dark:text-gray-400">
-                          {t?.phoneNumbers?.pbxNotConfiguredDesc || 'PBX routing not configured'}
+                        <p className="text-amber-600 dark:text-amber-400">
+                          {t?.phoneNumbers?.sipConfigDesc || 'SIP not configured - add SIP settings to handle incoming calls'}
                         </p>
                       )}
                     </div>
@@ -823,31 +483,18 @@ export const PhoneNumbersPage: React.FC = () => {
                         {number.agent_id ? (t?.phoneNumbers?.changeAgent || 'Change Agent') : (t?.phoneNumbers?.assignAgent || 'Assign Agent')}
                       </Button>
                     )}
-                    {number.agent_id && number.zadarma_number_id && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => openPBXModal(number)}
-                      >
-                        <Cog6ToothIcon className="mr-2 h-3.5 w-3.5" />
-                        {t?.phoneNumbers?.configurePBX || 'Configure PBX'}
-                      </Button>
-                    )}
-                    {number.agent_id && !number.zadarma_number_id && (
-                      <div className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                        {t?.phoneNumbers?.pbxRequiresZadarma || 'PBX configuration requires Zadarma number'}
-                      </div>
-                    )}
-                    {/* {number.agent_id && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleTestCall(number)}
-                      >
-                        <PlayCircleIcon className="mr-2 h-3.5 w-3.5" />
-                        {t?.phoneNumbers?.testCall || 'Test Call'}
-                      </Button>
-                    )} */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 border-red-300 dark:border-red-700"
+                      onClick={() => {
+                        setPhoneNumberToDelete(number);
+                        setShowDeleteModal(true);
+                      }}
+                    >
+                      <TrashIcon className="mr-2 h-3.5 w-3.5" />
+                      {t?.common?.delete || 'Delete'}
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -927,56 +574,151 @@ export const PhoneNumbersPage: React.FC = () => {
 
       {/* Add Existing Number Modal */}
       {showAddExistingModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <Card className="max-w-lg w-full">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
+          <Card className="max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <h2 className="text-2xl font-bold mb-4">{t?.phoneNumbers?.addExistingPhoneNumber || 'Add Existing Phone Number'}</h2>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-              {t?.phoneNumbers?.addExistingDesc || 'Add your existing Zadarma phone number to your account'}
+              {t?.phoneNumbers?.addExistingDesc || 'Add your phone number with SIP configuration for incoming calls'}
             </p>
-            <form onSubmit={handleAddExistingNumber} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.phoneNumberLabel || 'Phone Number'}</label>
-                <input
-                  type="text"
-                  required
-                  value={existingNumberData.phone_number}
-                  onChange={(e) => setExistingNumberData({ ...existingNumberData, phone_number: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  placeholder={t?.phoneNumbers?.phoneNumberPlaceholder || 'Enter phone number'}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  {t?.phoneNumbers?.phoneNumberHelper || 'Enter your Zadarma phone number'}
+            <form onSubmit={handleAddExistingNumber} className="space-y-6">
+              {/* Phone Number Section */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-700 pb-2">
+                  {t?.phoneNumbers?.phoneNumberDetails || 'Phone Number Details'}
+                </h3>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.phoneNumberLabel || 'Phone Number'}</label>
+                  <input
+                    type="text"
+                    required
+                    value={existingNumberData.phone_number}
+                    onChange={(e) => setExistingNumberData({ ...existingNumberData, phone_number: e.target.value })}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                    placeholder={t?.phoneNumbers?.phoneNumberPlaceholder || '+32 2 833 2888'}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.countryCode || 'Country Code'}</label>
+                    <select
+                      value={existingNumberData.country_code}
+                      onChange={(e) => setExistingNumberData({ ...existingNumberData, country_code: e.target.value })}
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                    >
+                      <option value="BE">{t.common.status === 'Statut' ? 'Belgique (BE)' : 'Belgium (BE)'}</option>
+                      <option value="FR">{t.common.status === 'Statut' ? 'France (FR)' : 'France (FR)'}</option>
+                      <option value="US">{t.common.status === 'Statut' ? 'États-Unis (US)' : 'United States (US)'}</option>
+                      <option value="UK">{t.common.status === 'Statut' ? 'Royaume-Uni (UK)' : 'United Kingdom (UK)'}</option>
+                      <option value="DE">{t.common.status === 'Statut' ? 'Allemagne (DE)' : 'Germany (DE)'}</option>
+                      <option value="NL">{t.common.status === 'Statut' ? 'Pays-Bas (NL)' : 'Netherlands (NL)'}</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessNameOptional || 'Business Name (Optional)'}</label>
+                    <input
+                      type="text"
+                      value={existingNumberData.business_name}
+                      onChange={(e) => setExistingNumberData({ ...existingNumberData, business_name: e.target.value })}
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                      placeholder={t?.phoneNumbers?.businessNamePlaceholder || 'Enter business name'}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* SIP Configuration Section */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-700 pb-2">
+                  {t?.phoneNumbers?.sipConfiguration || 'SIP Configuration'}
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {t?.phoneNumbers?.sipConfigDesc || 'Configure SIP settings for handling incoming calls with the AI agent'}
                 </p>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.websocketUrl || 'WebSocket (WSS) URL'}</label>
+                  <input
+                    type="text"
+                    required
+                    value={existingNumberData.sip_config.websocket_url}
+                    onChange={(e) => setExistingNumberData({ 
+                      ...existingNumberData, 
+                      sip_config: { ...existingNumberData.sip_config, websocket_url: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700 font-mono text-sm"
+                    placeholder="wss://weevoice.weedoo.com:8089/ws"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.transport || 'Transport'}</label>
+                    <select
+                      value={existingNumberData.sip_config.transport}
+                      onChange={(e) => setExistingNumberData({ 
+                        ...existingNumberData, 
+                        sip_config: { ...existingNumberData.sip_config, transport: e.target.value }
+                      })}
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                    >
+                      <option value="WSS">WSS (WebSocket Secure)</option>
+                      <option value="WS">WS (WebSocket)</option>
+                      <option value="UDP">UDP</option>
+                      <option value="TCP">TCP</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.sipUsername || 'SIP Username'}</label>
+                    <input
+                      type="text"
+                      required
+                      value={existingNumberData.sip_config.username}
+                      onChange={(e) => setExistingNumberData({ 
+                        ...existingNumberData, 
+                        sip_config: { ...existingNumberData.sip_config, username: e.target.value }
+                      })}
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700 font-mono"
+                      placeholder="55555"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.sipPassword || 'Password'}</label>
+                  <input
+                    type="password"
+                    required
+                    value={existingNumberData.sip_config.password}
+                    onChange={(e) => setExistingNumberData({ 
+                      ...existingNumberData, 
+                      sip_config: { ...existingNumberData.sip_config, password: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700 font-mono"
+                    placeholder="••••••••••••••••"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.sipDomain || 'Domain/Realm'}</label>
+                  <input
+                    type="text"
+                    required
+                    value={existingNumberData.sip_config.domain}
+                    onChange={(e) => setExistingNumberData({ 
+                      ...existingNumberData, 
+                      sip_config: { ...existingNumberData.sip_config, domain: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700 font-mono"
+                    placeholder="weevoice.weedoo.com"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.countryCode || 'Country Code'}</label>
-                <select
-                  value={existingNumberData.country_code}
-                  onChange={(e) => setExistingNumberData({ ...existingNumberData, country_code: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                >
-                  <option value="BE">{t.common.status === 'Statut' ? 'Belgique (BE)' : 'Belgium (BE)'}</option>
-                  <option value="FR">{t.common.status === 'Statut' ? 'France (FR)' : 'France (FR)'}</option>
-                  <option value="US">{t.common.status === 'Statut' ? 'États-Unis (US)' : 'United States (US)'}</option>
-                  <option value="UK">{t.common.status === 'Statut' ? 'Royaume-Uni (UK)' : 'United Kingdom (UK)'}</option>
-                  <option value="DE">{t.common.status === 'Statut' ? 'Allemagne (DE)' : 'Germany (DE)'}</option>
-                  <option value="NL">{t.common.status === 'Statut' ? 'Pays-Bas (NL)' : 'Netherlands (NL)'}</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessNameOptional || 'Business Name (Optional)'}</label>
-                <input
-                  type="text"
-                  value={existingNumberData.business_name}
-                  onChange={(e) => setExistingNumberData({ ...existingNumberData, business_name: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  placeholder={t?.phoneNumbers?.businessNamePlaceholder || 'Enter business name'}
-                />
-              </div>
-
-              <div className="flex gap-3 pt-4">
+              <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
                 <Button type="submit" className="flex-1" disabled={requestLoading}>
                   {requestLoading ? (
                     <>
@@ -1239,253 +981,60 @@ export const PhoneNumbersPage: React.FC = () => {
         </div>
       )}
 
-      {/* PBX Configuration Modal */}
-      {showPBXModal && pbxTargetNumber && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
-          <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-2">{t?.phoneNumbers?.pbxConfiguration || 'PBX Configuration'}</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-              {t.common.status === 'Statut' ? 'Définissez les heures d\'ouverture et les options IVR pour' : 'Define business hours and IVR options for'} <strong>{pbxTargetNumber.phone_number}</strong>. {t.common.status === 'Statut' ? 'Pendant les heures de bureau, les appelants peuvent naviguer dans le menu ; en dehors des heures de bureau, ils suivront la règle hors heures.' : 'During office hours, callers can navigate the menu; outside office hours they will follow the after-hours rule.'}
-            </p>
-            <form onSubmit={handleSavePBX} className="space-y-6">
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{t?.phoneNumbers?.businessHours || 'Business Hours'}</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                  {t.common.status === 'Statut' ? 'Sélectionnez le fuseau horaire, les heures d\'ouverture et les jours où les appelants doivent entendre le menu IVR.' : 'Select the timezone, opening hours, and days when callers should hear the IVR menu.'}
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && phoneNumberToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <Card className="max-w-md w-full">
+            <div className="text-center">
+              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900/30 mb-4">
+                <TrashIcon className="h-6 w-6 text-red-600 dark:text-red-400" />
+              </div>
+              <h2 className="text-xl font-bold mb-2 text-gray-900 dark:text-white">
+                {t?.phoneNumbers?.deletePhoneNumber || 'Delete Phone Number'}
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                {t?.phoneNumbers?.deleteConfirmation || 'Are you sure you want to delete this phone number?'}
+              </p>
+              <p className="text-lg font-semibold text-gray-900 dark:text-white mb-6">
+                {phoneNumberToDelete.phone_number}
+              </p>
+              {phoneNumberToDelete.agent_id && (
+                <p className="text-sm text-amber-600 dark:text-amber-400 mb-4">
+                  {t?.phoneNumbers?.deleteWarningAgent || 'This phone number is currently assigned to an agent.'}
                 </p>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.timezone || 'Timezone'}</label>
-                    <select
-                      value={pbxForm.business_hours.timezone}
-                      onChange={(e) => updateBusinessHours('timezone', e.target.value)}
-                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                    >
-                      {timezoneOptions.map((tz) => (
-                        <option key={tz} value={tz}>
-                          {tz}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.openTime || 'Open Time'}</label>
-                      <input
-                        type="time"
-                        value={pbxForm.business_hours.open_time}
-                        onChange={(e) => updateBusinessHours('open_time', e.target.value)}
-                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.closeTime || 'Close Time'}</label>
-                      <input
-                        type="time"
-                        value={pbxForm.business_hours.close_time}
-                        onChange={(e) => updateBusinessHours('close_time', e.target.value)}
-                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                        required
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.activeDays || 'Active Days'}</label>
-                  <div className="flex flex-wrap gap-2">
-                    {dayOptions.map((day) => {
-                      const isActive = pbxForm.business_hours.days.includes(day.value);
-                      return (
-                        <button
-                          type="button"
-                          key={day.value}
-                          onClick={() => toggleBusinessDay(day.value)}
-                          className={`px-3 py-1.5 rounded-full text-sm border transition ${
-                            isActive
-                              ? 'bg-indigo-600 text-white border-indigo-600'
-                              : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-indigo-400'
-                          }`}
-                        >
-                          {day.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{t?.phoneNumbers?.menuOptions || 'Menu Options'}</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                  {t.common.status === 'Statut' ? 'Définissez les options du clavier que les appelants peuvent appuyer pendant les heures de bureau.' : 'Define the keypad options callers can press during business hours.'}
-                </p>
-                <div className="space-y-4">
-                  {pbxForm.menu_options.map((option, index) => (
-                    <div
-                      key={`menu-option-${index}`}
-                      className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-800/40 space-y-3"
-                    >
-                      <div className="flex justify-between items-center">
-                        <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-                          {t?.phoneNumbers?.option || 'Option'} #{index + 1}
-                        </h4>
-                        {pbxForm.menu_options.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => removeMenuOption(index)}
-                            className="text-red-600 hover:text-red-700 flex items-center gap-1 text-sm"
-                          >
-                            <TrashIcon className="h-4 w-4" />
-                            {t?.common?.delete || 'Delete'}
-                          </button>
-                        )}
-                      </div>
-                      <div className="grid md:grid-cols-6 gap-3">
-                        <div className="md:col-span-1">
-                          <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.key || 'Key'}</label>
-                          <input
-                            type="text"
-                            maxLength={1}
-                            value={option.key}
-                            onChange={(e) => updateMenuOption(index, 'key', e.target.value.replace(/\D/g, ''))}
-                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                            placeholder="1"
-                            required
-                          />
-                        </div>
-                        <div className="md:col-span-2">
-                          <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.label || 'Label'}</label>
-                          <input
-                            type="text"
-                            value={option.label || ''}
-                            onChange={(e) => updateMenuOption(index, 'label', e.target.value)}
-                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                            placeholder={t?.phoneNumbers?.speakToSales || 'Speak to sales'}
-                          />
-                        </div>
-                        <div className="md:col-span-3">
-                          <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.destination || 'Destination'}</label>
-                          <div className="grid grid-cols-2 gap-2">
-                            <select
-                              value={option.destination_type}
-                              onChange={(e) =>
-                                updateMenuOption(
-                                  index,
-                                  'destination_type',
-                                  e.target.value as PBXMenuOption['destination_type']
-                                )
-                              }
-                              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                            >
-                              <option value="agent">{t.common.status === 'Statut' ? 'Agent IA (extension)' : 'AI Agent (extension)'}</option>
-                              <option value="forward">{t.common.status === 'Statut' ? 'Transférer vers téléphone' : 'Forward to phone'}</option>
-                              <option value="voicemail">{t.common.status === 'Statut' ? 'Messagerie vocale' : 'Voicemail'}</option>
-                              <option value="external">{t.common.status === 'Statut' ? 'Action externe' : 'External action'}</option>
-                            </select>
-                            {option.destination_type !== 'agent' && (
-                              <input
-                                type="text"
-                                value={option.destination_value || ''}
-                                onChange={(e) => updateMenuOption(index, 'destination_value', e.target.value)}
-                                className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                                placeholder={
-                                  option.destination_type === 'voicemail'
-                                    ? (t.common.status === 'Statut' ? 'ID de boîte vocale' : 'Mailbox ID')
-                                    : (t.common.status === 'Statut' ? 'Destination (ex: +33123456789)' : 'Destination (e.g., +33123456789)')
-                                }
-                                required
-                              />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="pt-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={addMenuOption}
-                    className="text-indigo-600 hover:text-indigo-700"
-                  >
-                    <PlusCircleIcon className="h-5 w-5" />
-                    {t?.phoneNumbers?.addMenuOption || 'Add Menu Option'}
-                  </Button>
-                </div>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{t?.phoneNumbers?.afterHoursRouting || 'After Hours Routing'}</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                  {t.common.status === 'Statut' ? 'Choisissez ce qui se passe lorsque les clients appellent en dehors des heures de bureau.' : 'Choose what happens when customers call outside of business hours.'}
-                </p>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">{t.common.status === 'Statut' ? 'Destination' : 'Destination'}</label>
-                    <select
-                      value={pbxForm.after_hours_routing.destination_type}
-                      onChange={(e) =>
-                        updateAfterHours(
-                          'destination_type',
-                          e.target.value as AfterHoursRouting['destination_type']
-                        )
-                      }
-                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                    >
-                      <option value="agent">{t?.phoneNumbers?.connectToAIAgent || 'Connect to AI Agent'}</option>
-                      <option value="forward">{t?.common?.status === 'Statut' ? 'Transférer vers téléphone humain' : 'Forward to human phone'}</option>
-                      <option value="voicemail">{t?.phoneNumbers?.sendToVoicemail || 'Send to Voicemail'}</option>
-                      <option value="external">{(t?.phoneNumbers?.externalDestination || 'External Destination').replace(':', '')}</option>
-                    </select>
-                  </div>
-                  {pbxForm.after_hours_routing.destination_type !== 'agent' && (
-                    <div>
-                      <label className="block text-sm font-medium mb-1">
-                        {t?.phoneNumbers?.destinationValue || 'Destination Value'}
-                      </label>
-                      <input
-                        type="text"
-                        value={pbxForm.after_hours_routing.destination_value || ''}
-                        onChange={(e) => updateAfterHours('destination_value', e.target.value)}
-                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                        placeholder={t.common.status === 'Statut' ? 'ex: +33123456789 ou ID de boîte vocale' : 'e.g., +33123456789 or mailbox id'}
-                        required
-                      />
-                    </div>
-                  )}
-                </div>
-                <div className="mt-3">
-                  <label className="block text-sm font-medium mb-1">{t?.phoneNumbers?.message || 'Message'} ({t?.phoneNumbers?.optional || 'Optional'})</label>
-                  <textarea
-                    value={pbxForm.after_hours_routing.message || ''}
-                    onChange={(e) => updateAfterHours('message', e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                    rows={3}
-                    placeholder={t.common.status === 'Statut' ? 'Nos bureaux sont actuellement fermés...' : 'Our offices are currently closed...'}
-                  />
-                </div>
-              </section>
-
-              <div className="flex flex-col md:flex-row md:justify-end gap-3 pt-4">
+              )}
+              <div className="flex gap-3">
                 <Button
-                  type="button"
                   variant="outline"
-                  onClick={closePBXModal}
-                  className="md:w-auto w-full"
-                  disabled={pbxSaving}
+                  className="flex-1"
+                  onClick={() => {
+                    setShowDeleteModal(false);
+                    setPhoneNumberToDelete(null);
+                  }}
+                  disabled={deleteLoading}
                 >
                   {t?.common?.cancel || 'Cancel'}
                 </Button>
-                <Button type="submit" className="md:w-auto w-full" loading={pbxSaving}>
-                  {pbxSaving ? (t?.phoneNumbers?.saving || 'Saving...') : (t?.phoneNumbers?.savePBX || 'Save PBX')}
+                <Button
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                  onClick={handleDeletePhoneNumber}
+                  disabled={deleteLoading}
+                >
+                  {deleteLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      {t?.phoneNumbers?.deleting || 'Deleting...'}
+                    </>
+                  ) : (
+                    t?.common?.delete || 'Delete'
+                  )}
                 </Button>
               </div>
-            </form>
+            </div>
           </Card>
         </div>
       )}
+
       </div>
     </DashboardLayout>
   );

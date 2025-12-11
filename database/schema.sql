@@ -459,10 +459,12 @@ CREATE TABLE phone_numbers (
     country_code VARCHAR(10) NOT NULL,
     number_type VARCHAR(20) NOT NULL,
     
-    -- Integration
-    zadarma_number_id VARCHAR(255),
-    zadarma_status VARCHAR(50),
-    zadarma_config JSONB,
+    -- SIP Configuration for incoming calls
+    sip_websocket_url VARCHAR(500),
+    sip_transport VARCHAR(50) DEFAULT 'WSS',
+    sip_username VARCHAR(255),
+    sip_password VARCHAR(255),
+    sip_domain VARCHAR(255),
     
     -- Status
     status VARCHAR(50) DEFAULT 'pending',
@@ -488,6 +490,7 @@ CREATE INDEX idx_phone_numbers_phone ON phone_numbers(phone_number);
 CREATE INDEX idx_phone_numbers_user ON phone_numbers(user_id);
 CREATE INDEX idx_phone_numbers_agent ON phone_numbers(agent_id);
 CREATE INDEX idx_phone_numbers_status ON phone_numbers(status);
+CREATE INDEX idx_phone_numbers_sip_username ON phone_numbers(sip_username);
 
 -- ===================================================================
 -- VERIFICATION DOCUMENTS TABLE

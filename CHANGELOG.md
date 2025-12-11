@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2025-12-01] - SIP Integration with External SIP Server
+
+### 🚀 Full SIP WebSocket Support
+
+Added complete SIP integration for connecting to external SIP servers (Dialsense WebSocket server) for full bidirectional phone call support.
+
+### Added
+- **SIP Client Service** (`backend/app/services/sip_client_service.py`):
+  - WebSocket SIP client with full signaling support (REGISTER, INVITE, ANSWER, BYE)
+  - SIP authentication (basic and digest)
+  - Bidirectional audio streaming over WebSocket
+  - Automatic audio format conversion (8kHz SIP ↔ 16kHz/24kHz Gemini)
+  - Keepalive mechanism for stable connections
+
+- **SIP Call Handler** (`backend/app/services/sip_call_handler.py`):
+  - Orchestrates incoming SIP calls with Gemini voice agents
+  - Automatic agent lookup by called phone number
+  - Call record creation and lifecycle management
+  - Audio bridge between SIP and Gemini
+  - Real-time status updates to frontend dashboard
+
+- **Configuration** (in `backend/app/core/config.py`):
+  - `SIP_ENABLED` - Enable/disable SIP integration
+  - `SIP_WS_URL` - WebSocket SIP server URL
+  - `SIP_USERNAME`, `SIP_PASSWORD`, `SIP_DOMAIN` - SIP credentials
+
+- **Auto-start**: SIP client automatically connects on backend startup (if enabled)
+
+- **Documentation**:
+  - `SIP_INTEGRATION_GUIDE.md` - Complete integration guide with troubleshooting
+  - `QUICK_SIP_SETUP.md` - Quick 5-minute setup guide
+  - `env.sip.template` - Environment configuration template
+
+### Architecture
+**Call Flow**: 
+```
+Caller → Zadarma Phone → SIP Server (Dialsense) → Backend → Gemini AI → Backend → SIP → Caller
+```
+
+**Audio Conversion** (automatic):
+- Caller audio: 8kHz PCM16 (SIP) → 16kHz PCM16 (Gemini input)
+- AI audio: 24kHz PCM16 (Gemini output) → 8kHz PCM16 (SIP)
+
+### Changed
+- Updated `backend/app/main.py` to start/stop SIP handler in lifespan
+- Enhanced config with SIP server settings
+
+### Benefits
+- ✅ No separate SIP bridge server needed - uses existing SIP infrastructure
+- ✅ Full integration with Zadarma phone numbers
+- ✅ Real-time call monitoring in frontend dashboard
+- ✅ Automatic call transcription and summarization
+- ✅ Support for multiple concurrent calls
+- ✅ Cost tracking and analytics
+
 ## [2024-11-24] - Complete Performance & Scalability Overhaul
 
 ### 🚀 Major Performance Improvements

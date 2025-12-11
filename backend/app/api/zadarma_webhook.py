@@ -55,16 +55,16 @@ def verify_zadarma_signature(payload: str, signature: str) -> bool:
         return False
 
 
-def verify_pbx_signature(
+def verify_form_webhook_signature(
     caller_id: str,
     called_did: str,
     call_start: str,
     signature: str
 ) -> bool:
     """
-    Verify PBX extension webhook signature from Zadarma
+    Verify form-encoded webhook signature from Zadarma
     
-    For PBX extension webhooks, Zadarma uses a different signature format:
+    For form-encoded webhooks, Zadarma uses a different signature format:
     base64(hash_hmac('sha1', caller_id + called_did + call_start, API_SECRET))
     
     Args:
@@ -97,7 +97,7 @@ def verify_pbx_signature(
         # Compare signatures (case-insensitive, as Zadarma may send different case)
         return hmac.compare_digest(expected_signature.lower(), signature.lower())
     except Exception as e:
-        logger.error(f"Error verifying PBX signature: {e}")
+        logger.error(f"Error verifying form webhook signature: {e}")
         return False
 
 
@@ -131,6 +131,61 @@ def normalize_phone_for_matching(phone: str) -> str:
     return normalized
 
 
+async def get_agent_and_phone_for_number(db: Session, phone_number: str) -> tuple[Optional[VoiceAgent], Optional[PhoneNumber]]:
+    """
+    Get the voice agent and phone number record for a called phone number
+    
+    Args:
+        db: Database session
+        phone_number: Called phone number
+        
+    Returns:
+        Tuple of (VoiceAgent, PhoneNumber) or (None, None)
+    """
+    # First call the helper to get just the agent
+    agent = await get_agent_for_phone_number(db, phone_number)
+    if agent:
+        # Now find the phone number record to get SIP config
+        result = db.execute(text("""
+            SELECT id, user_id, agent_id, phone_number, country_code, number_type,
+                   sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
+                   status, status_message, monthly_cost, per_minute_cost,
+                   business_name, business_type, business_address,
+                   created_at, updated_at, activated_at
+            FROM phone_numbers
+            WHERE agent_id = :agent_id
+            LIMIT 1
+        """), {"agent_id": agent.id}).first()
+        
+        if result:
+            phone_record = PhoneNumber()
+            phone_record.id = result[0]
+            phone_record.user_id = result[1]
+            phone_record.agent_id = result[2]
+            phone_record.phone_number = result[3]
+            phone_record.country_code = result[4]
+            phone_record.number_type = result[5]
+            phone_record.sip_websocket_url = result[6]
+            phone_record.sip_transport = result[7]
+            phone_record.sip_username = result[8]
+            phone_record.sip_password = result[9]
+            phone_record.sip_domain = result[10]
+            phone_record.status = result[11]
+            phone_record.status_message = result[12]
+            phone_record.monthly_cost = result[13]
+            phone_record.per_minute_cost = result[14]
+            phone_record.business_name = result[15]
+            phone_record.business_type = result[16]
+            phone_record.business_address = result[17]
+            phone_record.created_at = result[18]
+            phone_record.updated_at = result[19]
+            phone_record.activated_at = result[20]
+            phone_record.agent = agent
+            return agent, phone_record
+    
+    return None, None
+
+
 async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional[VoiceAgent]:
     """
     Get the voice agent assigned to a phone number
@@ -147,13 +202,10 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
     logger.info(f"Looking up agent for phone number: {phone_number} (normalized: {normalized_incoming})")
     
     # Get all phone numbers with agents for debugging
-    # Use raw SQL to avoid sip_id column if it doesn't exist
     try:
         result = db.execute(text("""
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-                   zadarma_number_id, zadarma_status, zadarma_config,
-                   pbx_enabled, pbx_scenario_id, pbx_extension,
-                   business_hours, menu_options, after_hours_routing,
+                   sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address,
                    created_at, updated_at, activated_at
@@ -170,26 +222,21 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
             phone.phone_number = row[3]
             phone.country_code = row[4]
             phone.number_type = row[5]
-            phone.zadarma_number_id = row[6]
-            phone.zadarma_status = row[7]
-            phone.zadarma_config = row[8]
-            phone.pbx_enabled = row[9]
-            phone.pbx_scenario_id = row[10]
-            phone.pbx_extension = row[11]
-            phone.business_hours = row[12]
-            phone.menu_options = row[13]
-            phone.after_hours_routing = row[14]
-            phone.status = row[15]
-            phone.status_message = row[16]
-            phone.monthly_cost = row[17]
-            phone.per_minute_cost = row[18]
-            phone.business_name = row[19]
-            phone.business_type = row[20]
-            phone.business_address = row[21]
-            phone.created_at = row[22]
-            phone.updated_at = row[23]
-            phone.activated_at = row[24]
-            phone.sip_id = None  # Set to None since column may not exist
+            phone.sip_websocket_url = row[6]
+            phone.sip_transport = row[7]
+            phone.sip_username = row[8]
+            phone.sip_password = row[9]
+            phone.sip_domain = row[10]
+            phone.status = row[11]
+            phone.status_message = row[12]
+            phone.monthly_cost = row[13]
+            phone.per_minute_cost = row[14]
+            phone.business_name = row[15]
+            phone.business_type = row[16]
+            phone.business_address = row[17]
+            phone.created_at = row[18]
+            phone.updated_at = row[19]
+            phone.activated_at = row[20]
             
             # Load agent if agent_id is set
             if phone.agent_id:
@@ -241,7 +288,6 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
                         agent.embed_greeting_message = agent_result[28]
                         agent.embed_language = agent_result[29]
                         agent.allowed_domains = agent_result[30]
-                        # Set the agent on the phone object
                         phone.agent = agent
                 except Exception as e:
                     logger.warning(f"Could not load agent {phone.agent_id} for phone {phone.phone_number}: {e}")
@@ -253,12 +299,10 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
     
     logger.info(f"Available phone numbers in database: {[p.phone_number for p in all_phones]}")
     
-    # Try exact match first - use raw SQL to avoid sip_id column
+    # Try exact match first
     result = db.execute(text("""
         SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-               zadarma_number_id, zadarma_status, zadarma_config,
-               pbx_enabled, pbx_scenario_id, pbx_extension,
-               business_hours, menu_options, after_hours_routing,
+               sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                status, status_message, monthly_cost, per_minute_cost,
                business_name, business_type, business_address,
                created_at, updated_at, activated_at
@@ -276,26 +320,21 @@ async def get_agent_for_phone_number(db: Session, phone_number: str) -> Optional
         phone_record.phone_number = result[3]
         phone_record.country_code = result[4]
         phone_record.number_type = result[5]
-        phone_record.zadarma_number_id = result[6]
-        phone_record.zadarma_status = result[7]
-        phone_record.zadarma_config = result[8]
-        phone_record.pbx_enabled = result[9]
-        phone_record.pbx_scenario_id = result[10]
-        phone_record.pbx_extension = result[11]
-        phone_record.business_hours = result[12]
-        phone_record.menu_options = result[13]
-        phone_record.after_hours_routing = result[14]
-        phone_record.status = result[15]
-        phone_record.status_message = result[16]
-        phone_record.monthly_cost = result[17]
-        phone_record.per_minute_cost = result[18]
-        phone_record.business_name = result[19]
-        phone_record.business_type = result[20]
-        phone_record.business_address = result[21]
-        phone_record.created_at = result[22]
-        phone_record.updated_at = result[23]
-        phone_record.activated_at = result[24]
-        phone_record.sip_id = None  # Set to None since column may not exist
+        phone_record.sip_websocket_url = result[6]
+        phone_record.sip_transport = result[7]
+        phone_record.sip_username = result[8]
+        phone_record.sip_password = result[9]
+        phone_record.sip_domain = result[10]
+        phone_record.status = result[11]
+        phone_record.status_message = result[12]
+        phone_record.monthly_cost = result[13]
+        phone_record.per_minute_cost = result[14]
+        phone_record.business_name = result[15]
+        phone_record.business_type = result[16]
+        phone_record.business_address = result[17]
+        phone_record.created_at = result[18]
+        phone_record.updated_at = result[19]
+        phone_record.activated_at = result[20]
         
         # Load agent if agent_id is set
         if phone_record.agent_id:
@@ -483,11 +522,11 @@ async def zadarma_webhook(
     """
     Handle incoming webhooks from Zadarma
     
-    Supports both JSON webhooks (standard) and form-encoded webhooks (PBX extensions).
+    Supports both JSON webhooks (standard) and form-encoded webhooks.
     
     Zadarma sends webhooks for various call events:
     - NOTIFY_START: Incoming call initiated (can return call flow control)
-    - NOTIFY_INTERNAL: Internal call to PBX extension
+    - NOTIFY_INTERNAL: Internal call event
     - NOTIFY_ANSWER: Call was answered
     - NOTIFY_END: Call ended
     - NOTIFY_OUT_START: Outgoing call started
@@ -516,7 +555,7 @@ async def zadarma_webhook(
         
         # Parse webhook data based on content type
         if is_form_data:
-            # PBX extension webhooks use form data
+            # Form-encoded webhooks
             form_data = await request.form()
             data = dict(form_data)
             
@@ -525,25 +564,25 @@ async def zadarma_webhook(
             caller_id = data.get('caller_id', '')
             called_did = data.get('called_did', data.get('destination', ''))
             call_start = data.get('call_start', '')
-            zadarma_call_id = data.get('pbx_call_id', data.get('call_id', ''))
+            zadarma_call_id = data.get('call_id', data.get('pbx_call_id', ''))
             
             print(f"🔍 Extracted event from form: '{event}'")
-            print(f"🔍 Extracted pbx_call_id: '{zadarma_call_id}'")
+            print(f"🔍 Extracted call_id: '{zadarma_call_id}'")
             print(f"🔍 Full form data keys: {list(data.keys())}")
-            logger.info(f"Extracted event: {event}, pbx_call_id: {zadarma_call_id}")
+            logger.info(f"Extracted event: {event}, call_id: {zadarma_call_id}")
             logger.info(f"Full form data keys: {list(data.keys())}")
             
-            # Verify PBX signature
+            # Verify signature for form-encoded webhooks
             signature = request.headers.get('X-Zadarma-Signature', '')
-            if signature and not verify_pbx_signature(caller_id, called_did, call_start, signature):
-                logger.error("Invalid PBX webhook signature")
+            if signature and not verify_form_webhook_signature(caller_id, called_did, call_start, signature):
+                logger.error("Invalid form webhook signature")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid signature"
                 )
             
-            logger.info(f"PBX webhook received: {event} for call {zadarma_call_id}")
-            logger.info(f"PBX webhook data: {data}")
+            logger.info(f"Form webhook received: {event} for call {zadarma_call_id}")
+            logger.info(f"Form webhook data: {data}")
         else:
             # Standard JSON webhooks
             # Get raw body for signature verification (must be done before parsing JSON)
@@ -646,14 +685,11 @@ async def zadarma_webhook(
         if event == "NOTIFY_START":
             print("📞 NOTIFY_START received - Incoming call initiated (PRINT)")
             logger.info("📞 NOTIFY_START received - Incoming call initiated")
-            logger.info("ℹ️ NOTE: For PBX extensions, the call will only be answered if the extension is registered via SIP")
-            logger.info("ℹ️ If you see NOTIFY_INTERNAL next, it means the call reached the extension")
+            logger.info("ℹ️ NOTE: The call will be handled via SIP connection")
             return await handle_call_start(db, data, caller_id, called_did, zadarma_call_id)
         
         elif event == "NOTIFY_INTERNAL":
-            logger.info("📞 NOTIFY_INTERNAL received - Call reached PBX extension")
-            logger.info("✅ This means the call was successfully routed to the extension")
-            logger.info("⚠️ For audio to work, the extension MUST be registered via SIP")
+            logger.info("📞 NOTIFY_INTERNAL received - Internal call event")
             return await handle_internal_call(db, data, caller_id, called_did, zadarma_call_id)
         
         elif event == "NOTIFY_ANSWER":
@@ -762,7 +798,7 @@ async def handle_call_start(
     """
     Handle incoming call start (NOTIFY_START)
     
-    For PBX extension webhooks, this can return call flow control responses:
+    This handles incoming calls and sets up the SIP connection.
     """
     logger.info("=" * 80)
     logger.info("📞 HANDLING CALL START (NOTIFY_START)")
@@ -772,8 +808,7 @@ async def handle_call_start(
     logger.info(f"Data: {data}")
     logger.info("=" * 80)
     logger.info("⚠️ IMPORTANT: NOTIFY_START is just a notification. The call will only be answered")
-    logger.info("   if the PBX extension is registered via SIP. Check extension status in Zadarma dashboard.")
-    logger.info("   You should receive NOTIFY_INTERNAL when the call reaches the extension.")
+    logger.info("   if the SIP client is registered. Using phone number's SIP configuration if available.")
     logger.info("=" * 80)
     
     """
@@ -790,9 +825,9 @@ async def handle_call_start(
     You can modify this to return call flow control responses if needed.
     """
     
-    # Find agent assigned to this phone number
-    logger.info(f"🔍 Looking up agent for phone number: {called_did}")
-    agent = await get_agent_for_phone_number(db, called_did)
+    # Find agent and phone number configuration
+    logger.info(f"🔍 Looking up agent and SIP config for phone number: {called_did}")
+    agent, phone_record = await get_agent_and_phone_for_number(db, called_did)
     
     if not agent:
         logger.error(f"❌ NO AGENT FOUND for phone number {called_did}")
@@ -806,6 +841,16 @@ async def handle_call_start(
     
     logger.info(f"✅ Agent found: {agent.id} ({agent.name})")
     
+    # Log SIP configuration status
+    if phone_record and phone_record.sip_websocket_url:
+        logger.info(f"✅ SIP Configuration found:")
+        logger.info(f"   WebSocket URL: {phone_record.sip_websocket_url}")
+        logger.info(f"   Transport: {phone_record.sip_transport}")
+        logger.info(f"   Username: {phone_record.sip_username}")
+        logger.info(f"   Domain: {phone_record.sip_domain}")
+    else:
+        logger.warning("⚠️ No phone-specific SIP configuration found, using default settings")
+    
     # Create call record
     logger.info(f"📝 Creating call record...")
     call = await create_call_record(
@@ -814,11 +859,12 @@ async def handle_call_start(
     logger.info(f"✅ Call record created: ID={call.id}, Session ID={call.session_id}")
     
     # Start voice session for phone call
-    # This sets up the audio bridge between Zadarma and Gemini
+    # This sets up the audio bridge between SIP server and Gemini
     try:
         from app.services.agent_service import FrenchVoiceAgentService
         from app.api.websocket import manager
         from app.services.phone_audio_bridge import phone_audio_manager
+        from app.services.sip_client_service import create_sip_client_from_phone_number, SIPClientService
         
         # Generate a session ID for this phone call
         import uuid
@@ -835,8 +881,23 @@ async def handle_call_start(
         await agent_service.start_session()
         logger.info(f"Started voice session for phone call {call.id} with session {session_id}")
         
+        # Create SIP client with phone number's configuration
+        if phone_record and phone_record.sip_websocket_url:
+            logger.info(f"🔌 Creating SIP client with phone number's configuration")
+            sip_client = create_sip_client_from_phone_number(phone_record)
+            
+            # Connect to SIP server with phone number's credentials
+            connected = await sip_client.connect()
+            if connected:
+                logger.info(f"✅ SIP client connected to {phone_record.sip_websocket_url}")
+                logger.info(f"   Using username: {phone_record.sip_username}@{phone_record.sip_domain}")
+            else:
+                logger.error(f"❌ Failed to connect SIP client to {phone_record.sip_websocket_url}")
+        else:
+            logger.warning("⚠️ No phone-specific SIP configuration. Using default SIP settings.")
+        
         # Create and start phone audio bridge
-        # This handles bidirectional audio streaming between Zadarma and Gemini
+        # This handles bidirectional audio streaming between SIP and Gemini
         bridge = await phone_audio_manager.create_bridge(
             agent_service,
             str(call.id),
@@ -844,19 +905,20 @@ async def handle_call_start(
         )
         logger.info(f"Started phone audio bridge for call {call.id}")
         
-        # ⚠️ IMPORTANT: For PBX extensions with webhook forwarding, audio flows through SIP, not HTTP
-        # The webhook only handles call control. For audio to work, you need:
-        # 1. SIP client registered to the extension
-        # 2. RTP audio streaming through SIP
-        # 3. Audio bridge between SIP and Gemini API
-        # 
-        # Currently, the phone_audio_bridge expects HTTP audio endpoints, which don't work with
-        # PBX extension webhook forwarding. Audio must flow through SIP connection.
-        logger.warning(
-            "⚠️ AUDIO WARNING: PBX extensions with webhook forwarding require SIP connection for audio. "
-            "The call will be answered but no audio will be transmitted until SIP client is implemented. "
-            "See docs/ZADARMA_INCOMING_CALL_SCENARIO_SETUP.md for details."
-        )
+        # Log SIP connection info
+        if phone_record and phone_record.sip_websocket_url:
+            logger.info(
+                f"📞 Phone call {call.id} ready with SIP config:\n"
+                f"   WebSocket: {phone_record.sip_websocket_url}\n"
+                f"   Username: {phone_record.sip_username}\n"
+                f"   Domain: {phone_record.sip_domain}"
+            )
+        else:
+            logger.warning(
+                "⚠️ AUDIO WARNING: No phone-specific SIP configuration. "
+                "The call may not have audio unless default SIP settings are properly configured. "
+                "Add SIP configuration to the phone number in the Phone Numbers page."
+            )
     
     except Exception as e:
         logger.error(f"Failed to start voice session for phone call {call.id}: {e}", exc_info=True)
@@ -877,16 +939,13 @@ async def handle_call_start(
     logger.info(f"Session ID: {call.session_id}")
     logger.info(f"Agent: {agent.id} ({agent.name})")
     logger.info("=" * 80)
-    logger.info("⚠️ DIAGNOSTIC: If call keeps ringing but doesn't answer:")
-    logger.info("   1. Check if you receive NOTIFY_INTERNAL webhook (call reached extension)")
-    logger.info("   2. Check extension status in Zadarma: My PBX → Extensions")
-    logger.info("   3. Extension MUST be ONLINE (green) for call to be answered")
-    logger.info("   4. If offline, you need SIP client registration (not yet implemented)")
+    logger.info("⚠️ DIAGNOSTIC: If call is not connected:")
+    logger.info("   1. Check SIP configuration in the phone number settings")
+    logger.info("   2. Verify SIP username and password are correct")
+    logger.info("   3. Ensure WebSocket URL is accessible")
     logger.info("=" * 80)
     
-    # Return response to Zadarma
-    # For PBX extension webhooks, you can return call flow control responses.
-    # For now, we return a standard response with audio endpoints.
+    # Return response to Zadarma with audio endpoints.
     # 
     # Example: To redirect to an extension instead:
     # return build_call_flow_response("redirect", "2001")  # Redirect to extension 2001
@@ -909,12 +968,27 @@ async def handle_call_start(
     base_url = getattr(settings, 'BASE_URL', 'http://localhost:8000')
     api_prefix = settings.API_V1_STR
     
+    # Build SIP config info for response
+    sip_info = {}
+    if phone_record and phone_record.sip_websocket_url:
+        sip_info = {
+            "websocket_url": phone_record.sip_websocket_url,
+            "transport": phone_record.sip_transport,
+            "domain": phone_record.sip_domain,
+            "configured": True
+        }
+    else:
+        sip_info = {
+            "configured": False,
+            "message": "No phone-specific SIP configuration"
+        }
+    
     response = {
         "status": "ok",
         "call_id": call.id,
         "message": "Call initiated successfully, audio bridge ready",
         "session_id": call.session_id,
-        # Audio streaming endpoints for Zadarma
+        # Audio streaming endpoints
         "audio": {
             "input_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/input",
             "output_url": f"{base_url}{api_prefix}/phone/audio/{call.id}/output",
@@ -922,6 +996,7 @@ async def handle_call_start(
             "format": "audio/pcm;rate=16000",  # Input format (caller's voice)
             "output_format": "audio/pcm;rate=24000"  # Output format (AI responses)
         },
+        "sip": sip_info,
         "agent": {
             "id": agent.id,
             "name": agent.name,
@@ -1102,92 +1177,30 @@ async def handle_internal_call(
     zadarma_call_id: str
 ) -> Dict[str, Any]:
     """
-    Handle internal call to PBX extension (NOTIFY_INTERNAL)
+    Handle internal call event (NOTIFY_INTERNAL)
     
-    This event is triggered when a call is routed to a PBX extension.
+    This event is triggered when a call is routed internally.
     Parameters:
     - event: NOTIFY_INTERNAL
     - call_start: Call start time
-    - pbx_call_id: Call ID
+    - call_id: Call ID
     - caller_id: Caller's phone number
     - called_did: Called phone number
-    - internal: (optional) Extension number
-    - transfer_from: (optional) Transfer initiator, extension
-    - transfer_type: (optional) Transfer type
+    - internal: (optional) Internal destination
     """
     logger.info("=" * 80)
-    logger.info("📞 NOTIFY_INTERNAL - Call reached PBX extension")
+    logger.info("📞 NOTIFY_INTERNAL - Internal call event")
     logger.info(f"Zadarma Call ID: {zadarma_call_id}")
     logger.info(f"Caller ID: {caller_id}")
     logger.info(f"Called DID: {called_did}")
-    logger.info(f"Extension: {data.get('internal')}, Transfer from: {data.get('transfer_from')}")
-    logger.info("=" * 80)
-    logger.info("✅ Call successfully routed to extension")
-    logger.info("⚠️ For audio to work, the extension MUST be registered via SIP")
-    logger.info("   Check: My PBX → Extensions → Your extension should show as ONLINE (green)")
-    logger.info("   If offline, you need to register a SIP client to the extension")
+    logger.info(f"Internal: {data.get('internal')}")
     logger.info("=" * 80)
     
-    # Extract extension number
-    extension = data.get('internal', '')
-    
-    # Try to find agent by extension number
-    agent = None
-    if extension:
-        # Use raw SQL to avoid sip_id column issue
-        result = db.execute(text("""
-            SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-                   zadarma_number_id, zadarma_status, zadarma_config,
-                   pbx_enabled, pbx_scenario_id, pbx_extension,
-                   business_hours, menu_options, after_hours_routing,
-                   status, status_message, monthly_cost, per_minute_cost,
-                   business_name, business_type, business_address,
-                   created_at, updated_at, activated_at
-            FROM phone_numbers
-            WHERE pbx_extension = :extension
-            LIMIT 1
-        """), {"extension": str(extension)}).first()
-        
-        phone_record = None
-        if result:
-            phone_record = PhoneNumber()
-            phone_record.id = result[0]
-            phone_record.user_id = result[1]
-            phone_record.agent_id = result[2]
-            phone_record.phone_number = result[3]
-            phone_record.country_code = result[4]
-            phone_record.number_type = result[5]
-            phone_record.zadarma_number_id = result[6]
-            phone_record.zadarma_status = result[7]
-            phone_record.zadarma_config = result[8]
-            phone_record.pbx_enabled = result[9]
-            phone_record.pbx_scenario_id = result[10]
-            phone_record.pbx_extension = result[11]
-            phone_record.business_hours = result[12]
-            phone_record.menu_options = result[13]
-            phone_record.after_hours_routing = result[14]
-            phone_record.status = result[15]
-            phone_record.status_message = result[16]
-            phone_record.monthly_cost = result[17]
-            phone_record.per_minute_cost = result[18]
-            phone_record.business_name = result[19]
-            phone_record.business_type = result[20]
-            phone_record.business_address = result[21]
-            phone_record.created_at = result[22]
-            phone_record.updated_at = result[23]
-            phone_record.activated_at = result[24]
-            phone_record.sip_id = None
-        
-        if phone_record and phone_record.agent:
-            agent = phone_record.agent
-            logger.info(f"Found agent {agent.id} for extension {extension}")
-    
-    # If no agent found by extension, try by called number
-    if not agent:
-        agent = await get_agent_for_phone_number(db, called_did)
+    # Try to find agent by called number
+    agent = await get_agent_for_phone_number(db, called_did)
     
     if not agent:
-        logger.warning(f"No agent found for internal call - extension: {extension}, called: {called_did}")
+        logger.warning(f"No agent found for internal call - called: {called_did}")
         return {"status": "ok", "message": "Internal call received but no agent configured"}
     
     # Find or create call record
@@ -1206,8 +1219,7 @@ async def handle_internal_call(
     return {
         "status": "ok",
         "call_id": call.id,
-        "message": "Internal call processed",
-        "extension": extension
+        "message": "Internal call processed"
     }
 
 
@@ -1222,12 +1234,11 @@ async def handle_ivr_response(
     Handle IVR response from caller (NOTIFY_IVR)
     
     This event is triggered when the caller responds to an IVR action (e.g., presses a digit).
-    For NOTIFY_IVR, we can return call flow control responses similar to NOTIFY_START.
     
     Parameters:
     - event: NOTIFY_IVR
     - call_start: Call start time
-    - pbx_call_id: Call ID
+    - call_id: Call ID
     - caller_id: Caller's phone number
     - called_did: Called phone number
     - digits: (optional) Digits entered by caller

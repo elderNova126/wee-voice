@@ -37,7 +37,7 @@ class VerificationStatus(str, enum.Enum):
 
 
 class PhoneNumber(Base):
-    """Phone numbers provisioned via Zadarma for agents"""
+    """Phone numbers with SIP configuration for AI agent calls"""
     __tablename__ = "phone_numbers"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -49,33 +49,12 @@ class PhoneNumber(Base):
     country_code = Column(String, nullable=False)  # e.g., "US", "FR", "UK"
     number_type = Column(String, nullable=False)  # "local", "toll-free", "mobile"
     
-    # Zadarma integration
-    zadarma_number_id = Column(String, nullable=True)  # Zadarma's internal ID
-    zadarma_status = Column(String, nullable=True)
-    zadarma_config = Column(JSON, nullable=True)  # Zadarma-specific settings
-    pbx_enabled = Column(Boolean, default=False)
-    pbx_scenario_id = Column(String, nullable=True)
-    pbx_extension = Column(String, nullable=True)
-    # Note: sip_id column may not exist in database, so we handle it gracefully
-    # We don't define it as a Column to avoid SQLAlchemy trying to SELECT it
-    business_hours = Column(JSON, nullable=True)
-    
-    def __init__(self, **kwargs):
-        # Remove sip_id from kwargs if present, store it separately
-        self._sip_id = kwargs.pop('sip_id', None)
-        super().__init__(**kwargs)
-    
-    @hybrid_property
-    def sip_id(self):
-        """Get sip_id, returning None if column doesn't exist"""
-        return getattr(self, '_sip_id', None)
-    
-    @sip_id.setter
-    def sip_id(self, value):
-        """Set sip_id"""
-        self._sip_id = value
-    menu_options = Column(JSON, nullable=True)
-    after_hours_routing = Column(JSON, nullable=True)
+    # SIP Configuration for incoming calls
+    sip_websocket_url = Column(String, nullable=True)
+    sip_transport = Column(String, default='WSS', nullable=True)
+    sip_username = Column(String, nullable=True)
+    sip_password = Column(String, nullable=True)
+    sip_domain = Column(String, nullable=True)
     
     # Status
     status = Column(Enum(PhoneNumberStatus, values_callable=lambda x: [e.value for e in x]), default=PhoneNumberStatus.PENDING)

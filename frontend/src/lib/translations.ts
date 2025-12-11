@@ -162,20 +162,9 @@ export interface Translations {
     noPhoneNumbersDesc: string
     monthly: string
     perMinute: string
-    pbxRouting: string
-    extension: string
-    auto: string
-    businessHours: string
-    afterHours: string
-    pbxNotConfigured: string
-    pbxNotConfiguredDesc: string
     uploadDocuments: string
     changeAgent: string
     assignAgent: string
-    configurePBX: string
-    pbxRequiresZadarma: string
-    zadarmaNumberId: string
-    zadarmaNumberIdHelper: string
     testCall: string
     testCallSuccess: string
     testCallError: string
@@ -206,21 +195,6 @@ export interface Translations {
     selectAnAgent: string
     noAgentsAvailable: string
     assignAgentButton: string
-    pbxConfiguration: string
-    timezone: string
-    openTime: string
-    closeTime: string
-    days: string
-    menuOptions: string
-    key: string
-    label: string
-    destinationType: string
-    destinationValue: string
-    destination: string
-    addMenuOption: string
-    afterHoursRouting: string
-    message: string
-    savePBX: string
     saving: string
     assignAgentToPhoneNumber: string
     activeDays: string
@@ -230,16 +204,7 @@ export interface Translations {
     phoneNumberPlaceholderRequest: string
     createAgentFirst: string
     uploadDocumentsFor: string
-    speakToSales: string
-    option: string
     chooseAgentDescription: string
-    notConfigured: string
-    connectToAIAgent: string
-    sendToVoicemail: string
-    forwardTo: string
-    externalNumber: string
-    externalDestination: string
-    customRouting: string
     active: string
     inactive: string
     pendingVerification: string
@@ -250,7 +215,6 @@ export interface Translations {
     phoneNumberRequestedSuccess: string
     documentUploadedSuccess: string
     agentAssignedSuccess: string
-    pbxSavedSuccess: string
     deleteConfirm: string
     deleteSuccess: string
     deleteError: string
@@ -258,6 +222,22 @@ export interface Translations {
     createError: string
     updateSuccess: string
     updateError: string
+    // SIP Configuration
+    sipConfiguration: string
+    sipConfigDesc: string
+    websocketUrl: string
+    transport: string
+    sipUsername: string
+    sipPassword: string
+    sipDomain: string
+    sipConfigured: string
+    phoneNumberDetails: string
+    // Delete
+    deletePhoneNumber: string
+    deleteConfirmation: string
+    deleteWarningAgent: string
+    deleting: string
+    phoneNumberDeletedSuccess: string
   }
 
   // API Keys
@@ -1061,23 +1041,9 @@ const translations: Record<Language, Translations> = {
       noPhoneNumbersDesc: 'Ajoutez votre numéro Zadarma existant ou demandez-en un nouveau',
       monthly: 'Mensuel:',
       perMinute: 'Par minute:',
-      pbxRouting: 'Routage PBX',
-      extension: 'Extension:',
-      auto: 'Auto',
-      businessHours: 'Heures d\'ouverture:',
-      afterHours: 'Hors heures:',
-      pbxNotConfigured: 'Menu PBX non configuré',
-      pbxNotConfiguredDesc: 'Les appels sont routés directement vers l\'agent assigné.',
       uploadDocuments: 'Télécharger des documents',
       changeAgent: 'Changer d\'agent',
       assignAgent: 'Assigner un agent',
-      configurePBX: 'Configurer PBX',
-      pbxRequiresZadarma: 'La configuration PBX nécessite un numéro Zadarma',
-      zadarmaNumberId: 'ID du numéro Zadarma (Optionnel)',
-      zadarmaNumberIdHelper: 'Si la recherche automatique échoue, vous pouvez saisir manuellement l\'ID du numéro Zadarma depuis votre compte Zadarma',
-      testCall: 'Tester l\'appel',
-      testCallSuccess: 'Appel de test simulé avec succès ! Vérifiez la page Appels pour voir l\'enregistrement.',
-      testCallError: 'Échec de la simulation de l\'appel de test',
       verificationDocuments: 'Documents de vérification',
       noDocumentsUploaded: 'Aucun document téléchargé pour le moment',
       addExistingPhoneNumber: 'Ajouter un numéro de téléphone existant',
@@ -1105,21 +1071,6 @@ const translations: Record<Language, Translations> = {
       selectAnAgent: 'Sélectionner un agent',
       noAgentsAvailable: 'Aucun agent disponible',
       assignAgentButton: 'Assigner l\'agent',
-      pbxConfiguration: 'Configuration PBX',
-      timezone: 'Fuseau horaire',
-      openTime: 'Heure d\'ouverture',
-      closeTime: 'Heure de fermeture',
-      days: 'Jours',
-      menuOptions: 'Options du menu',
-      key: 'Touche',
-      label: 'Libellé',
-      destinationType: 'Type de destination',
-      destinationValue: 'Valeur de destination',
-      destination: 'Destination',
-      addMenuOption: 'Ajouter une option de menu',
-      afterHoursRouting: 'Routage hors heures',
-      message: 'Message',
-      savePBX: 'Enregistrer PBX',
       saving: 'Enregistrement...',
       assignAgentToPhoneNumber: 'Assigner un agent au numéro de téléphone',
       activeDays: 'Jours actifs',
@@ -1129,16 +1080,7 @@ const translations: Record<Language, Translations> = {
       phoneNumberPlaceholderRequest: '+33123456789',
       createAgentFirst: 'Créez d\'abord un agent pour l\'assigner à ce numéro',
       uploadDocumentsFor: 'Téléchargez des documents pour',
-      speakToSales: 'Parler aux ventes',
-      option: 'Option',
       chooseAgentDescription: 'Choisissez quel agent gérera les appels vers',
-      notConfigured: 'Non configuré',
-      connectToAIAgent: 'Se connecter à l\'agent IA',
-      sendToVoicemail: 'Envoyer vers la messagerie vocale',
-      forwardTo: 'Transférer vers',
-      externalNumber: 'numéro externe',
-      externalDestination: 'Destination externe:',
-      customRouting: 'Routage personnalisé',
       active: 'Actif',
       inactive: 'Inactif',
       pendingVerification: 'Vérification en attente',
@@ -1149,7 +1091,6 @@ const translations: Record<Language, Translations> = {
       phoneNumberRequestedSuccess: 'Demande de numéro envoyée avec succès',
       documentUploadedSuccess: 'Document téléchargé avec succès',
       agentAssignedSuccess: 'Agent assigné avec succès',
-      pbxSavedSuccess: 'Configuration PBX enregistrée avec succès',
       deleteConfirm: 'Êtes-vous sûr de vouloir supprimer ce numéro ?',
       deleteSuccess: 'Numéro supprimé avec succès',
       deleteError: 'Échec de la suppression du numéro',
@@ -1157,6 +1098,22 @@ const translations: Record<Language, Translations> = {
       createError: 'Échec de la création du numéro',
       updateSuccess: 'Numéro mis à jour avec succès',
       updateError: 'Échec de la mise à jour du numéro',
+      // SIP Configuration
+      sipConfiguration: 'Configuration SIP',
+      sipConfigDesc: 'Configurez les paramètres SIP pour gérer les appels entrants avec l\'agent IA',
+      websocketUrl: 'URL WebSocket (WSS)',
+      transport: 'Transport',
+      sipUsername: 'Nom d\'utilisateur SIP',
+      sipPassword: 'Mot de passe',
+      sipDomain: 'Domaine/Realm',
+      sipConfigured: 'SIP Configuré',
+      phoneNumberDetails: 'Détails du numéro de téléphone',
+      // Delete
+      deletePhoneNumber: 'Supprimer le numéro',
+      deleteConfirmation: 'Êtes-vous sûr de vouloir supprimer ce numéro de téléphone ?',
+      deleteWarningAgent: 'Ce numéro est actuellement assigné à un agent.',
+      deleting: 'Suppression...',
+      phoneNumberDeletedSuccess: 'Numéro de téléphone supprimé avec succès',
     },
     apiKeys: {
       title: 'Clés API',
@@ -1922,23 +1879,9 @@ const translations: Record<Language, Translations> = {
       noPhoneNumbersDesc: 'Add your existing Zadarma number or request a new one',
       monthly: 'Monthly:',
       perMinute: 'Per minute:',
-      pbxRouting: 'PBX Routing',
-      extension: 'Extension:',
-      auto: 'Auto',
-      businessHours: 'Business hours:',
-      afterHours: 'After hours:',
-      pbxNotConfigured: 'PBX menu not configured yet',
-      pbxNotConfiguredDesc: 'Calls route directly to the assigned agent.',
       uploadDocuments: 'Upload Documents',
       changeAgent: 'Change Agent',
       assignAgent: 'Assign Agent',
-      configurePBX: 'Configure PBX',
-      pbxRequiresZadarma: 'PBX configuration requires Zadarma number',
-      zadarmaNumberId: 'Zadarma Number ID (Optional)',
-      zadarmaNumberIdHelper: 'If automatic lookup fails, you can manually enter the Zadarma number ID from your Zadarma account',
-      testCall: 'Test Call',
-      testCallSuccess: 'Test call simulated successfully! Check the Calls page to see the call record.',
-      testCallError: 'Failed to simulate test call',
       verificationDocuments: 'Verification Documents',
       noDocumentsUploaded: 'No documents uploaded yet',
       addExistingPhoneNumber: 'Add Existing Phone Number',
@@ -1966,21 +1909,6 @@ const translations: Record<Language, Translations> = {
       selectAnAgent: 'Select an Agent',
       noAgentsAvailable: 'No agents available',
       assignAgentButton: 'Assign Agent',
-      pbxConfiguration: 'PBX Configuration',
-      timezone: 'Timezone',
-      openTime: 'Open Time',
-      closeTime: 'Close Time',
-      days: 'Days',
-      menuOptions: 'Menu Options',
-      key: 'Key',
-      label: 'Label',
-      destinationType: 'Destination Type',
-      destinationValue: 'Destination Value',
-      destination: 'Destination',
-      addMenuOption: 'Add Menu Option',
-      afterHoursRouting: 'After-Hours Routing',
-      message: 'Message',
-      savePBX: 'Save PBX',
       saving: 'Saving...',
       assignAgentToPhoneNumber: 'Assign Agent to Phone Number',
       activeDays: 'Active Days',
@@ -1990,16 +1918,7 @@ const translations: Record<Language, Translations> = {
       phoneNumberPlaceholderRequest: '+33123456789',
       createAgentFirst: 'Create an agent first to assign to this number',
       uploadDocumentsFor: 'Upload documents for',
-      speakToSales: 'Speak to sales',
-      option: 'Option',
       chooseAgentDescription: 'Choose which agent will handle calls to',
-      notConfigured: 'Not configured',
-      connectToAIAgent: 'Connect to AI agent',
-      sendToVoicemail: 'Send to voicemail',
-      forwardTo: 'Forward to',
-      externalNumber: 'external number',
-      externalDestination: 'External destination:',
-      customRouting: 'Custom routing',
       active: 'Active',
       inactive: 'Inactive',
       pendingVerification: 'Pending Verification',
@@ -2010,7 +1929,6 @@ const translations: Record<Language, Translations> = {
       phoneNumberRequestedSuccess: 'Phone number request submitted successfully',
       documentUploadedSuccess: 'Document uploaded successfully',
       agentAssignedSuccess: 'Agent assigned successfully',
-      pbxSavedSuccess: 'PBX configuration saved successfully',
       deleteConfirm: 'Are you sure you want to delete this phone number?',
       deleteSuccess: 'Phone number deleted successfully',
       deleteError: 'Failed to delete phone number',
@@ -2018,6 +1936,22 @@ const translations: Record<Language, Translations> = {
       createError: 'Failed to create phone number',
       updateSuccess: 'Phone number updated successfully',
       updateError: 'Failed to update phone number',
+      // SIP Configuration
+      sipConfiguration: 'SIP Configuration',
+      sipConfigDesc: 'Configure SIP settings for handling incoming calls with the AI agent',
+      websocketUrl: 'WebSocket (WSS) URL',
+      transport: 'Transport',
+      sipUsername: 'SIP Username',
+      sipPassword: 'Password',
+      sipDomain: 'Domain/Realm',
+      sipConfigured: 'SIP Configured',
+      phoneNumberDetails: 'Phone Number Details',
+      // Delete
+      deletePhoneNumber: 'Delete Phone Number',
+      deleteConfirmation: 'Are you sure you want to delete this phone number?',
+      deleteWarningAgent: 'This phone number is currently assigned to an agent.',
+      deleting: 'Deleting...',
+      phoneNumberDeletedSuccess: 'Phone number deleted successfully',
     },
     apiKeys: {
       title: 'API Keys',

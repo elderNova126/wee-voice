@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.propagate = True
 
-TWILIO_SAMPLE_RATE = 8000
 GEMINI_INPUT_SAMPLE_RATE = 16000   # Audio rate expected by Gemini Live input
 GEMINI_OUTPUT_SAMPLE_RATE = 24000  # Audio rate produced by Gemini Live output
 
@@ -160,7 +159,6 @@ async def voice_websocket(
     agent_id: int,
     api_key: Optional[str] = Query(None),
     token: Optional[str] = Query(None),
-    twilio: Optional[bool] = Query(False),  # Detect Twilio connections
     db: Session = Depends(get_db)
 ):
     """WebSocket endpoint for real-time voice conversations"""
@@ -168,19 +166,9 @@ async def voice_websocket(
     user: Optional[User] = None
     call: Optional[Call] = None
     agent_service: Optional[FrenchVoiceAgentService] = None
-    is_twilio_connection = twilio  # Will also check User-Agent
     
-    # Check User-Agent to detect Twilio
-    try:
-        user_agent = websocket.headers.get("user-agent", "").lower()
-        if "twilio" in user_agent:
-            is_twilio_connection = True
-            logger.info("🔵 Detected Twilio Media Streams connection")
-    except:
-        pass
-    
-    logger.info(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}, twilio={is_twilio_connection}")
-    print(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}, twilio={is_twilio_connection}")
+    logger.info(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
+    print(f"🔌 New WebSocket connection for agent_id={agent_id}, session_id={session_id}")
     try:
         # Verify authentication (API key or JWT token)
         logger.info(f"🔐 Checking authentication...")
@@ -233,15 +221,6 @@ async def voice_websocket(
         logger.info(f"✅ Authentication successful, accepting WebSocket connection")
         print(f"✅ Authentication successful, accepting WebSocket connection")
         await manager.connect(session_id, websocket)
-        if is_twilio_connection:
-            try:
-                await websocket.send_json({
-                    "event": "connected",
-                    "protocol": "Call",
-                    "version": "1.0.0"
-                })
-            except Exception as e:
-                logger.error(f"Failed to send Twilio connected event: {e}")
         
         # Create call record (without started_at yet)
         logger.info(f"📞 Creating call record...")
@@ -305,64 +284,22 @@ async def voice_websocket(
         except Exception as e:
             logger.error(f"Error broadcasting call start: {e}")
         
-        # Send session started message (only for regular WebSocket clients)
-        if not is_twilio_connection:
-            logger.info(f"📤 Sending session_started message to client")
-            await websocket.send_json({
-                "type": "session_started",
-                "session_id": session_id,
-                "call_id": call.id,
-                "agent_name": agent.name,
-                "language": agent.language
-            })
+        # Send session started message
+        logger.info(f"📤 Sending session_started message to client")
+        await websocket.send_json({
+            "type": "session_started",
+            "session_id": session_id,
+            "call_id": call.id,
+            "agent_name": agent.name,
+            "language": agent.language
+        })
         logger.info(f"🎧 Starting audio processing tasks...")
         
         # Create tasks for bidirectional communication
         # Flag to signal all tasks to stop
         stop_flag = asyncio.Event()
-        twilio_stream_sid: Optional[str] = None
-        twilio_to_gemini_state = None
-        gemini_to_twilio_state = None
-
-        def convert_twilio_media_to_pcm16(payload: str) -> Optional[bytes]:
-            nonlocal twilio_to_gemini_state
-            try:
-                mulaw_bytes = base64.b64decode(payload)
-                pcm16 = audioop.ulaw2lin(mulaw_bytes, 2)
-                pcm16, twilio_to_gemini_state = audioop.ratecv(
-                    pcm16,
-                    2,
-                    1,
-                    TWILIO_SAMPLE_RATE,
-                    GEMINI_INPUT_SAMPLE_RATE,
-                    twilio_to_gemini_state,
-                )
-                return pcm16
-            except Exception as e:
-                logger.error(f"Error converting Twilio audio to PCM16: {e}")
-                return None
-
-        def convert_pcm16_to_twilio_payload(audio_data: bytes) -> Optional[str]:
-            nonlocal gemini_to_twilio_state
-            try:
-                if not audio_data:
-                    return None
-                pcm8k, gemini_to_twilio_state = audioop.ratecv(
-                    audio_data,
-                    2,
-                    1,
-                    GEMINI_OUTPUT_SAMPLE_RATE,
-                    TWILIO_SAMPLE_RATE,
-                    gemini_to_twilio_state,
-                )
-                mulaw = audioop.lin2ulaw(pcm8k, 2)
-                return base64.b64encode(mulaw).decode("ascii")
-            except Exception as e:
-                logger.error(f"Error converting PCM16 audio to Twilio payload: {e}")
-                return None
         
         async def receive_audio_from_client():
-            nonlocal twilio_stream_sid
             """Receive audio from client and send to agent"""
             try:
                 while not stop_flag.is_set():
@@ -380,39 +317,7 @@ async def voice_websocket(
                         logger.info(f"Received disconnect message: {session_id}")
                         break
                     
-                    if is_twilio_connection:
-                        # Twilio sends JSON messages only
-                        if "text" in data:
-                            try:
-                                message = json.loads(data["text"])
-                                event_type = message.get("event")
-                                
-                                if event_type == "media":
-                                    # Twilio media event - contains base64 audio
-                                    media = message.get("media", {})
-                                    payload = media.get("payload", "")
-                                    if payload:
-                                        pcm_audio = convert_twilio_media_to_pcm16(payload)
-                                        if pcm_audio:
-                                            await agent_service.send_audio(pcm_audio)
-                                
-                                elif event_type == "start":
-                                    start_info = message.get("start", {})
-                                    twilio_stream_sid = start_info.get("streamSid") or message.get("streamSid")
-                                    logger.info(f"Twilio stream started (streamSid={twilio_stream_sid})")
-                                
-                                elif event_type == "stop":
-                                    # Twilio stream stopped
-                                    logger.info("Twilio stream stopped")
-                                    stop_flag.set()
-                                    break
-                                
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Failed to parse Twilio JSON message: {e}")
-                                continue
-                        # Ignore binary from Twilio (shouldn't happen, but just in case)
-                    
-                    elif "bytes" in data:
+                    if "bytes" in data:
                         # Regular WebSocket: binary audio data
                         audio_data = data["bytes"]
                         await agent_service.send_audio(audio_data)
@@ -504,7 +409,6 @@ async def voice_websocket(
                 stop_flag.set()
         
         async def send_audio_to_client():
-            nonlocal twilio_stream_sid
             """Receive audio from agent and send to client"""
             try:
                 async for audio_data in agent_service.receive_audio():
@@ -512,21 +416,7 @@ async def voice_websocket(
                         logger.info(f"Stop flag set in send_audio_to_client, breaking loop")
                         break
                     try:
-                        if is_twilio_connection:
-                            if not twilio_stream_sid:
-                                # Cannot send audio until stream SID is known
-                                continue
-                            payload = convert_pcm16_to_twilio_payload(audio_data)
-                            if not payload:
-                                continue
-                            message = {
-                                "event": "media",
-                                "streamSid": twilio_stream_sid,
-                                "media": {"payload": payload}
-                            }
-                            await websocket.send_json(message)
-                        else:
-                            await manager.send_audio(session_id, audio_data)
+                        await manager.send_audio(session_id, audio_data)
                     except Exception as send_error:
                         logger.error(f"Error sending audio to client: {send_error}")
                         if stop_flag.is_set():

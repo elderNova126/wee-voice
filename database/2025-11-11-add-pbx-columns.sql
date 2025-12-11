@@ -1,7 +1,0 @@
-ALTER TABLE phone_numbers
-    ADD COLUMN IF NOT EXISTS pbx_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    ADD COLUMN IF NOT EXISTS pbx_scenario_id VARCHAR(255),
-    ADD COLUMN IF NOT EXISTS pbx_extension VARCHAR(32),
-    ADD COLUMN IF NOT EXISTS business_hours JSONB,
-    ADD COLUMN IF NOT EXISTS menu_options JSONB,
-    ADD COLUMN IF NOT EXISTS after_hours_routing JSONB;

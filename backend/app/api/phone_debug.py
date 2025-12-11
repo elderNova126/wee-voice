@@ -17,13 +17,11 @@ router = APIRouter()
 
 
 def safe_query_phone_numbers_for_user(db: Session, user_id: int) -> list:
-    """Safely query PhoneNumber objects without loading sip_id column"""
+    """Safely query PhoneNumber objects"""
     try:
         result = db.execute(text("""
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-                   zadarma_number_id, zadarma_status, zadarma_config,
-                   pbx_enabled, pbx_scenario_id, pbx_extension,
-                   business_hours, menu_options, after_hours_routing,
+                   sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address,
                    created_at, updated_at, activated_at
@@ -40,26 +38,21 @@ def safe_query_phone_numbers_for_user(db: Session, user_id: int) -> list:
             phone.phone_number = row[3]
             phone.country_code = row[4]
             phone.number_type = row[5]
-            phone.zadarma_number_id = row[6]
-            phone.zadarma_status = row[7]
-            phone.zadarma_config = row[8]
-            phone.pbx_enabled = row[9]
-            phone.pbx_scenario_id = row[10]
-            phone.pbx_extension = row[11]
-            phone.business_hours = row[12]
-            phone.menu_options = row[13]
-            phone.after_hours_routing = row[14]
-            phone.status = row[15]
-            phone.status_message = row[16]
-            phone.monthly_cost = row[17]
-            phone.per_minute_cost = row[18]
-            phone.business_name = row[19]
-            phone.business_type = row[20]
-            phone.business_address = row[21]
-            phone.created_at = row[22]
-            phone.updated_at = row[23]
-            phone.activated_at = row[24]
-            phone.sip_id = None
+            phone.sip_websocket_url = row[6]
+            phone.sip_transport = row[7]
+            phone.sip_username = row[8]
+            phone.sip_password = row[9]
+            phone.sip_domain = row[10]
+            phone.status = row[11]
+            phone.status_message = row[12]
+            phone.monthly_cost = row[13]
+            phone.per_minute_cost = row[14]
+            phone.business_name = row[15]
+            phone.business_type = row[16]
+            phone.business_address = row[17]
+            phone.created_at = row[18]
+            phone.updated_at = row[19]
+            phone.activated_at = row[20]
             phones.append(phone)
         return phones
     except Exception as e:
@@ -76,7 +69,6 @@ async def debug_phone_numbers(
     Debug endpoint to see all phone numbers and their normalized forms
     Helps diagnose phone number matching issues
     """
-    # Use safe query to avoid sip_id column issue
     phone_numbers = safe_query_phone_numbers_for_user(db, current_user.id)
     
     result = []
@@ -101,7 +93,7 @@ async def debug_phone_numbers(
             "last_9_digits": digits_only[-9:] if len(digits_only) >= 9 else digits_only,
             "last_10_digits": digits_only[-10:] if len(digits_only) >= 10 else digits_only,
             "agent": agent_info,
-            "zadarma_number_id": phone.zadarma_number_id
+            "has_sip_config": bool(phone.sip_websocket_url and phone.sip_username and phone.sip_password)
         })
     
     return {
@@ -124,12 +116,10 @@ async def test_phone_match(
     normalized = normalize_phone_for_matching(phone_number)
     digits_only = ''.join(filter(str.isdigit, normalized))
     
-    # Use safe query to avoid sip_id column issue
+    # Use safe query
     all_phones_result = db.execute(text("""
         SELECT id, user_id, agent_id, phone_number, country_code, number_type,
-               zadarma_number_id, zadarma_status, zadarma_config,
-               pbx_enabled, pbx_scenario_id, pbx_extension,
-               business_hours, menu_options, after_hours_routing,
+               sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                status, status_message, monthly_cost, per_minute_cost,
                business_name, business_type, business_address,
                created_at, updated_at, activated_at
@@ -146,26 +136,21 @@ async def test_phone_match(
         phone.phone_number = row[3]
         phone.country_code = row[4]
         phone.number_type = row[5]
-        phone.zadarma_number_id = row[6]
-        phone.zadarma_status = row[7]
-        phone.zadarma_config = row[8]
-        phone.pbx_enabled = row[9]
-        phone.pbx_scenario_id = row[10]
-        phone.pbx_extension = row[11]
-        phone.business_hours = row[12]
-        phone.menu_options = row[13]
-        phone.after_hours_routing = row[14]
-        phone.status = row[15]
-        phone.status_message = row[16]
-        phone.monthly_cost = row[17]
-        phone.per_minute_cost = row[18]
-        phone.business_name = row[19]
-        phone.business_type = row[20]
-        phone.business_address = row[21]
-        phone.created_at = row[22]
-        phone.updated_at = row[23]
-        phone.activated_at = row[24]
-        phone.sip_id = None
+        phone.sip_websocket_url = row[6]
+        phone.sip_transport = row[7]
+        phone.sip_username = row[8]
+        phone.sip_password = row[9]
+        phone.sip_domain = row[10]
+        phone.status = row[11]
+        phone.status_message = row[12]
+        phone.monthly_cost = row[13]
+        phone.per_minute_cost = row[14]
+        phone.business_name = row[15]
+        phone.business_type = row[16]
+        phone.business_address = row[17]
+        phone.created_at = row[18]
+        phone.updated_at = row[19]
+        phone.activated_at = row[20]
         all_phones.append(phone)
     
     matches = []
@@ -212,4 +197,3 @@ async def test_phone_match(
         "matches": matches,
         "total_phones_checked": len(all_phones)
     }
-
