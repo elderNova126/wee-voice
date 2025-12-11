@@ -242,13 +242,29 @@ chown -R www-data:www-data /opt/weevoice /var/log/weevoice
 # =============================================================================
 log_info "Step 6/8: Configuring Nginx..."
 
+# Remove any existing config
+rm -f /etc/nginx/sites-enabled/weevoice
+rm -f /etc/nginx/sites-enabled/default
+
 if [ "$USE_SSL" = true ]; then
-    # HTTPS config (SSL will be added by certbot)
-    cat > /etc/nginx/sites-available/weevoice << EOF
+    # Check if SSL cert already exists
+    if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+        log_info "SSL certificate found, configuring HTTPS..."
+        cat > /etc/nginx/sites-available/weevoice << EOF
 server {
     listen 80;
     server_name $DOMAIN;
-    
+    return 301 https://\$server_name\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name $DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -282,6 +298,48 @@ server {
     }
 }
 EOF
+    else
+        # HTTP config for certbot to work with
+        log_info "No SSL cert found, will obtain via certbot..."
+        cat > /etc/nginx/sites-available/weevoice << EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+    }
+
+    location /api/v1/ws/ {
+        proxy_pass http://127.0.0.1:8000/api/v1/ws/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_read_timeout 86400;
+    }
+}
+EOF
+    fi
 else
     # HTTP only config (for IP address)
     cat > /etc/nginx/sites-available/weevoice << EOF
@@ -321,17 +379,21 @@ EOF
 fi
 
 ln -sf /etc/nginx/sites-available/weevoice /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t -q
+nginx -t
 
 # =============================================================================
-# Step 7: SSL Certificate (if domain)
+# Step 7: SSL Certificate (if domain and no cert exists)
 # =============================================================================
 if [ "$USE_SSL" = true ]; then
-    log_info "Step 7/8: Getting SSL certificate..."
-    certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN 2>/dev/null || {
-        log_warn "SSL failed - you can run manually: certbot --nginx -d $DOMAIN"
-    }
+    if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+        log_info "Step 7/8: Getting SSL certificate..."
+        systemctl restart nginx
+        certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN || {
+            log_warn "SSL failed - you can run manually: certbot --nginx -d $DOMAIN"
+        }
+    else
+        log_info "Step 7/8: SSL certificate already exists, skipping..."
+    fi
 else
     log_info "Step 7/8: Skipping SSL (using IP address)..."
 fi
