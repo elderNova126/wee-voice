@@ -93,7 +93,17 @@ log_info "Google API Key: ${GOOGLE_API_KEY:0:15}..."
 log_info "Step 1/8: Installing system dependencies..."
 
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip nginx certbot python3-certbot-nginx supervisor curl > /dev/null
+apt-get install -y -qq python3 python3-venv python3-pip supervisor curl > /dev/null
+
+# Check if Apache2 is running (for Asterisk), use it instead of nginx
+if systemctl is-active --quiet apache2; then
+    USE_APACHE=true
+    log_info "Apache2 detected (for Asterisk), will use Apache2 as reverse proxy"
+    apt-get install -y -qq certbot python3-certbot-apache > /dev/null
+else
+    USE_APACHE=false
+    apt-get install -y -qq nginx certbot python3-certbot-nginx > /dev/null
+fi
 
 # Install Node.js 22
 if ! command -v node &> /dev/null || ! node -v | grep -q "v22"; then
@@ -238,17 +248,103 @@ EOF
 chown -R www-data:www-data /opt/weevoice /var/log/weevoice
 
 # =============================================================================
-# Step 6: Configure Nginx
+# Step 6: Configure Web Server (Apache2 or Nginx)
 # =============================================================================
-log_info "Step 6/8: Configuring Nginx..."
+log_info "Step 6/8: Configuring web server..."
 
-# Remove any existing config
-rm -f /etc/nginx/sites-enabled/weevoice
-rm -f /etc/nginx/sites-enabled/default
+if [ "$USE_APACHE" = true ]; then
+    # =========================================================================
+    # Apache2 Configuration (when Asterisk uses Apache)
+    # =========================================================================
+    log_info "Configuring Apache2..."
+    
+    # Enable required modules
+    a2enmod proxy proxy_http proxy_wstunnel ssl headers rewrite > /dev/null 2>&1
+    
+    # Check if SSL cert exists
+    if [ "$USE_SSL" = true ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+        log_info "SSL certificate found, configuring HTTPS..."
+        cat > /etc/apache2/sites-available/weevoice.conf << EOF
+<VirtualHost *:80>
+    ServerName $DOMAIN
+    RewriteEngine On
+    RewriteCond %{HTTPS} off
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</VirtualHost>
 
-if [ "$USE_SSL" = true ]; then
-    # Check if SSL cert already exists
-    if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+<VirtualHost *:443>
+    ServerName $DOMAIN
+
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/$DOMAIN/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/$DOMAIN/privkey.pem
+
+    # Frontend
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:3000/
+    ProxyPassReverse / http://127.0.0.1:3000/
+
+    # API - must come before the root ProxyPass
+    ProxyPass /api/ http://127.0.0.1:8000/
+    ProxyPassReverse /api/ http://127.0.0.1:8000/
+
+    # WebSocket support
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteCond %{REQUEST_URI} ^/api/v1/ws/ [NC]
+    RewriteRule ^/api/v1/ws/(.*) ws://127.0.0.1:8000/api/v1/ws/\$1 [P,L]
+
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/(.*) ws://127.0.0.1:3000/\$1 [P,L]
+
+    ProxyTimeout 86400
+    RequestHeader set X-Forwarded-Proto "https"
+</VirtualHost>
+EOF
+    else
+        log_info "Configuring HTTP (no SSL cert found)..."
+        cat > /etc/apache2/sites-available/weevoice.conf << EOF
+<VirtualHost *:80>
+    ServerName $DOMAIN
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:3000/
+    ProxyPassReverse / http://127.0.0.1:3000/
+
+    ProxyPass /api/ http://127.0.0.1:8000/
+    ProxyPassReverse /api/ http://127.0.0.1:8000/
+
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteCond %{REQUEST_URI} ^/api/v1/ws/ [NC]
+    RewriteRule ^/api/v1/ws/(.*) ws://127.0.0.1:8000/api/v1/ws/\$1 [P,L]
+
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/(.*) ws://127.0.0.1:3000/\$1 [P,L]
+
+    ProxyTimeout 86400
+</VirtualHost>
+EOF
+    fi
+    
+    # Enable site and test
+    a2ensite weevoice.conf > /dev/null 2>&1
+    apachectl configtest
+    
+else
+    # =========================================================================
+    # Nginx Configuration (default)
+    # =========================================================================
+    log_info "Configuring Nginx..."
+    
+    rm -f /etc/nginx/sites-enabled/weevoice
+    rm -f /etc/nginx/sites-enabled/default
+
+    if [ "$USE_SSL" = true ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
         log_info "SSL certificate found, configuring HTTPS..."
         cat > /etc/nginx/sites-available/weevoice << EOF
 server {
@@ -299,8 +395,7 @@ server {
 }
 EOF
     else
-        # HTTP config for certbot to work with
-        log_info "No SSL cert found, will obtain via certbot..."
+        log_info "Configuring HTTP..."
         cat > /etc/nginx/sites-available/weevoice << EOF
 server {
     listen 80;
@@ -313,8 +408,6 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
     location /api/ {
@@ -324,8 +417,6 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 86400;
     }
 
@@ -340,62 +431,29 @@ server {
 }
 EOF
     fi
-else
-    # HTTP only config (for IP address)
-    cat > /etc/nginx/sites-available/weevoice << EOF
-server {
-    listen 80;
-    server_name $DOMAIN;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_read_timeout 86400;
-    }
-
-    location /api/v1/ws/ {
-        proxy_pass http://127.0.0.1:8000/api/v1/ws/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_read_timeout 86400;
-    }
-}
-EOF
+    
+    ln -sf /etc/nginx/sites-available/weevoice /etc/nginx/sites-enabled/
+    nginx -t
 fi
 
-ln -sf /etc/nginx/sites-available/weevoice /etc/nginx/sites-enabled/
-nginx -t
-
 # =============================================================================
-# Step 7: SSL Certificate (if domain and no cert exists)
+# Step 7: SSL Certificate (if needed)
 # =============================================================================
-if [ "$USE_SSL" = true ]; then
-    if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-        log_info "Step 7/8: Getting SSL certificate..."
-        systemctl restart nginx
-        certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN || {
-            log_warn "SSL failed - you can run manually: certbot --nginx -d $DOMAIN"
+if [ "$USE_SSL" = true ] && [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    log_info "Step 7/8: Getting SSL certificate..."
+    if [ "$USE_APACHE" = true ]; then
+        systemctl reload apache2
+        certbot --apache -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN || {
+            log_warn "SSL failed - run manually: certbot --apache -d $DOMAIN"
         }
     else
-        log_info "Step 7/8: SSL certificate already exists, skipping..."
+        systemctl restart nginx
+        certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN || {
+            log_warn "SSL failed - run manually: certbot --nginx -d $DOMAIN"
+        }
     fi
 else
-    log_info "Step 7/8: Skipping SSL (using IP address)..."
+    log_info "Step 7/8: SSL already configured or not needed, skipping..."
 fi
 
 # =============================================================================
@@ -403,7 +461,11 @@ fi
 # =============================================================================
 log_info "Step 8/8: Starting services..."
 
-systemctl restart nginx
+if [ "$USE_APACHE" = true ]; then
+    systemctl reload apache2
+else
+    systemctl restart nginx
+fi
 supervisorctl reread > /dev/null
 supervisorctl update > /dev/null
 supervisorctl restart weevoice-backend weevoice-frontend 2>/dev/null || supervisorctl start all
