@@ -202,8 +202,9 @@ log_info "Step 4/8: Setting up frontend..."
 cd /opt/weevoice/frontend
 
 # Create frontend .env (Vite uses VITE_ prefix)
+# Note: Don't include /api - the frontend code already adds /api/v1
 cat > .env.local << EOF
-VITE_API_URL=$PROTOCOL://$DOMAIN/api
+VITE_API_URL=$PROTOCOL://$DOMAIN
 EOF
 
 # Install dependencies
@@ -220,9 +221,12 @@ log_info "Building frontend..."
 npx vite build
 
 # =============================================================================
-# Step 5: Configure Supervisor
+# Step 5: Configure Supervisor (backend only - frontend served as static files)
 # =============================================================================
 log_info "Step 5/8: Configuring process manager..."
+
+# Create cache directory for huggingface/transformers
+mkdir -p /opt/weevoice/.cache
 
 cat > /etc/supervisor/conf.d/weevoice.conf << EOF
 [program:weevoice-backend]
@@ -233,16 +237,7 @@ autostart=true
 autorestart=true
 stderr_logfile=/var/log/weevoice/backend.err.log
 stdout_logfile=/var/log/weevoice/backend.out.log
-
-[program:weevoice-frontend]
-command=/usr/bin/npx vite preview --host 127.0.0.1 --port 3000
-directory=/opt/weevoice/frontend
-user=www-data
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/weevoice/frontend.err.log
-stdout_logfile=/var/log/weevoice/frontend.out.log
-environment=NODE_ENV="production"
+environment=HOME="/opt/weevoice",HF_HOME="/opt/weevoice/.cache/huggingface",TRANSFORMERS_CACHE="/opt/weevoice/.cache/huggingface"
 EOF
 
 chown -R www-data:www-data /opt/weevoice /var/log/weevoice
@@ -279,25 +274,32 @@ if [ "$USE_APACHE" = true ]; then
     SSLCertificateFile /etc/letsencrypt/live/$DOMAIN/fullchain.pem
     SSLCertificateKeyFile /etc/letsencrypt/live/$DOMAIN/privkey.pem
 
-    # Frontend
-    ProxyPreserveHost On
-    ProxyPass / http://127.0.0.1:3000/
-    ProxyPassReverse / http://127.0.0.1:3000/
+    # Serve frontend static files directly
+    DocumentRoot /opt/weevoice/frontend/dist
+    
+    <Directory /opt/weevoice/frontend/dist>
+        Options -Indexes +FollowSymLinks
+        AllowOverride None
+        Require all granted
+        
+        # SPA routing - serve index.html for non-file/non-api requests
+        RewriteEngine On
+        RewriteBase /
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteCond %{REQUEST_URI} !^/api
+        RewriteRule ^ index.html [L]
+    </Directory>
 
-    # API - must come before the root ProxyPass
-    ProxyPass /api/ http://127.0.0.1:8000/
-    ProxyPassReverse /api/ http://127.0.0.1:8000/
-
-    # WebSocket support
+    # WebSocket FIRST (before regular API proxy)
     RewriteEngine On
-    RewriteCond %{HTTP:Upgrade} websocket [NC]
-    RewriteCond %{HTTP:Connection} upgrade [NC]
-    RewriteCond %{REQUEST_URI} ^/api/v1/ws/ [NC]
-    RewriteRule ^/api/v1/ws/(.*) ws://127.0.0.1:8000/api/v1/ws/\$1 [P,L]
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/api/(.*)\$ ws://127.0.0.1:8000/api/\$1 [P,L]
 
-    RewriteCond %{HTTP:Upgrade} websocket [NC]
-    RewriteCond %{HTTP:Connection} upgrade [NC]
-    RewriteRule ^/(.*) ws://127.0.0.1:3000/\$1 [P,L]
+    # API proxy
+    ProxyPreserveHost On
+    ProxyPass /api http://127.0.0.1:8000/api
+    ProxyPassReverse /api http://127.0.0.1:8000/api
 
     ProxyTimeout 86400
     RequestHeader set X-Forwarded-Proto "https"
@@ -309,22 +311,31 @@ EOF
 <VirtualHost *:80>
     ServerName $DOMAIN
 
-    ProxyPreserveHost On
-    ProxyPass / http://127.0.0.1:3000/
-    ProxyPassReverse / http://127.0.0.1:3000/
+    # Serve frontend static files directly
+    DocumentRoot /opt/weevoice/frontend/dist
+    
+    <Directory /opt/weevoice/frontend/dist>
+        Options -Indexes +FollowSymLinks
+        AllowOverride None
+        Require all granted
+        
+        RewriteEngine On
+        RewriteBase /
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteCond %{REQUEST_URI} !^/api
+        RewriteRule ^ index.html [L]
+    </Directory>
 
-    ProxyPass /api/ http://127.0.0.1:8000/
-    ProxyPassReverse /api/ http://127.0.0.1:8000/
-
+    # WebSocket FIRST (before regular API proxy)
     RewriteEngine On
-    RewriteCond %{HTTP:Upgrade} websocket [NC]
-    RewriteCond %{HTTP:Connection} upgrade [NC]
-    RewriteCond %{REQUEST_URI} ^/api/v1/ws/ [NC]
-    RewriteRule ^/api/v1/ws/(.*) ws://127.0.0.1:8000/api/v1/ws/\$1 [P,L]
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/api/(.*)\$ ws://127.0.0.1:8000/api/\$1 [P,L]
 
-    RewriteCond %{HTTP:Upgrade} websocket [NC]
-    RewriteCond %{HTTP:Connection} upgrade [NC]
-    RewriteRule ^/(.*) ws://127.0.0.1:3000/\$1 [P,L]
+    # API proxy
+    ProxyPreserveHost On
+    ProxyPass /api http://127.0.0.1:8000/api
+    ProxyPassReverse /api http://127.0.0.1:8000/api
 
     ProxyTimeout 86400
 </VirtualHost>
@@ -337,7 +348,7 @@ EOF
     
 else
     # =========================================================================
-    # Nginx Configuration (default)
+    # Nginx Configuration (default - when Apache is not running)
     # =========================================================================
     log_info "Configuring Nginx..."
     
@@ -361,35 +372,35 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
+    # Serve frontend static files
+    root /opt/weevoice/frontend/dist;
+    index index.html;
+
     location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        try_files \$uri \$uri/ /index.html;
     }
 
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 86400;
-    }
-
+    # WebSocket
     location /api/v1/ws/ {
         proxy_pass http://127.0.0.1:8000/api/v1/ws/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 86400;
+    }
+
+    # API
+    location /api {
+        proxy_pass http://127.0.0.1:8000/api;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 86400;
     }
 }
@@ -401,31 +412,32 @@ server {
     listen 80;
     server_name $DOMAIN;
 
+    # Serve frontend static files
+    root /opt/weevoice/frontend/dist;
+    index index.html;
+
     location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
+        try_files \$uri \$uri/ /index.html;
     }
 
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_read_timeout 86400;
-    }
-
+    # WebSocket
     location /api/v1/ws/ {
         proxy_pass http://127.0.0.1:8000/api/v1/ws/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
+        proxy_read_timeout 86400;
+    }
+
+    # API
+    location /api {
+        proxy_pass http://127.0.0.1:8000/api;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
         proxy_read_timeout 86400;
     }
 }
@@ -468,7 +480,7 @@ else
 fi
 supervisorctl reread > /dev/null
 supervisorctl update > /dev/null
-supervisorctl restart weevoice-backend weevoice-frontend 2>/dev/null || supervisorctl start all
+supervisorctl restart weevoice-backend 2>/dev/null || supervisorctl start weevoice-backend
 
 # Configure firewall (if ufw is active)
 if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
@@ -496,7 +508,7 @@ echo ""
 echo "Commands:"
 echo "  Status:  supervisorctl status"
 echo "  Logs:    tail -f /var/log/weevoice/backend.out.log"
-echo "  Restart: supervisorctl restart weevoice-backend weevoice-frontend"
+echo "  Restart: supervisorctl restart weevoice-backend"
 echo ""
 echo "Asterisk extensions.conf:"
 echo '  AudioSocket(${CALL_UUID},127.0.0.1:9092)'
