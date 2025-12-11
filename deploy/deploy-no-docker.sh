@@ -196,9 +196,16 @@ cat > .env.local << EOF
 VITE_API_URL=$PROTOCOL://$DOMAIN/api
 EOF
 
-# Install and build
-npm ci --silent
-npm run build --silent
+# Install and build (use yarn if yarn.lock exists, otherwise npm)
+if [ -f "yarn.lock" ]; then
+    log_info "Using Yarn..."
+    npm install -g yarn > /dev/null 2>&1
+    yarn install --frozen-lockfile
+    yarn build
+else
+    npm ci --silent
+    npm run build --silent
+fi
 
 # =============================================================================
 # Step 5: Configure Supervisor
@@ -216,14 +223,14 @@ stderr_logfile=/var/log/weevoice/backend.err.log
 stdout_logfile=/var/log/weevoice/backend.out.log
 
 [program:weevoice-frontend]
-command=/usr/bin/npm start
+command=/usr/bin/npx vite preview --host 127.0.0.1 --port 3000
 directory=/opt/weevoice/frontend
 user=www-data
 autostart=true
 autorestart=true
 stderr_logfile=/var/log/weevoice/frontend.err.log
 stdout_logfile=/var/log/weevoice/frontend.out.log
-environment=NODE_ENV="production",PORT="3000"
+environment=NODE_ENV="production"
 EOF
 
 chown -R www-data:www-data /opt/weevoice /var/log/weevoice
