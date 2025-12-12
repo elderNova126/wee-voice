@@ -47,6 +47,7 @@ class AudioSocketSession:
         
     async def handle(self):
         import time
+        import traceback
         t0 = time.time()
         def ts():
             return f"[{(time.time()-t0)*1000:.1f}ms]"
@@ -56,27 +57,28 @@ class AudioSocketSession:
         
         try:
             self.is_running = True
+            print(f"{ts()} is_running set", flush=True)
             
             # Get the raw socket for direct operations
             sock = self.writer.get_extra_info('socket')
+            print(f"{ts()} Got socket: {sock}", flush=True)
             if not sock:
                 print(f"{ts()} ERROR: Could not get socket!", flush=True)
                 return
             
-            # CRITICAL: Set TCP_NODELAY and make socket blocking temporarily
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            original_blocking = sock.getblocking()
-            sock.setblocking(True)
-            print(f"{ts()} Socket configured (TCP_NODELAY, blocking)", flush=True)
+            # CRITICAL: Set TCP_NODELAY
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                print(f"{ts()} TCP_NODELAY set", flush=True)
+            except Exception as e:
+                print(f"{ts()} TCP_NODELAY failed: {e}", flush=True)
             
-            # Send first frames using BLOCKING socket send - this guarantees delivery
+            # Send first frames directly via writer (simpler approach)
             header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
-            for i in range(3):
-                sock.sendall(header + SILENCE_FRAME)
-            print(f"{ts()} 3 silence frames SENT via blocking socket", flush=True)
-            
-            # Restore non-blocking for asyncio
-            sock.setblocking(False)
+            for i in range(5):
+                self.writer.write(header + SILENCE_FRAME)
+            await self.writer.drain()
+            print(f"{ts()} 5 silence frames sent via writer.drain()", flush=True)
             
             # Start the continuous send task
             self.send_task = asyncio.create_task(self._send_loop())
@@ -114,9 +116,14 @@ class AudioSocketSession:
                 pass
                     
         except Exception as e:
+            print(f"[HANDLE] EXCEPTION: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             logger.error(f"AudioSocket error: {e}", exc_info=True)
         finally:
+            print(f"[HANDLE] Cleanup starting...", flush=True)
             await self._cleanup()
+            print(f"[HANDLE] Cleanup done", flush=True)
     
     async def _send_loop(self):
         """Continuously send audio frames to Asterisk"""
