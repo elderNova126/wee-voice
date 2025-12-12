@@ -77,7 +77,6 @@ class PhoneNumber(Base):
     
     # Busy line behavior
     busy_action = Column(String, default="busy_tone")  # "busy_tone" or "voicemail"
-    busy_voicemail_message = Column(Text, nullable=True)  # Custom message when busy (deprecated, use audio file)
     busy_audio_file_url = Column(String, nullable=True)  # URL to uploaded audio file for busy message
     
     # Timestamps

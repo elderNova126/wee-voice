@@ -173,7 +173,6 @@ class PhoneNumberResponse(BaseModel):
     has_sip_config: bool = False
     # Busy line behavior
     busy_action: Optional[str] = "busy_tone"
-    busy_voicemail_message: Optional[str] = None  # Deprecated
     busy_audio_file_url: Optional[str] = None
     
     class Config:
@@ -183,7 +182,6 @@ class PhoneNumberResponse(BaseModel):
 class BusySettingsUpdate(BaseModel):
     """Update busy line settings"""
     busy_action: str = Field(..., pattern="^(busy_tone|voicemail)$")
-    busy_voicemail_message: Optional[str] = None  # Deprecated
     busy_audio_file_url: Optional[str] = None
 
 
