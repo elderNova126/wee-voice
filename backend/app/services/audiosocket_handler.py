@@ -1,9 +1,10 @@
 """
 Asterisk AudioSocket Handler
 
-Uses asyncio with immediate frame buffering to satisfy Asterisk's timing requirements.
+Uses asyncio with TCP_NODELAY to ensure immediate frame delivery.
 """
 import asyncio
+import socket
 import struct
 import logging
 import audioop
@@ -51,20 +52,28 @@ class AudioSocketSession:
         try:
             self.is_running = True
             
-            # CRITICAL: Buffer multiple silence frames IMMEDIATELY before any await
-            # This ensures Asterisk has data to read as soon as it checks
-            for _ in range(5):  # Buffer 5 frames = 100ms of silence
-                header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
-                self.writer.write(header + SILENCE_FRAME)
+            # CRITICAL: Set TCP_NODELAY to disable Nagle's algorithm
+            # This ensures data is sent immediately without buffering
+            sock = self.writer.get_extra_info('socket')
+            if sock:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                logger.info("TCP_NODELAY enabled")
+            
+            # Send first frame IMMEDIATELY using low-level transport
+            # This bypasses asyncio buffering
+            header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+            transport = self.writer.transport
+            transport.write(header + SILENCE_FRAME)
+            logger.info("First silence frame written to transport")
             
             # Start the continuous send task
             self.send_task = asyncio.create_task(self._send_loop())
             
-            # Now flush the buffered frames and read UUID concurrently
-            await asyncio.gather(
-                self.writer.drain(),  # Send the buffered frames
-                self._read_uuid()      # Read UUID at same time
-            )
+            # Small yield to let send_task start and send more frames
+            await asyncio.sleep(0.001)
+            
+            # Read UUID
+            await self._read_uuid()
             
             if not self.call_uuid:
                 logger.error("No UUID")
@@ -100,6 +109,7 @@ class AudioSocketSession:
     async def _send_loop(self):
         """Continuously send audio frames to Asterisk"""
         frames_sent = 0
+        transport = self.writer.transport
         try:
             while self.is_running:
                 # Get AI audio if available, otherwise use silence
@@ -108,15 +118,18 @@ class AudioSocketSession:
                 except asyncio.QueueEmpty:
                     audio_data = SILENCE_FRAME
                 
-                # Send frame
+                # Send frame directly via transport (faster than writer.write + drain)
                 header = struct.pack('>BH', MSG_AUDIO, len(audio_data))
-                async with self._write_lock:
-                    self.writer.write(header + audio_data)
-                    await self.writer.drain()
+                try:
+                    transport.write(header + audio_data)
+                except Exception:
+                    break
                 
                 frames_sent += 1
                 if frames_sent == 1:
                     logger.info("First frame sent in send_loop")
+                if frames_sent % 500 == 0:
+                    logger.info(f"Sent {frames_sent} frames")
                 
                 # 20ms per frame = 50fps
                 await asyncio.sleep(0.02)
