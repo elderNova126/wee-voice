@@ -36,6 +36,12 @@ class VerificationStatus(str, enum.Enum):
     REJECTED = "rejected"  # Rejected, needs resubmission
 
 
+class BusyAction(str, enum.Enum):
+    """Action when line is busy"""
+    BUSY_TONE = "busy_tone"  # Play standard busy signal
+    VOICEMAIL = "voicemail"  # Play custom voicemail message
+
+
 class PhoneNumber(Base):
     """Phone numbers with SIP configuration for AI agent calls"""
     __tablename__ = "phone_numbers"
@@ -68,6 +74,11 @@ class PhoneNumber(Base):
     business_name = Column(String, nullable=True)
     business_type = Column(String, nullable=True)  # "company" or "individual"
     business_address = Column(Text, nullable=True)
+    
+    # Busy line behavior
+    busy_action = Column(String, default="busy_tone")  # "busy_tone" or "voicemail"
+    busy_voicemail_message = Column(Text, nullable=True)  # Custom message when busy (deprecated, use audio file)
+    busy_audio_file_url = Column(String, nullable=True)  # URL to uploaded audio file for busy message
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)

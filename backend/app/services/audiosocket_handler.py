@@ -29,6 +29,10 @@ MSG_ERROR = 0xFF
 FRAME_SIZE = 320  # 160 samples * 2 bytes = 20ms at 8kHz
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
+# Track active calls per phone number
+_active_calls: dict[int, str] = {}  # phone_number_id -> call_uuid
+_active_calls_lock = asyncio.Lock()
+
 
 class AudioSocketSession:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -45,6 +49,9 @@ class AudioSocketSession:
         self.ai_audio_queue = asyncio.Queue()  # AI audio to send to Asterisk
         self.caller_audio_queue = asyncio.Queue(maxsize=100)  # Caller audio to send to Gemini
         self._write_lock = asyncio.Lock()
+        self.phone_number_id = None  # Track which phone number this call is using
+        self.is_busy_response = False  # Flag for busy response mode
+        self.busy_config = None  # Store busy action config (busy_tone/voicemail)
         
     async def handle(self):
         import time
@@ -100,6 +107,11 @@ class AudioSocketSession:
             print(f"[HANDLE] Starting _setup_call...", flush=True)
             if not await self._setup_call():
                 print(f"[HANDLE] _setup_call FAILED", flush=True)
+                
+                # Check if this was due to busy line
+                if self.is_busy_response:
+                    print(f"[HANDLE] Playing BUSY message...", flush=True)
+                    await self._play_busy_message()
                 return
             
             # Signal AI is ready
@@ -277,20 +289,54 @@ class AudioSocketSession:
         """Setup call record and AI"""
         self.db = SessionLocal()
         try:
+            # Find phone number with Zadarma/SIP config (the one receiving calls)
             phone = self.db.query(PhoneNumber).filter(
-                PhoneNumber.agent_id.isnot(None)
+                PhoneNumber.agent_id.isnot(None),
+                PhoneNumber.sip_username.isnot(None)  # Has SIP config = receives calls
             ).first()
             
-            if phone and phone.agent_id:
-                self.agent = self.db.query(VoiceAgent).filter(
-                    VoiceAgent.id == phone.agent_id
-                ).first()
+            if not phone:
+                logger.error("No phone number with SIP config found")
+                return False
+            
+            print(f"[SETUP] Found phone: {phone.phone_number}, agent_id: {phone.agent_id}", flush=True)
+            self.phone_number_id = phone.id
+            
+            # Check if line is busy
+            async with _active_calls_lock:
+                if phone.id in _active_calls:
+                    existing_uuid = _active_calls[phone.id]
+                    print(f"[SETUP] LINE BUSY! Phone {phone.phone_number} already has active call: {existing_uuid}", flush=True)
+                    logger.info(f"Line busy for {phone.phone_number}, active call: {existing_uuid}")
+                    self.is_busy_response = True
+                    # Store busy config for message
+                    self.busy_config = {
+                        'action': phone.busy_action or 'busy_tone',
+                        'audio_file_url': phone.busy_audio_file_url
+                    }
+                    print(f"[SETUP] Busy action: {self.busy_config['action']}, audio_url: {self.busy_config.get('audio_file_url', 'none')}", flush=True)
+                    return False  # Will trigger busy response
+                
+                # Reserve this line
+                _active_calls[phone.id] = self.call_uuid
+                print(f"[SETUP] Reserved line for call {self.call_uuid}", flush=True)
+            
+            # Get agent
+            self.agent = self.db.query(VoiceAgent).filter(
+                VoiceAgent.id == phone.agent_id
+            ).first()
+            
+            if self.agent:
+                print(f"[SETUP] Using agent: {self.agent.name} (ID: {self.agent.id})", flush=True)
             
             if not self.agent:
+                # Fallback to first agent
                 self.agent = self.db.query(VoiceAgent).first()
+                print(f"[SETUP] Fallback to first agent: {self.agent.name if self.agent else 'None'}", flush=True)
             
             if not self.agent:
                 logger.error("No agent")
+                await self._release_line()
                 return False
             
             self.call = Call(
@@ -312,6 +358,7 @@ class AudioSocketSession:
             self.agent_service = FrenchVoiceAgentService(self.agent, self.call)
             if not await self.agent_service.start_session():
                 logger.error("Gemini failed")
+                await self._release_line()
                 return False
             
             self.call.status = CallStatus.IN_PROGRESS
@@ -322,7 +369,16 @@ class AudioSocketSession:
             
         except Exception as e:
             logger.error(f"Setup error: {e}", exc_info=True)
+            await self._release_line()
             return False
+    
+    async def _release_line(self):
+        """Release the phone line when call ends"""
+        if self.phone_number_id:
+            async with _active_calls_lock:
+                if self.phone_number_id in _active_calls:
+                    del _active_calls[self.phone_number_id]
+                    print(f"[SETUP] Released line for phone_id {self.phone_number_id}", flush=True)
     
     async def _process_audio(self, audio_8k: bytes):
         """Process audio from Asterisk, queue for sending to AI"""
@@ -421,10 +477,149 @@ class AudioSocketSession:
             print(f"[AI→AUDIO] ERROR: {e}", flush=True)
         print(f"[AI→AUDIO] ENDED, total {ai_packets} packets", flush=True)
     
+    async def _play_busy_message(self):
+        """Play a busy message (tone or voicemail audio) and hangup"""
+        try:
+            action = self.busy_config.get('action', 'busy_tone') if self.busy_config else 'busy_tone'
+            audio_file_url = self.busy_config.get('audio_file_url') if self.busy_config else None
+            
+            if action == 'voicemail' and audio_file_url:
+                print(f"[BUSY] Playing voicemail audio from: {audio_file_url}", flush=True)
+                await self._play_audio_file(audio_file_url)
+            else:
+                print(f"[BUSY] Playing busy tone", flush=True)
+                await self._play_busy_tone()
+            
+            # Send hangup
+            hangup_header = struct.pack('>BH', MSG_HANGUP, 0)
+            self.writer.write(hangup_header)
+            await self.writer.drain()
+            print(f"[BUSY] Sent hangup, closing connection", flush=True)
+            
+        except Exception as e:
+            print(f"[BUSY] Error playing busy message: {e}", flush=True)
+        finally:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except:
+                pass
+    
+    async def _play_busy_tone(self):
+        """Play standard busy signal tone"""
+        import math
+        
+        sample_rate = 8000
+        duration_on = 0.5  # 500ms tone
+        duration_off = 0.5  # 500ms silence
+        num_cycles = 3  # Play 3 beeps
+        
+        samples_on = int(sample_rate * duration_on)
+        samples_off = int(sample_rate * duration_off)
+        
+        # Create tone (480Hz)
+        tone_data = b''
+        for i in range(samples_on):
+            value = int(16000 * math.sin(2 * math.pi * 480 * i / sample_rate))
+            tone_data += struct.pack('<h', max(-32768, min(32767, value)))
+        
+        silence_data = b'\x00' * (samples_off * 2)
+        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        
+        for cycle in range(num_cycles):
+            # Send tone in chunks
+            for i in range(0, len(tone_data), FRAME_SIZE):
+                chunk = tone_data[i:i + FRAME_SIZE]
+                if len(chunk) < FRAME_SIZE:
+                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+                self.writer.write(header + chunk)
+            await self.writer.drain()
+            
+            # Send silence
+            for i in range(0, len(silence_data), FRAME_SIZE):
+                chunk = silence_data[i:i + FRAME_SIZE]
+                if len(chunk) < FRAME_SIZE:
+                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+                self.writer.write(header + chunk)
+            await self.writer.drain()
+    
+    async def _play_audio_file(self, audio_url: str):
+        """Download and play an audio file"""
+        try:
+            import httpx
+            import tempfile
+            import subprocess
+            import os
+            
+            print(f"[BUSY] Downloading audio from: {audio_url}", flush=True)
+            
+            # Download the audio file
+            async with httpx.AsyncClient() as client:
+                response = await client.get(audio_url, timeout=10.0)
+                if response.status_code != 200:
+                    print(f"[BUSY] Failed to download audio: HTTP {response.status_code}", flush=True)
+                    await self._play_busy_tone()
+                    return
+                audio_content = response.content
+            
+            print(f"[BUSY] Downloaded {len(audio_content)} bytes", flush=True)
+            
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(suffix='.audio', delete=False) as f:
+                input_path = f.name
+                f.write(audio_content)
+            
+            # Convert to 8kHz mono PCM using ffmpeg
+            with tempfile.NamedTemporaryFile(suffix='.raw', delete=False) as f:
+                raw_path = f.name
+            
+            result = subprocess.run([
+                'ffmpeg', '-y', '-i', input_path,
+                '-ar', '8000', '-ac', '1', '-f', 's16le', raw_path
+            ], capture_output=True)
+            
+            if result.returncode != 0:
+                print(f"[BUSY] FFmpeg conversion failed: {result.stderr.decode()[:200]}", flush=True)
+                os.unlink(input_path)
+                await self._play_busy_tone()
+                return
+            
+            # Read converted audio
+            with open(raw_path, 'rb') as f:
+                audio_data = f.read()
+            
+            # Cleanup temp files
+            os.unlink(input_path)
+            os.unlink(raw_path)
+            
+            print(f"[BUSY] Converted to {len(audio_data)} bytes of 8kHz PCM", flush=True)
+            
+            # Send audio to Asterisk
+            header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+            for i in range(0, len(audio_data), FRAME_SIZE):
+                chunk = audio_data[i:i + FRAME_SIZE]
+                if len(chunk) < FRAME_SIZE:
+                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+                self.writer.write(header + chunk)
+                if i % (FRAME_SIZE * 10) == 0:  # Drain every 10 frames
+                    await self.writer.drain()
+            await self.writer.drain()
+            
+            print(f"[BUSY] Finished playing audio file", flush=True)
+            
+        except Exception as e:
+            print(f"[BUSY] Audio file error, falling back to tone: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            await self._play_busy_tone()
+    
     async def _cleanup(self):
         """Cleanup"""
         logger.info(f"Cleanup {self.call_uuid}")
         self.is_running = False
+        
+        # Release the phone line
+        await self._release_line()
         
         if self.send_task:
             self.send_task.cancel()

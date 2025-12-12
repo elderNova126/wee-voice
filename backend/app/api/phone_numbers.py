@@ -171,9 +171,20 @@ class PhoneNumberResponse(BaseModel):
     sip_domain: Optional[str] = None
     # Note: sip_password is not returned for security
     has_sip_config: bool = False
+    # Busy line behavior
+    busy_action: Optional[str] = "busy_tone"
+    busy_voicemail_message: Optional[str] = None  # Deprecated
+    busy_audio_file_url: Optional[str] = None
     
     class Config:
         from_attributes = True
+
+
+class BusySettingsUpdate(BaseModel):
+    """Update busy line settings"""
+    busy_action: str = Field(..., pattern="^(busy_tone|voicemail)$")
+    busy_voicemail_message: Optional[str] = None  # Deprecated
+    busy_audio_file_url: Optional[str] = None
 
 
 class VerificationDocumentResponse(BaseModel):
@@ -258,14 +269,14 @@ async def add_existing_phone_number(
     
     logger.info(f"Adding existing phone number: {request.phone_number} -> normalized: {normalized_phone}")
     
-    # Check if number already exists
-    existing = safe_query_phone_number(
-        db, 
-        "phone_number = :phone1 OR phone_number = :phone2",
-        {"phone1": request.phone_number, "phone2": normalized_phone}
-    )
+    # Check if number already exists (use direct ORM query for reliability)
+    existing = db.query(PhoneNumber).filter(
+        (PhoneNumber.phone_number == request.phone_number) |
+        (PhoneNumber.phone_number == normalized_phone)
+    ).first()
     
     if existing:
+        logger.warning(f"Duplicate phone number attempt: {normalized_phone} (exists as ID {existing.id})")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This phone number is already registered"
@@ -494,3 +505,102 @@ async def list_verification_documents(
     ).order_by(VerificationDocument.created_at.desc()).all()
     
     return documents
+
+
+@router.put("/{phone_number_id}/busy-settings")
+async def update_busy_settings(
+    phone_number_id: int,
+    settings: BusySettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update busy line behavior settings"""
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Phone number not found"
+        )
+    
+    # Validate audio file if action is voicemail
+    if settings.busy_action == "voicemail" and not settings.busy_audio_file_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Audio file is required when busy_action is 'voicemail'"
+        )
+    
+    phone_number.busy_action = settings.busy_action
+    phone_number.busy_audio_file_url = settings.busy_audio_file_url
+    db.commit()
+    
+    logger.info(f"Updated busy settings for phone {phone_number.phone_number}: action={settings.busy_action}")
+    
+    return {
+        "success": True,
+        "message": "Busy settings updated",
+        "busy_action": settings.busy_action,
+        "busy_audio_file_url": settings.busy_audio_file_url
+    }
+
+
+@router.post("/{phone_number_id}/busy-audio")
+async def upload_busy_audio(
+    phone_number_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload audio file for busy voicemail message"""
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Phone number not found"
+        )
+    
+    # Validate file type
+    allowed_types = ['audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/webm']
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {', '.join(allowed_types)}"
+        )
+    
+    # Upload to storage
+    storage = get_storage_service()
+    try:
+        file_content = await file.read()
+        file_path = f"busy-audio/{current_user.id}/{phone_number_id}/{file.filename}"
+        
+        file_url = await storage.upload_file(
+            file_content,
+            file_path,
+            file.content_type
+        )
+        
+        # Update phone number with audio URL
+        phone_number.busy_audio_file_url = file_url
+        db.commit()
+        
+        logger.info(f"Uploaded busy audio for phone {phone_number.phone_number}: {file_url}")
+        
+        return {
+            "success": True,
+            "message": "Audio file uploaded successfully",
+            "file_url": file_url
+        }
+        
+    except Exception as e:
+        logger.error(f"Error uploading busy audio: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload audio file: {str(e)}"
+        )
