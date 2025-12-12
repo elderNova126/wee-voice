@@ -1,20 +1,15 @@
 """
 Asterisk AudioSocket Handler
 
-Uses threading instead of asyncio for immediate frame sending.
-This matches what works in the standalone server.
+Uses asyncio with immediate frame buffering to satisfy Asterisk's timing requirements.
 """
 import asyncio
-import socket
 import struct
-import threading
-import time
 import logging
 import audioop
 import uuid as uuid_lib
 from typing import Optional
 from datetime import datetime
-from queue import Queue, Empty
 
 from sqlalchemy.orm import Session
 
@@ -35,167 +30,187 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 
 class AudioSocketSession:
-    """Handles AudioSocket connection using threads (not asyncio)"""
-    
-    def __init__(self, conn: socket.socket, addr):
-        self.conn = conn
-        self.addr = addr
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        self.reader = reader
+        self.writer = writer
         self.call_uuid = None
         self.call = None
         self.agent = None
         self.agent_service = None
         self.is_running = False
         self.db = None
-        self.ai_audio_queue = Queue()
-        self.ai_ready = threading.Event()
+        self.send_task = None
+        self.ai_ready = asyncio.Event()
+        self.ai_audio_queue = asyncio.Queue()
+        self._write_lock = asyncio.Lock()
         
-    def handle(self):
-        """Main handler - runs in thread"""
-        logger.info(f"AudioSocket connection from {self.addr}")
+    async def handle(self):
+        addr = self.writer.get_extra_info('peername')
+        logger.info(f"AudioSocket connection from {addr}")
         
         try:
             self.is_running = True
-            self.conn.settimeout(60)
             
-            # Start sender thread IMMEDIATELY
-            sender_thread = threading.Thread(target=self._send_loop, daemon=True)
-            sender_thread.start()
+            # CRITICAL: Buffer multiple silence frames IMMEDIATELY before any await
+            # This ensures Asterisk has data to read as soon as it checks
+            for _ in range(5):  # Buffer 5 frames = 100ms of silence
+                header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+                self.writer.write(header + SILENCE_FRAME)
             
-            # Read UUID
-            self._read_uuid()
+            # Start the continuous send task
+            self.send_task = asyncio.create_task(self._send_loop())
+            
+            # Now flush the buffered frames and read UUID concurrently
+            await asyncio.gather(
+                self.writer.drain(),  # Send the buffered frames
+                self._read_uuid()      # Read UUID at same time
+            )
+            
             if not self.call_uuid:
-                logger.error("No UUID received")
+                logger.error("No UUID")
                 return
             
             logger.info(f"Call UUID: {self.call_uuid}")
             
-            # Setup call with AI (this takes time)
-            if not self._setup_call():
+            # Setup call (takes time for Gemini init)
+            if not await self._setup_call():
                 return
             
             # Signal AI is ready
             self.ai_ready.set()
             
-            # Start AI audio task
-            ai_thread = threading.Thread(target=self._ai_audio_loop, daemon=True)
-            ai_thread.start()
+            # Start AI receive task
+            ai_task = asyncio.create_task(self._ai_receive_loop())
             
             # Main receive loop
-            self._receive_loop()
+            await self._receive_loop()
             
+            # Cancel AI task when receive loop ends
+            ai_task.cancel()
+            try:
+                await ai_task
+            except asyncio.CancelledError:
+                pass
+                    
         except Exception as e:
             logger.error(f"AudioSocket error: {e}", exc_info=True)
         finally:
-            self._cleanup()
+            await self._cleanup()
     
-    def _send_loop(self):
-        """Send audio frames to Asterisk"""
+    async def _send_loop(self):
+        """Continuously send audio frames to Asterisk"""
         frames_sent = 0
         try:
             while self.is_running:
-                # Get AI audio if available, otherwise send silence
+                # Get AI audio if available, otherwise use silence
                 try:
                     audio_data = self.ai_audio_queue.get_nowait()
-                except Empty:
+                except asyncio.QueueEmpty:
                     audio_data = SILENCE_FRAME
                 
                 # Send frame
                 header = struct.pack('>BH', MSG_AUDIO, len(audio_data))
-                self.conn.sendall(header + audio_data)
+                async with self._write_lock:
+                    self.writer.write(header + audio_data)
+                    await self.writer.drain()
+                
                 frames_sent += 1
-                
                 if frames_sent == 1:
-                    logger.info("First audio frame sent to Asterisk")
+                    logger.info("First frame sent in send_loop")
                 
-                time.sleep(0.02)  # 20ms = 50fps
+                # 20ms per frame = 50fps
+                await asyncio.sleep(0.02)
                 
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             if self.is_running:
                 logger.error(f"Send loop error: {e}")
         
-        logger.info(f"Send loop ended, sent {frames_sent} frames")
+        logger.info(f"Send loop ended: {frames_sent} frames")
     
-    def _receive_loop(self):
+    async def _receive_loop(self):
         """Receive audio from Asterisk"""
-        frames_received = 0
+        frames = 0
         try:
             while self.is_running:
                 # Read header
-                header = self._read_exact(3)
-                if not header:
+                try:
+                    header = await asyncio.wait_for(
+                        self.reader.readexactly(3),
+                        timeout=60.0
+                    )
+                except asyncio.IncompleteReadError:
+                    break
+                except asyncio.TimeoutError:
                     break
                 
                 msg_type = header[0]
                 payload_len = struct.unpack('>H', header[1:3])[0]
                 
                 # Read payload
-                payload = self._read_exact(payload_len) if payload_len > 0 else b''
-                if payload_len > 0 and not payload:
-                    break
+                if payload_len > 0:
+                    try:
+                        payload = await self.reader.readexactly(payload_len)
+                    except asyncio.IncompleteReadError:
+                        break
+                else:
+                    payload = b''
                 
                 if msg_type == MSG_AUDIO:
-                    frames_received += 1
-                    if frames_received == 1:
-                        logger.info("First audio frame from Asterisk")
-                    self._process_audio(payload)
+                    frames += 1
+                    if frames == 1:
+                        logger.info("First audio from Asterisk")
+                    await self._process_audio(payload)
                 elif msg_type == MSG_HANGUP:
                     logger.info("Hangup received")
                     break
                 elif msg_type == MSG_ERROR:
-                    logger.error(f"Error from Asterisk")
+                    logger.error("Error from Asterisk")
                     break
                     
-        except socket.timeout:
-            logger.info("Receive timeout")
         except Exception as e:
-            if self.is_running:
-                logger.error(f"Receive error: {e}")
+            logger.error(f"Receive error: {e}")
         
-        logger.info(f"Receive loop ended, got {frames_received} frames")
+        logger.info(f"Receive ended: {frames} frames")
     
-    def _read_exact(self, n: int) -> Optional[bytes]:
-        """Read exactly n bytes"""
-        data = b''
-        while len(data) < n:
-            try:
-                chunk = self.conn.recv(n - len(data))
-                if not chunk:
-                    return None
-                data += chunk
-            except:
-                return None
-        return data
-    
-    def _read_uuid(self):
+    async def _read_uuid(self):
         """Read UUID packet"""
         try:
-            header = self._read_exact(3)
-            if not header:
-                self.call_uuid = str(uuid_lib.uuid4())
-                return
+            header = await asyncio.wait_for(
+                self.reader.readexactly(3), 
+                timeout=5.0
+            )
             
             msg_type = header[0]
             payload_len = struct.unpack('>H', header[1:3])[0]
             
+            logger.info(f"UUID header: type=0x{msg_type:02x}, len={payload_len}")
+            
             if msg_type == MSG_UUID and payload_len > 0:
-                uuid_bytes = self._read_exact(payload_len)
-                if uuid_bytes:
-                    try:
-                        self.call_uuid = uuid_bytes.decode('ascii').strip()
-                        if len(self.call_uuid) == 36:
-                            return
-                    except:
-                        pass
+                uuid_bytes = await asyncio.wait_for(
+                    self.reader.readexactly(payload_len),
+                    timeout=5.0
+                )
+                try:
+                    self.call_uuid = uuid_bytes.decode('ascii').strip()
+                    if len(self.call_uuid) == 36:
+                        logger.info(f"Valid UUID: {self.call_uuid}")
+                        return
+                except:
+                    pass
             
             self.call_uuid = str(uuid_lib.uuid4())
-        except:
+            logger.info(f"Generated UUID: {self.call_uuid}")
+            
+        except Exception as e:
+            logger.error(f"UUID error: {e}")
             self.call_uuid = str(uuid_lib.uuid4())
     
-    def _setup_call(self) -> bool:
+    async def _setup_call(self) -> bool:
         """Setup call record and AI"""
         self.db = SessionLocal()
         try:
-            # Find agent
             phone = self.db.query(PhoneNumber).filter(
                 PhoneNumber.agent_id.isnot(None)
             ).first()
@@ -209,10 +224,9 @@ class AudioSocketSession:
                 self.agent = self.db.query(VoiceAgent).first()
             
             if not self.agent:
-                logger.error("No agent found")
+                logger.error("No agent")
                 return False
             
-            # Create call record
             self.call = Call(
                 user_id=self.agent.user_id,
                 agent_id=self.agent.id,
@@ -229,18 +243,9 @@ class AudioSocketSession:
             
             logger.info(f"Created call {self.call.id}")
             
-            # Initialize AI
             self.agent_service = FrenchVoiceAgentService(self.agent, self.call)
-            
-            # Run async start_session in a new event loop
-            loop = asyncio.new_event_loop()
-            try:
-                success = loop.run_until_complete(self.agent_service.start_session())
-            finally:
-                loop.close()
-            
-            if not success:
-                logger.error("Failed to start Gemini")
+            if not await self.agent_service.start_session():
+                logger.error("Gemini failed")
                 return False
             
             self.call.status = CallStatus.IN_PROGRESS
@@ -253,73 +258,60 @@ class AudioSocketSession:
             logger.error(f"Setup error: {e}", exc_info=True)
             return False
     
-    def _process_audio(self, audio_8k: bytes):
-        """Process incoming audio from Asterisk, send to AI"""
+    async def _process_audio(self, audio_8k: bytes):
+        """Process audio from Asterisk, send to AI"""
         if not self.agent_service or not self.ai_ready.is_set():
             return
         if len(audio_8k) < 2:
             return
         
         try:
-            # Ensure even bytes
             if len(audio_8k) % 2:
                 audio_8k = audio_8k[:-1]
             
-            # Upsample 8kHz -> 16kHz
             audio_16k, _ = audioop.ratecv(audio_8k, 2, 1, 8000, 16000, None)
-            
-            # Send to AI (async call in sync context)
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(self.agent_service.send_audio(audio_16k))
-            finally:
-                loop.close()
+            await self.agent_service.send_audio(audio_16k)
         except:
             pass
     
-    def _ai_audio_loop(self):
+    async def _ai_receive_loop(self):
         """Receive audio from AI and queue for sending"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            async def receive():
-                async for audio_24k in self.agent_service.receive_audio():
-                    if not self.is_running:
-                        break
-                    if not audio_24k or len(audio_24k) < 2:
-                        continue
-                    
-                    # Ensure even bytes
-                    if len(audio_24k) % 2:
-                        audio_24k = audio_24k[:-1]
-                    
-                    # Downsample 24kHz -> 8kHz
-                    audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, 24000, 8000, None)
-                    
-                    # Queue for sender
-                    self.ai_audio_queue.put(audio_8k)
-            
-            loop.run_until_complete(receive())
+            async for audio_24k in self.agent_service.receive_audio():
+                if not self.is_running:
+                    break
+                if not audio_24k or len(audio_24k) < 2:
+                    continue
+                
+                if len(audio_24k) % 2:
+                    audio_24k = audio_24k[:-1]
+                
+                audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, 24000, 8000, None)
+                await self.ai_audio_queue.put(audio_8k)
+                
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            if self.is_running:
-                logger.error(f"AI audio error: {e}")
+            logger.error(f"AI receive error: {e}")
     
-    def _cleanup(self):
-        """Cleanup resources"""
-        logger.info(f"Cleaning up {self.call_uuid}")
+    async def _cleanup(self):
+        """Cleanup"""
+        logger.info(f"Cleanup {self.call_uuid}")
         self.is_running = False
         
-        # End AI session
-        if self.agent_service:
+        if self.send_task:
+            self.send_task.cancel()
             try:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self.agent_service.end_session())
-                loop.close()
+                await self.send_task
             except:
                 pass
         
-        # Update call record
+        if self.agent_service:
+            try:
+                await self.agent_service.end_session()
+            except:
+                pass
+        
         if self.call and self.db:
             try:
                 self.db.refresh(self.call)
@@ -327,77 +319,49 @@ class AudioSocketSession:
                 self.call.calculate_duration_and_cost()
                 self.call.status = CallStatus.SUMMARIZING
                 self.db.commit()
-                
-                # Summarize async
-                call_id = self.call.id
-                def summarize():
-                    loop = asyncio.new_event_loop()
-                    loop.run_until_complete(auto_summarize_call(call_id))
-                    loop.close()
-                threading.Thread(target=summarize, daemon=True).start()
+                asyncio.create_task(auto_summarize_call(self.call.id))
             except:
                 pass
             finally:
                 self.db.close()
         
-        # Close socket
         try:
-            self.conn.close()
+            self.writer.close()
+            await self.writer.wait_closed()
         except:
             pass
 
 
 class AudioSocketServer:
-    """TCP server using threads (not asyncio)"""
-    
     def __init__(self, host='0.0.0.0', port=9092):
         self.host = host
         self.port = port
-        self.server_socket = None
-        self.running = False
+        self.server = None
     
     async def start(self):
-        """Start the server"""
-        self.running = True
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind((self.host, self.port))
-        self.server_socket.listen(10)
-        
-        logger.info(f"AudioSocket server on {self.host}:{self.port}")
+        self.server = await asyncio.start_server(
+            self._handle, self.host, self.port
+        )
+        logger.info(f"AudioSocket on {self.host}:{self.port}")
         print(f"[AudioSocket] Starting AudioSocket server...")
         print(f"[AudioSocket] ✅ AudioSocket server started on port {self.port}")
-        
-        # Accept connections in a thread
-        accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
-        accept_thread.start()
+        asyncio.create_task(self._serve())
     
-    def _accept_loop(self):
-        """Accept connections"""
-        while self.running:
-            try:
-                conn, addr = self.server_socket.accept()
-                # Handle each connection in a new thread
-                handler = threading.Thread(
-                    target=self._handle_connection,
-                    args=(conn, addr),
-                    daemon=True
-                )
-                handler.start()
-            except Exception as e:
-                if self.running:
-                    logger.error(f"Accept error: {e}")
-    
-    def _handle_connection(self, conn, addr):
-        """Handle a connection"""
-        session = AudioSocketSession(conn, addr)
-        session.handle()
+    async def _serve(self):
+        try:
+            async with self.server:
+                await self.server.serve_forever()
+        except asyncio.CancelledError:
+            pass
     
     async def stop(self):
-        """Stop the server"""
-        self.running = False
-        if self.server_socket:
-            self.server_socket.close()
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
+    
+    async def _handle(self, reader, writer):
+        session = AudioSocketSession(reader, writer)
+        await session.handle()
 
 
 audiosocket_server = AudioSocketServer()
