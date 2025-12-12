@@ -52,35 +52,40 @@ class AudioSocketSession:
             return f"[{(time.time()-t0)*1000:.1f}ms]"
         
         addr = self.writer.get_extra_info('peername')
-        print(f"{ts()} === AudioSocket CONNECTED from {addr} ===")
+        print(f"{ts()} === AudioSocket CONNECTED from {addr} ===", flush=True)
         
         try:
             self.is_running = True
             
-            # CRITICAL: Set TCP_NODELAY to disable Nagle's algorithm
+            # Get the raw socket for direct operations
             sock = self.writer.get_extra_info('socket')
-            if sock:
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                print(f"{ts()} TCP_NODELAY set")
+            if not sock:
+                print(f"{ts()} ERROR: Could not get socket!", flush=True)
+                return
             
-            # Send first frame IMMEDIATELY using low-level transport
+            # CRITICAL: Set TCP_NODELAY and make socket blocking temporarily
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            original_blocking = sock.getblocking()
+            sock.setblocking(True)
+            print(f"{ts()} Socket configured (TCP_NODELAY, blocking)", flush=True)
+            
+            # Send first frames using BLOCKING socket send - this guarantees delivery
             header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
-            transport = self.writer.transport
-            transport.write(header + SILENCE_FRAME)
-            print(f"{ts()} First silence frame WRITTEN to transport ({len(header)+FRAME_SIZE} bytes)")
+            for i in range(3):
+                sock.sendall(header + SILENCE_FRAME)
+            print(f"{ts()} 3 silence frames SENT via blocking socket", flush=True)
+            
+            # Restore non-blocking for asyncio
+            sock.setblocking(False)
             
             # Start the continuous send task
             self.send_task = asyncio.create_task(self._send_loop())
-            print(f"{ts()} Send task CREATED")
-            
-            # Small yield to let send_task start and send more frames
-            await asyncio.sleep(0.001)
-            print(f"{ts()} After sleep(0.001)")
+            print(f"{ts()} Send task CREATED", flush=True)
             
             # Read UUID
-            print(f"{ts()} Starting UUID read...")
+            print(f"{ts()} Starting UUID read...", flush=True)
             await self._read_uuid()
-            print(f"{ts()} UUID read complete: {self.call_uuid}")
+            print(f"{ts()} UUID read complete: {self.call_uuid}", flush=True)
             
             if not self.call_uuid:
                 logger.error("No UUID")
@@ -117,7 +122,7 @@ class AudioSocketSession:
         """Continuously send audio frames to Asterisk"""
         import time
         t0 = time.time()
-        print(f"[SEND] Loop STARTED at t={t0}")
+        print(f"[SEND] Loop STARTED", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
@@ -136,25 +141,25 @@ class AudioSocketSession:
                 try:
                     transport.write(header + audio_data)
                 except Exception as e:
-                    print(f"[SEND] Transport write FAILED: {e}")
+                    print(f"[SEND] Transport write FAILED: {e}", flush=True)
                     break
                 
                 frames_sent += 1
                 elapsed = (time.time() - t0) * 1000
                 if frames_sent <= 5:
-                    print(f"[SEND] Frame #{frames_sent} sent at {elapsed:.1f}ms (AI={is_ai})")
+                    print(f"[SEND] Frame #{frames_sent} at {elapsed:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    print(f"[SEND] {frames_sent} frames sent, elapsed={elapsed:.0f}ms")
+                    print(f"[SEND] {frames_sent} frames", flush=True)
                 
                 # 20ms per frame = 50fps
                 await asyncio.sleep(0.02)
                 
         except asyncio.CancelledError:
-            print(f"[SEND] Loop CANCELLED after {frames_sent} frames")
+            print(f"[SEND] CANCELLED after {frames_sent}", flush=True)
         except Exception as e:
-            print(f"[SEND] Loop ERROR: {e}")
+            print(f"[SEND] ERROR: {e}", flush=True)
         
-        print(f"[SEND] Loop ENDED: {frames_sent} frames total")
+        print(f"[SEND] ENDED: {frames_sent} total", flush=True)
     
     async def _receive_loop(self):
         """Receive audio from Asterisk"""
@@ -409,12 +414,12 @@ class AudioSocketServer:
     
     async def _handle(self, reader, writer):
         import time
-        print(f"\n{'='*60}")
-        print(f"[SERVER] New connection at {time.strftime('%H:%M:%S')}")
-        print(f"{'='*60}")
+        print(f"\n{'='*60}", flush=True)
+        print(f"[SERVER] New connection at {time.strftime('%H:%M:%S')}", flush=True)
+        print(f"{'='*60}", flush=True)
         session = AudioSocketSession(reader, writer)
         await session.handle()
-        print(f"[SERVER] Connection handler finished")
+        print(f"[SERVER] Connection handler finished", flush=True)
 
 
 audiosocket_server = AudioSocketServer()
