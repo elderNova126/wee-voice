@@ -96,11 +96,14 @@ class AudioSocketSession:
             logger.info(f"Call UUID: {self.call_uuid}")
             
             # Setup call (takes time for Gemini init)
+            print(f"[HANDLE] Starting _setup_call...", flush=True)
             if not await self._setup_call():
+                print(f"[HANDLE] _setup_call FAILED", flush=True)
                 return
             
             # Signal AI is ready
             self.ai_ready.set()
+            print(f"[HANDLE] AI READY - will now process caller audio", flush=True)
             
             # Start AI receive task
             ai_task = asyncio.create_task(self._ai_receive_loop())
@@ -320,7 +323,10 @@ class AudioSocketSession:
     
     async def _process_audio(self, audio_8k: bytes):
         """Process audio from Asterisk, send to AI"""
-        if not self.agent_service or not self.ai_ready.is_set():
+        if not self.agent_service:
+            return
+        if not self.ai_ready.is_set():
+            # Still waiting for AI to be ready
             return
         if len(audio_8k) < 2:
             return
@@ -329,10 +335,19 @@ class AudioSocketSession:
             if len(audio_8k) % 2:
                 audio_8k = audio_8k[:-1]
             
+            # Upsample 8kHz to 16kHz for Gemini
             audio_16k, _ = audioop.ratecv(audio_8k, 2, 1, 8000, 16000, None)
+            
+            # Debug: log first few sends
+            if not hasattr(self, '_audio_to_ai_count'):
+                self._audio_to_ai_count = 0
+            self._audio_to_ai_count += 1
+            if self._audio_to_ai_count <= 5 or self._audio_to_ai_count % 100 == 0:
+                print(f"[AUDIO→AI] Sending packet #{self._audio_to_ai_count}, size={len(audio_16k)}", flush=True)
+            
             await self.agent_service.send_audio(audio_16k)
-        except:
-            pass
+        except Exception as e:
+            print(f"[AUDIO→AI] ERROR: {e}", flush=True)
     
     async def _ai_receive_loop(self):
         """Receive audio from AI and queue for sending"""
