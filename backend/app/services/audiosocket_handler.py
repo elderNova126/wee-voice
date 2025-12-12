@@ -5,7 +5,7 @@ Receives audio from Asterisk via TCP socket and bridges to Gemini AI
 AudioSocket Protocol:
 - Port: TCP 9092 (configurable)
 - Audio: 16-bit signed linear PCM, 8kHz mono
-- Packets: 3-byte header + audio data
+- Packets: 3-byte header + payload
   - Byte 0: Type (0x01 = UUID, 0x10 = Audio, 0x00 = Hangup)
   - Bytes 1-2: Payload length (big-endian)
   - Remaining: Payload data
@@ -13,7 +13,9 @@ AudioSocket Protocol:
 import asyncio
 import logging
 import struct
-from typing import Optional, Dict
+import audioop
+import uuid as uuid_lib
+from typing import Optional
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -21,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
 from app.models.database import SessionLocal
 from app.services.agent_service import FrenchVoiceAgentService
-from app.api.websocket import call_monitor_manager, auto_summarize_call
+from app.api.websocket import auto_summarize_call
 
 logger = logging.getLogger(__name__)
 
@@ -44,280 +46,353 @@ class AudioSocketSession:
         self.agent_service: Optional[FrenchVoiceAgentService] = None
         self.is_running = False
         self.db: Optional[Session] = None
-        self.audio_task: Optional[asyncio.Task] = None
+        self.audio_send_task: Optional[asyncio.Task] = None
+        self._write_lock = asyncio.Lock()
         
     async def handle(self):
         """Main handler for AudioSocket connection"""
         addr = self.writer.get_extra_info('peername')
-        logger.info(f"📞 AudioSocket connection from {addr}")
-        print(f"[AudioSocket] 📞 Connection from {addr}")
+        logger.info(f"AudioSocket connection from {addr}")
         
         try:
             self.is_running = True
             
-            # First message from Asterisk is UUID (36 bytes, NO header)
-            # Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-            uuid_data = await self.reader.read(36)
-            if len(uuid_data) < 36:
-                logger.error(f"Failed to read UUID, got {len(uuid_data)} bytes")
+            # Read first packet (UUID)
+            await self._read_uuid()
+            
+            if not self.call_uuid:
+                logger.error("No UUID received, closing connection")
                 return
             
-            self.call_uuid = uuid_data.decode('utf-8').strip()
-            logger.info(f"📞 AudioSocket call UUID: {self.call_uuid}")
-            print(f"[AudioSocket] 📞 Call UUID: {self.call_uuid}")
+            logger.info(f"Call UUID: {self.call_uuid}")
             
-            # Initialize call (look up in DB or create)
-            await self._setup_call()
+            # Set up call
+            if not await self._setup_call():
+                logger.error("Failed to setup call")
+                return
             
-            # Now read audio packets with 3-byte headers
-            while self.is_running:
-                # Read message header (3 bytes): type + length
-                header = await self.reader.read(3)
-                if len(header) < 3:
-                    logger.info("Connection closed (incomplete header)")
-                    break
-                
-                msg_type = header[0]
-                payload_len = struct.unpack('>H', header[1:3])[0]
-                
-                # Read payload
-                payload = b''
-                if payload_len > 0:
-                    payload = await self.reader.read(payload_len)
-                    if len(payload) < payload_len:
-                        logger.warning("Incomplete payload received")
-                        break
-                
-                # Handle message
-                if msg_type == MSG_AUDIO:
-                    await self._handle_audio(payload)
-                elif msg_type == MSG_HANGUP:
-                    logger.info(f"📞 Hangup received for {self.call_uuid}")
-                    break
-                elif msg_type == MSG_ERROR:
-                    error_msg = payload.decode('utf-8', errors='ignore')
-                    logger.error(f"AudioSocket error: {error_msg}")
-                    break
-                else:
-                    logger.warning(f"Unknown message type: {msg_type:#x}")
+            # Main audio receive loop
+            await self._audio_receive_loop()
                     
         except asyncio.CancelledError:
-            logger.info("AudioSocket session cancelled")
+            logger.info("Session cancelled")
         except Exception as e:
             logger.error(f"AudioSocket error: {e}", exc_info=True)
-            print(f"[AudioSocket] ERROR: {e}")
         finally:
             await self._cleanup()
     
-    async def _setup_call(self):
-        """Set up the call after receiving UUID"""
-        
-        # Look up call in database or create new one
+    async def _read_uuid(self):
+        """Read UUID from first packet"""
+        try:
+            # Read 3-byte header - use readexactly to ensure we get all 3 bytes
+            header = await asyncio.wait_for(self.reader.readexactly(3), timeout=5.0)
+            
+            msg_type = header[0]
+            payload_len = struct.unpack('>H', header[1:3])[0]
+            
+            logger.info(f"Header: type=0x{msg_type:02x}, len={payload_len}")
+            
+            if msg_type == MSG_UUID and payload_len > 0:
+                # Read UUID payload - use readexactly to get all bytes
+                uuid_bytes = await asyncio.wait_for(
+                    self.reader.readexactly(payload_len), 
+                    timeout=5.0
+                )
+                logger.info(f"UUID bytes ({len(uuid_bytes)}): {uuid_bytes}")
+                
+                # Decode UUID - should be plain ASCII
+                try:
+                    self.call_uuid = uuid_bytes.decode('ascii').strip('\x00').strip()
+                except:
+                    self.call_uuid = uuid_bytes.decode('utf-8', errors='ignore').strip('\x00').strip()
+                
+                # Validate UUID format (should be like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+                if len(self.call_uuid) == 36 and self.call_uuid.count('-') == 4:
+                    logger.info(f"Valid UUID: {self.call_uuid}")
+                else:
+                    logger.warning(f"Non-standard UUID format: {self.call_uuid}")
+                    # Generate a proper UUID if the received one is garbage
+                    if not all(c in '0123456789abcdef-' for c in self.call_uuid.lower()):
+                        self.call_uuid = str(uuid_lib.uuid4())
+                        logger.info(f"Generated new UUID: {self.call_uuid}")
+            else:
+                self.call_uuid = str(uuid_lib.uuid4())
+                logger.info(f"No UUID packet, generated: {self.call_uuid}")
+                
+        except asyncio.TimeoutError:
+            logger.error("Timeout reading UUID")
+            self.call_uuid = str(uuid_lib.uuid4())
+        except Exception as e:
+            logger.error(f"Error reading UUID: {e}")
+            self.call_uuid = str(uuid_lib.uuid4())
+
+    async def _setup_call(self) -> bool:
+        """Set up call record and AI agent"""
         self.db = SessionLocal()
         try:
-            # UUID format from Asterisk: "1733928187.0" (epoch.sequence)
-            # Or custom format: "caller_number:called_number:agent_id"
-            parts = self.call_uuid.split(':')
+            # Find agent from phone number or use first available
+            phone = self.db.query(PhoneNumber).filter(
+                PhoneNumber.agent_id.isnot(None)
+            ).first()
             
-            if len(parts) >= 3:
-                # Custom format with call info
-                caller_number = parts[0]
-                called_number = parts[1]
-                agent_id = int(parts[2]) if parts[2].isdigit() else None
-            else:
-                # Standard Asterisk UUID - we need to look up the agent
-                caller_number = "unknown"
-                called_number = "unknown" 
-                agent_id = None
-            
-            # Find agent
-            if agent_id:
-                self.agent = self.db.query(VoiceAgent).filter(VoiceAgent.id == agent_id).first()
-            
-            if not self.agent:
-                # Try to find phone number with agent assigned
-                phone = self.db.query(PhoneNumber).filter(
-                    PhoneNumber.agent_id.isnot(None)
+            if phone and phone.agent_id:
+                self.agent = self.db.query(VoiceAgent).filter(
+                    VoiceAgent.id == phone.agent_id
                 ).first()
-                if phone and phone.agent_id:
-                    self.agent = self.db.query(VoiceAgent).filter(VoiceAgent.id == phone.agent_id).first()
-                    called_number = phone.phone_number
             
             if not self.agent:
-                # Use default/first agent
                 self.agent = self.db.query(VoiceAgent).first()
             
             if not self.agent:
-                logger.error("No agent found for AudioSocket call")
-                await self._send_hangup()
-                return
+                logger.error("No agent found")
+                return False
             
-            # Create call record
+            # Create call record with clean session_id
+            session_id = f"audiosocket_{self.call_uuid}"
+            
             self.call = Call(
                 user_id=self.agent.user_id,
                 agent_id=self.agent.id,
-                caller_phone=caller_number,
-                caller_name=caller_number,
+                caller_phone="unknown",
+                caller_name="Caller",
                 direction="inbound",
                 status=CallStatus.INITIATED,
-                session_id=f"audiosocket_{self.call_uuid}",
+                session_id=session_id,
                 started_at=datetime.utcnow()
             )
             self.db.add(self.call)
             self.db.commit()
             self.db.refresh(self.call)
             
-            logger.info(f"✅ Created call record: ID={self.call.id} for agent {self.agent.id}")
+            logger.info(f"Created call {self.call.id} with session {session_id}")
             
-            # Initialize Gemini agent
+            # Start Gemini agent
             self.agent_service = FrenchVoiceAgentService(self.agent, self.call)
-            success = await self.agent_service.start_session()
+            if not await self.agent_service.start_session():
+                logger.error("Failed to start Gemini")
+                return False
             
-            if not success:
-                logger.error("Failed to start Gemini session")
-                await self._send_hangup()
-                return
-            
-            # Update call status
             self.call.status = CallStatus.IN_PROGRESS
             self.db.commit()
             
-            # Start audio output task (Gemini -> Asterisk)
-            self.audio_task = asyncio.create_task(self._send_audio_to_asterisk())
+            # Start background task to send AI audio to Asterisk
+            self.audio_send_task = asyncio.create_task(self._audio_send_loop())
             
-            logger.info(f"✅ AudioSocket session started for call {self.call.id}")
+            logger.info(f"Call {self.call.id} ready")
+            return True
             
         except Exception as e:
-            logger.error(f"Error setting up AudioSocket call: {e}", exc_info=True)
+            logger.error(f"Setup error: {e}", exc_info=True)
             if self.db:
                 self.db.rollback()
-    
-    async def _handle_audio(self, payload: bytes):
-        """Handle audio from Asterisk -> send to Gemini"""
-        if not self.agent_service:
-            return
-        
+            return False
+
+    async def _audio_receive_loop(self):
+        """Receive audio from Asterisk and send to Gemini"""
+        logger.info("Audio receive loop STARTED")
+        packets_received = 0
         try:
-            # Audio is 16-bit signed linear PCM, 8kHz mono
-            # Gemini expects 16kHz, so we need to upsample
-            import audioop
-            
-            # Upsample from 8kHz to 16kHz
-            upsampled = audioop.ratecv(payload, 2, 1, 8000, 16000, None)[0]
-            
-            # Send to Gemini
-            await self.agent_service.send_audio(upsampled)
-            
-        except Exception as e:
-            logger.error(f"Error processing audio: {e}")
-    
-    async def _send_audio_to_asterisk(self):
-        """Send audio from Gemini -> Asterisk"""
-        try:
-            import audioop
-            
-            async for audio_data in self.agent_service.receive_audio():
-                if not self.is_running:
+            while self.is_running:
+                # Read header with timeout - use readexactly
+                try:
+                    header = await asyncio.wait_for(
+                        self.reader.readexactly(3),
+                        timeout=60.0  # 60 second timeout
+                    )
+                except asyncio.IncompleteReadError:
+                    logger.info(f"Connection closed after {packets_received} packets")
+                    break
+                except asyncio.TimeoutError:
+                    logger.info(f"Receive timeout after {packets_received} packets")
                     break
                 
-                # Audio from Gemini is 24kHz, downsample to 8kHz for Asterisk
-                downsampled = audioop.ratecv(audio_data, 2, 1, 24000, 8000, None)[0]
+                msg_type = header[0]
+                payload_len = struct.unpack('>H', header[1:3])[0]
                 
-                # Send via AudioSocket protocol
-                await self._send_audio(downsampled)
+                # Read payload - use readexactly
+                if payload_len > 0:
+                    try:
+                        payload = await asyncio.wait_for(
+                            self.reader.readexactly(payload_len),
+                            timeout=5.0
+                        )
+                    except asyncio.IncompleteReadError:
+                        logger.warning(f"Incomplete payload after {packets_received} packets")
+                        break
+                else:
+                    payload = b''
+                
+                # Handle message types
+                if msg_type == MSG_AUDIO:
+                    packets_received += 1
+                    if packets_received % 100 == 1:
+                        logger.info(f"Audio packets from Asterisk: {packets_received}")
+                    await self._process_incoming_audio(payload)
+                elif msg_type == MSG_HANGUP:
+                    logger.info(f"Hangup after {packets_received} packets")
+                    break
+                elif msg_type == MSG_ERROR:
+                    logger.error(f"Error from Asterisk: {payload}")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Receive loop error: {e}", exc_info=True)
+        logger.info(f"Audio receive loop ENDED, total: {packets_received}")
+
+    async def _process_incoming_audio(self, audio_8k: bytes):
+        """Process incoming 8kHz audio from Asterisk"""
+        if not self.agent_service or not audio_8k:
+            return
+        try:
+            # Ensure even number of bytes (16-bit samples)
+            if len(audio_8k) % 2 != 0:
+                audio_8k = audio_8k[:-1]
+            if len(audio_8k) == 0:
+                return
+            
+            # Upsample 8kHz -> 16kHz for Gemini
+            audio_16k, _ = audioop.ratecv(audio_8k, 2, 1, 8000, 16000, None)
+            await self.agent_service.send_audio(audio_16k)
+        except Exception as e:
+            logger.error(f"Audio process error: {e}")
+
+    async def _audio_send_loop(self):
+        """Send AI audio from Gemini to Asterisk"""
+        logger.info("Audio send loop STARTED")
+        packets_sent = 0
+        try:
+            async for audio_24k in self.agent_service.receive_audio():
+                if not self.is_running:
+                    logger.info("Audio send loop: is_running=False, stopping")
+                    break
+                if not audio_24k or len(audio_24k) == 0:
+                    continue
+                
+                # Ensure even bytes
+                if len(audio_24k) % 2 != 0:
+                    audio_24k = audio_24k[:-1]
+                if len(audio_24k) == 0:
+                    continue
+                
+                # Downsample 24kHz -> 8kHz for Asterisk
+                audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, 24000, 8000, None)
+                
+                # Send to Asterisk
+                await self._send_audio_packet(audio_8k)
+                packets_sent += 1
+                if packets_sent % 100 == 1:
+                    logger.info(f"Audio packets sent to Asterisk: {packets_sent}")
                 
         except asyncio.CancelledError:
-            logger.debug("Audio send task cancelled")
+            logger.info(f"Audio send loop cancelled after {packets_sent} packets")
         except Exception as e:
-            logger.error(f"Error sending audio to Asterisk: {e}", exc_info=True)
-    
-    async def _send_audio(self, audio_data: bytes):
+            logger.error(f"Send loop error after {packets_sent} packets: {e}", exc_info=True)
+        logger.info(f"Audio send loop ENDED, total packets: {packets_sent}")
+
+    async def _send_audio_packet(self, audio_data: bytes):
         """Send audio packet to Asterisk"""
         try:
-            # Build AudioSocket audio message
-            header = struct.pack('>BH', MSG_AUDIO, len(audio_data))
-            self.writer.write(header + audio_data)
-            await self.writer.drain()
-        except Exception as e:
-            logger.error(f"Error writing audio: {e}")
+            async with self._write_lock:
+                header = struct.pack('>BH', MSG_AUDIO, len(audio_data))
+                self.writer.write(header + audio_data)
+                await self.writer.drain()
+        except ConnectionResetError:
+            logger.warning("Connection reset while sending audio")
             self.is_running = False
-    
-    async def _send_hangup(self):
-        """Send hangup to Asterisk"""
-        try:
-            header = struct.pack('>BH', MSG_HANGUP, 0)
-            self.writer.write(header)
-            await self.writer.drain()
+        except BrokenPipeError:
+            logger.warning("Broken pipe while sending audio")
+            self.is_running = False
         except Exception as e:
-            logger.error(f"Error sending hangup: {e}")
-    
+            logger.error(f"Send error: {e}", exc_info=True)
+            self.is_running = False
+
     async def _cleanup(self):
-        """Cleanup session resources"""
+        """Clean up resources"""
+        logger.info(f"Cleaning up call {self.call_uuid}")
         self.is_running = False
         
-        # Cancel audio task
-        if self.audio_task and not self.audio_task.done():
-            self.audio_task.cancel()
+        # Cancel send task
+        if self.audio_send_task and not self.audio_send_task.done():
+            self.audio_send_task.cancel()
             try:
-                await self.audio_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self.audio_send_task, timeout=2.0)
+            except:
                 pass
         
-        # End Gemini session
+        # End AI session
         if self.agent_service:
             try:
                 await self.agent_service.end_session()
             except Exception as e:
-                logger.error(f"Error ending agent session: {e}")
+                logger.error(f"Error ending AI session: {e}")
         
         # Update call record
         if self.call and self.db:
             try:
+                self.db.refresh(self.call)
                 self.call.ended_at = datetime.utcnow()
                 self.call.calculate_duration_and_cost()
                 self.call.status = CallStatus.SUMMARIZING
                 self.db.commit()
                 
-                # Start summarization
-                asyncio.create_task(auto_summarize_call(self.call.id))
-                
+                # Trigger summarization
+                call_id = self.call.id
+                asyncio.create_task(auto_summarize_call(call_id))
+                logger.info(f"Call {call_id} ended, summarizing")
             except Exception as e:
-                logger.error(f"Error updating call record: {e}")
+                logger.error(f"Error updating call: {e}")
             finally:
-                self.db.close()
+                try:
+                    self.db.close()
+                except:
+                    pass
         
-        # Close connection
+        # Close socket
         try:
             self.writer.close()
             await self.writer.wait_closed()
-        except Exception:
+        except:
             pass
         
-        logger.info(f"📞 AudioSocket session ended for {self.call_uuid}")
+        logger.info("Cleanup complete")
 
 
 class AudioSocketServer:
-    """TCP server for Asterisk AudioSocket connections"""
+    """TCP server for AudioSocket connections"""
     
     def __init__(self, host: str = '0.0.0.0', port: int = 9092):
         self.host = host
         self.port = port
-        self.server: Optional[asyncio.Server] = None
-        self.sessions: Dict[str, AudioSocketSession] = {}
+        self.server = None
+        self._sessions = set()
     
     async def start(self):
         """Start the AudioSocket server"""
-        self.server = await asyncio.start_server(
-            self._handle_connection,
-            self.host,
-            self.port
-        )
-        
-        addr = self.server.sockets[0].getsockname()
-        logger.info(f"🎧 AudioSocket server listening on {addr[0]}:{addr[1]}")
-        
-        # Start serving
-        asyncio.create_task(self.server.serve_forever())
+        try:
+            self.server = await asyncio.start_server(
+                self._handle_connection,
+                self.host,
+                self.port
+            )
+            addr = self.server.sockets[0].getsockname()
+            logger.info(f"AudioSocket server listening on {addr[0]}:{addr[1]}")
+            
+            # Start serving in background
+            asyncio.create_task(self._serve())
+            
+        except Exception as e:
+            logger.error(f"Failed to start AudioSocket server: {e}")
+            raise
+    
+    async def _serve(self):
+        """Run the server"""
+        try:
+            async with self.server:
+                await self.server.serve_forever()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Server error: {e}")
     
     async def stop(self):
         """Stop the AudioSocket server"""
@@ -327,11 +402,14 @@ class AudioSocketServer:
             logger.info("AudioSocket server stopped")
     
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """Handle new AudioSocket connection"""
+        """Handle a new AudioSocket connection"""
         session = AudioSocketSession(reader, writer)
-        await session.handle()
+        self._sessions.add(session)
+        try:
+            await session.handle()
+        finally:
+            self._sessions.discard(session)
 
 
-# Global AudioSocket server instance
+# Global server instance
 audiosocket_server = AudioSocketServer()
-
