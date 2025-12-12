@@ -175,8 +175,33 @@ class PhoneNumberResponse(BaseModel):
     busy_action: Optional[str] = "busy_tone"
     busy_audio_file_url: Optional[str] = None
     
+    # Call restrictions
+    blocked_countries: Optional[List[str]] = None
+    blocked_numbers: Optional[List[str]] = None
+    allowed_countries: Optional[List[str]] = None
+    restriction_mode: Optional[str] = "none"
+    
     class Config:
         from_attributes = True
+
+
+class PhoneNumberUpdate(BaseModel):
+    """Update phone number settings"""
+    business_name: Optional[str] = None
+    # SIP Configuration
+    sip_websocket_url: Optional[str] = None
+    sip_transport: Optional[str] = None
+    sip_username: Optional[str] = None
+    sip_password: Optional[str] = None
+    sip_domain: Optional[str] = None
+    # Busy settings
+    busy_action: Optional[str] = None
+    busy_audio_file_url: Optional[str] = None
+    # Call restrictions
+    blocked_countries: Optional[List[str]] = None
+    blocked_numbers: Optional[List[str]] = None
+    allowed_countries: Optional[List[str]] = None
+    restriction_mode: Optional[str] = None
 
 
 class BusySettingsUpdate(BaseModel):
@@ -543,6 +568,84 @@ async def update_busy_settings(
         "busy_action": settings.busy_action,
         "busy_audio_file_url": settings.busy_audio_file_url
     }
+
+
+@router.put("/{phone_number_id}")
+async def update_phone_number(
+    phone_number_id: int,
+    updates: PhoneNumberUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update phone number settings including SIP config, busy settings, and restrictions"""
+    import json
+    
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Phone number not found"
+        )
+    
+    # Update fields if provided
+    if updates.business_name is not None:
+        phone_number.business_name = updates.business_name
+    
+    # SIP Configuration
+    if updates.sip_websocket_url is not None:
+        phone_number.sip_websocket_url = updates.sip_websocket_url
+    if updates.sip_transport is not None:
+        phone_number.sip_transport = updates.sip_transport
+    if updates.sip_username is not None:
+        phone_number.sip_username = updates.sip_username
+    if updates.sip_password is not None:
+        phone_number.sip_password = updates.sip_password
+    if updates.sip_domain is not None:
+        phone_number.sip_domain = updates.sip_domain
+    
+    # Busy settings
+    if updates.busy_action is not None:
+        phone_number.busy_action = updates.busy_action
+    if updates.busy_audio_file_url is not None:
+        phone_number.busy_audio_file_url = updates.busy_audio_file_url
+    
+    # Call restrictions (store as JSON)
+    if updates.restriction_mode is not None:
+        phone_number.restriction_mode = updates.restriction_mode
+    if updates.blocked_countries is not None:
+        phone_number.blocked_countries = json.dumps(updates.blocked_countries)
+    if updates.blocked_numbers is not None:
+        phone_number.blocked_numbers = json.dumps(updates.blocked_numbers)
+    if updates.allowed_countries is not None:
+        phone_number.allowed_countries = json.dumps(updates.allowed_countries)
+    
+    db.commit()
+    db.refresh(phone_number)
+    
+    logger.info(f"Updated phone number {phone_number.phone_number}")
+    
+    # Parse JSON fields for response
+    response = {
+        "id": phone_number.id,
+        "phone_number": phone_number.phone_number,
+        "business_name": phone_number.business_name,
+        "sip_websocket_url": phone_number.sip_websocket_url,
+        "sip_transport": phone_number.sip_transport,
+        "sip_username": phone_number.sip_username,
+        "sip_domain": phone_number.sip_domain,
+        "busy_action": phone_number.busy_action,
+        "busy_audio_file_url": phone_number.busy_audio_file_url,
+        "restriction_mode": phone_number.restriction_mode,
+        "blocked_countries": json.loads(phone_number.blocked_countries) if phone_number.blocked_countries else [],
+        "blocked_numbers": json.loads(phone_number.blocked_numbers) if phone_number.blocked_numbers else [],
+        "allowed_countries": json.loads(phone_number.allowed_countries) if phone_number.allowed_countries else [],
+    }
+    
+    return {"success": True, "message": "Phone number updated", "data": response}
 
 
 @router.post("/{phone_number_id}/busy-audio")

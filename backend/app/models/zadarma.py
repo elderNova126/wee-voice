@@ -79,6 +79,12 @@ class PhoneNumber(Base):
     busy_action = Column(String, default="busy_tone")  # "busy_tone" or "voicemail"
     busy_audio_file_url = Column(String, nullable=True)  # URL to uploaded audio file for busy message
     
+    # Call restrictions
+    blocked_countries = Column(Text, nullable=True)  # JSON array of blocked country codes e.g. ["US", "UK"]
+    blocked_numbers = Column(Text, nullable=True)  # JSON array of blocked phone numbers/patterns
+    allowed_countries = Column(Text, nullable=True)  # JSON array of allowed country codes (whitelist mode)
+    restriction_mode = Column(String, default="none")  # "none", "blacklist", "whitelist"
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

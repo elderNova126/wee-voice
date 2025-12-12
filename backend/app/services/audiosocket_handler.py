@@ -246,6 +246,7 @@ class AudioSocketSession:
     async def _read_uuid(self):
         """Read UUID packet"""
         import time
+        import os
         t0 = time.time()
         try:
             print(f"[UUID] Waiting for header...")
@@ -271,6 +272,8 @@ class AudioSocketSession:
                     self.call_uuid = uuid_bytes.decode('ascii').strip()
                     if len(self.call_uuid) == 36:
                         print(f"[UUID] Valid: {self.call_uuid}")
+                        # Try to read caller ID from temp file (written by Asterisk)
+                        self._read_caller_id_file()
                         return
                 except:
                     pass
@@ -284,6 +287,108 @@ class AudioSocketSession:
         except Exception as e:
             print(f"[UUID] ERROR: {e}")
             self.call_uuid = str(uuid_lib.uuid4())
+    
+    def _read_caller_id_file(self):
+        """Read caller ID from temp file created by Asterisk dialplan"""
+        import os
+        try:
+            callerid_file = f"/tmp/callerid_{self.call_uuid}"
+            if os.path.exists(callerid_file):
+                with open(callerid_file, 'r') as f:
+                    self.caller_id = f.read().strip()
+                os.unlink(callerid_file)  # Delete after reading
+                print(f"[UUID] Caller ID from file: {self.caller_id}")
+            else:
+                print(f"[UUID] No caller ID file found")
+                self.caller_id = None
+        except Exception as e:
+            print(f"[UUID] Error reading caller ID: {e}")
+            self.caller_id = None
+    
+    def _is_caller_blocked(self, phone, caller_phone: str) -> bool:
+        """Check if caller is blocked based on phone number restrictions"""
+        import json
+        
+        restriction_mode = phone.restriction_mode or 'none'
+        
+        if restriction_mode == 'none':
+            return False
+        
+        # Parse JSON fields
+        try:
+            blocked_countries = json.loads(phone.blocked_countries) if phone.blocked_countries else []
+            blocked_numbers = json.loads(phone.blocked_numbers) if phone.blocked_numbers else []
+            allowed_countries = json.loads(phone.allowed_countries) if phone.allowed_countries else []
+        except:
+            return False
+        
+        # Get country code from phone number (basic extraction)
+        caller_country = self._get_country_from_number(caller_phone)
+        
+        if restriction_mode == 'blacklist':
+            # Check if caller's country is blocked
+            if caller_country and caller_country in blocked_countries:
+                print(f"[RESTRICT] Country {caller_country} is blocked", flush=True)
+                return True
+            
+            # Check if caller's number matches blocked patterns
+            for pattern in blocked_numbers:
+                if self._number_matches_pattern(caller_phone, pattern):
+                    print(f"[RESTRICT] Number {caller_phone} matches blocked pattern {pattern}", flush=True)
+                    return True
+            
+            return False
+        
+        elif restriction_mode == 'whitelist':
+            # Only allow if caller's country is in whitelist
+            if not allowed_countries:
+                # Empty whitelist = block all
+                return True
+            
+            if caller_country and caller_country in allowed_countries:
+                return False
+            
+            print(f"[RESTRICT] Country {caller_country} not in whitelist", flush=True)
+            return True
+        
+        return False
+    
+    def _get_country_from_number(self, phone_number: str) -> str:
+        """Extract country code from phone number (basic implementation)"""
+        # Common country prefixes
+        country_prefixes = {
+            '+1': 'US', '+44': 'UK', '+33': 'FR', '+49': 'DE', '+32': 'BE',
+            '+31': 'NL', '+34': 'ES', '+39': 'IT', '+41': 'CH', '+43': 'AT',
+            '+81': 'JP', '+86': 'CN', '+91': 'IN', '+61': 'AU', '+64': 'NZ',
+            '+55': 'BR', '+52': 'MX', '+7': 'RU', '+82': 'KR', '+84': 'VN',
+            '+62': 'ID', '+60': 'MY', '+65': 'SG', '+66': 'TH', '+63': 'PH',
+        }
+        
+        if not phone_number or phone_number == 'Unknown':
+            return ''
+        
+        # Check longer prefixes first
+        for prefix in sorted(country_prefixes.keys(), key=len, reverse=True):
+            if phone_number.startswith(prefix):
+                return country_prefixes[prefix]
+        
+        return ''
+    
+    def _number_matches_pattern(self, phone_number: str, pattern: str) -> bool:
+        """Check if phone number matches a pattern (supports * wildcard)"""
+        if not phone_number or phone_number == 'Unknown':
+            return False
+        
+        # Exact match
+        if phone_number == pattern:
+            return True
+        
+        # Wildcard match (e.g., +1* matches all US numbers)
+        if pattern.endswith('*'):
+            prefix = pattern[:-1]
+            return phone_number.startswith(prefix)
+        
+        return False
     
     async def _setup_call(self) -> bool:
         """Setup call record and AI"""
@@ -339,11 +444,24 @@ class AudioSocketSession:
                 await self._release_line()
                 return False
             
+            # Extract caller ID from UUID if available (format: callerid_uuid or just uuid)
+            caller_phone = "Unknown"
+            if hasattr(self, 'caller_id') and self.caller_id:
+                caller_phone = self.caller_id
+            
+            # Check call restrictions
+            if self._is_caller_blocked(phone, caller_phone):
+                print(f"[SETUP] BLOCKED: Caller {caller_phone} is restricted", flush=True)
+                logger.info(f"Call blocked from {caller_phone} due to restrictions")
+                self.is_busy_response = True
+                self.busy_config = {'action': 'busy_tone', 'audio_file_url': None}
+                return False
+            
             self.call = Call(
                 user_id=self.agent.user_id,
                 agent_id=self.agent.id,
-                caller_phone="unknown",
-                caller_name="Caller",
+                caller_phone=caller_phone,
+                caller_name=caller_phone,  # Use phone number as name
                 direction="inbound",
                 status=CallStatus.INITIATED,
                 session_id=f"audiosocket_{self.call_uuid}",

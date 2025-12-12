@@ -104,13 +104,30 @@ export const PhoneNumbersPage: React.FC = () => {
   const [phoneNumberToDelete, setPhoneNumberToDelete] = useState<PhoneNumber | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   
-  // Busy settings modal
-  const [showBusySettingsModal, setShowBusySettingsModal] = useState(false);
-  const [busySettingsLoading, setBusySettingsLoading] = useState(false);
-  const [busyAudioUploading, setBusyAudioUploading] = useState(false);
-  const [busySettings, setBusySettings] = useState({
+  // Edit phone number modal
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editAudioUploading, setEditAudioUploading] = useState(false);
+  const [editData, setEditData] = useState({
+    business_name: '',
+    // SIP Config
+    sip_websocket_url: '',
+    sip_transport: 'WSS',
+    sip_username: '',
+    sip_password: '',
+    sip_domain: '',
+    // Busy settings
     busy_action: 'busy_tone' as 'busy_tone' | 'voicemail',
-    busy_audio_file_url: ''
+    busy_audio_file_url: '',
+    // Call restrictions
+    restriction_mode: 'none' as 'none' | 'blacklist' | 'whitelist',
+    blocked_countries: [] as string[],
+    blocked_numbers: [] as string[],
+    allowed_countries: [] as string[],
+    // Temp inputs
+    newBlockedNumber: '',
+    newBlockedCountry: '',
+    newAllowedCountry: ''
   });
 
   const [uploadData, setUploadData] = useState({
@@ -234,7 +251,7 @@ export const PhoneNumbersPage: React.FC = () => {
     }
   };
 
-  const handleBusyAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleEditAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedNumber || !e.target.files || e.target.files.length === 0) return;
     
     const file = e.target.files[0];
@@ -245,7 +262,7 @@ export const PhoneNumbersPage: React.FC = () => {
       return;
     }
     
-    setBusyAudioUploading(true);
+    setEditAudioUploading(true);
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -254,7 +271,7 @@ export const PhoneNumbersPage: React.FC = () => {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
-      setBusySettings(prev => ({
+      setEditData(prev => ({
         ...prev,
         busy_audio_file_url: response.data.file_url
       }));
@@ -263,8 +280,60 @@ export const PhoneNumbersPage: React.FC = () => {
     } catch (error: any) {
       toast.error('Failed to upload audio: ' + (error.response?.data?.detail || error.message));
     } finally {
-      setBusyAudioUploading(false);
+      setEditAudioUploading(false);
     }
+  };
+
+  const handleSavePhoneNumber = async () => {
+    if (!selectedNumber) return;
+    
+    setEditLoading(true);
+    try {
+      await api.put(`/phone-numbers/${selectedNumber.id}`, {
+        business_name: editData.business_name,
+        sip_websocket_url: editData.sip_websocket_url,
+        sip_transport: editData.sip_transport,
+        sip_username: editData.sip_username,
+        sip_password: editData.sip_password || undefined,
+        sip_domain: editData.sip_domain,
+        busy_action: editData.busy_action,
+        busy_audio_file_url: editData.busy_audio_file_url || undefined,
+        restriction_mode: editData.restriction_mode,
+        blocked_countries: editData.blocked_countries,
+        blocked_numbers: editData.blocked_numbers,
+        allowed_countries: editData.allowed_countries
+      });
+      
+      await loadPhoneNumbers();
+      setShowEditModal(false);
+      toast.success('Phone number settings updated successfully');
+    } catch (error: any) {
+      toast.error('Failed to update: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const openEditModal = (number: PhoneNumber) => {
+    setSelectedNumber(number);
+    setEditData({
+      business_name: number.business_name || '',
+      sip_websocket_url: number.sip_websocket_url || '',
+      sip_transport: number.sip_transport || 'WSS',
+      sip_username: number.sip_username || '',
+      sip_password: '',
+      sip_domain: number.sip_domain || '',
+      busy_action: ((number as any).busy_action || 'busy_tone') as 'busy_tone' | 'voicemail',
+      busy_audio_file_url: (number as any).busy_audio_file_url || '',
+      restriction_mode: ((number as any).restriction_mode || 'none') as 'none' | 'blacklist' | 'whitelist',
+      blocked_countries: (number as any).blocked_countries || [],
+      blocked_numbers: (number as any).blocked_numbers || [],
+      allowed_countries: (number as any).allowed_countries || [],
+      newBlockedNumber: '',
+      newBlockedCountry: '',
+      newAllowedCountry: ''
+    });
+    setShowEditModal(true);
   };
 
   const handleRequestNumber = async (e: React.FormEvent) => {
@@ -549,17 +618,12 @@ export const PhoneNumbersPage: React.FC = () => {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => {
-                            setSelectedNumber(number);
-                            setBusySettings({
-                              busy_action: (number as any).busy_action || 'busy_tone',
-                              busy_audio_file_url: (number as any).busy_audio_file_url || ''
-                            });
-                            setShowBusySettingsModal(true);
-                          }}
+                          onClick={() => openEditModal(number)}
                         >
-                          <PhoneIcon className="mr-2 h-3.5 w-3.5" />
-                          Busy Settings
+                          <svg className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                          Edit
                         </Button>
                       </>
                     )}
@@ -1250,6 +1314,365 @@ export const PhoneNumbersPage: React.FC = () => {
                   </>
                 ) : (
                   'Save Settings'
+                )}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Comprehensive Edit Modal */}
+      {showEditModal && selectedNumber && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4 py-6 overflow-y-auto">
+          <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                Edit Phone Number: {selectedNumber.phone_number}
+              </h2>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="space-y-6">
+              {/* Business Info */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b pb-2 mb-4">
+                  Business Information
+                </h3>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Business Name</label>
+                  <input
+                    type="text"
+                    value={editData.business_name}
+                    onChange={(e) => setEditData({...editData, business_name: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    placeholder="Your Company Name"
+                  />
+                </div>
+              </div>
+
+              {/* SIP Configuration */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b pb-2 mb-4">
+                  SIP Configuration
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">WebSocket URL</label>
+                    <input
+                      type="text"
+                      value={editData.sip_websocket_url}
+                      onChange={(e) => setEditData({...editData, sip_websocket_url: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      placeholder="wss://server:8089/ws"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Transport</label>
+                    <select
+                      value={editData.sip_transport}
+                      onChange={(e) => setEditData({...editData, sip_transport: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    >
+                      <option value="WSS">WSS (Secure WebSocket)</option>
+                      <option value="WS">WS (WebSocket)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">SIP Username</label>
+                    <input
+                      type="text"
+                      value={editData.sip_username}
+                      onChange={(e) => setEditData({...editData, sip_username: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      placeholder="55555"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">SIP Password</label>
+                    <input
+                      type="password"
+                      value={editData.sip_password}
+                      onChange={(e) => setEditData({...editData, sip_password: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      placeholder="Leave empty to keep current"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium mb-2">SIP Domain</label>
+                    <input
+                      type="text"
+                      value={editData.sip_domain}
+                      onChange={(e) => setEditData({...editData, sip_domain: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      placeholder="weevoice.example.com"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Busy Settings */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b pb-2 mb-4">
+                  Busy Line Settings
+                </h3>
+                <div className="space-y-4">
+                  <div className="flex gap-4">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="edit_busy_action"
+                        value="busy_tone"
+                        checked={editData.busy_action === 'busy_tone'}
+                        onChange={(e) => setEditData({...editData, busy_action: 'busy_tone'})}
+                        className="h-4 w-4 text-indigo-600"
+                      />
+                      <span>Busy Tone</span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="edit_busy_action"
+                        value="voicemail"
+                        checked={editData.busy_action === 'voicemail'}
+                        onChange={(e) => setEditData({...editData, busy_action: 'voicemail'})}
+                        className="h-4 w-4 text-indigo-600"
+                      />
+                      <span>Custom Audio Message</span>
+                    </label>
+                  </div>
+                  
+                  {editData.busy_action === 'voicemail' && (
+                    <div>
+                      {editData.busy_audio_file_url ? (
+                        <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm text-green-700 dark:text-green-300 font-medium">Audio uploaded</span>
+                            <button
+                              type="button"
+                              onClick={() => setEditData({...editData, busy_audio_file_url: ''})}
+                              className="text-red-600 hover:text-red-700 text-sm"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <audio controls className="w-full" src={editData.busy_audio_file_url} />
+                        </div>
+                      ) : (
+                        <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center">
+                          <input
+                            type="file"
+                            accept="audio/*"
+                            onChange={handleEditAudioUpload}
+                            className="hidden"
+                            id="edit-audio-upload"
+                            disabled={editAudioUploading}
+                          />
+                          <label htmlFor="edit-audio-upload" className="cursor-pointer">
+                            {editAudioUploading ? (
+                              <span className="text-sm text-gray-600">Uploading...</span>
+                            ) : (
+                              <span className="text-sm text-indigo-600 font-medium">Click to upload audio</span>
+                            )}
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Call Restrictions */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b pb-2 mb-4">
+                  Call Restrictions
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Restriction Mode</label>
+                    <select
+                      value={editData.restriction_mode}
+                      onChange={(e) => setEditData({...editData, restriction_mode: e.target.value as any})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    >
+                      <option value="none">No Restrictions - Accept all calls</option>
+                      <option value="blacklist">Blacklist - Block specific countries/numbers</option>
+                      <option value="whitelist">Whitelist - Only allow specific countries</option>
+                    </select>
+                  </div>
+                  
+                  {editData.restriction_mode === 'blacklist' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Blocked Countries</label>
+                        <div className="flex gap-2 mb-2">
+                          <input
+                            type="text"
+                            value={editData.newBlockedCountry}
+                            onChange={(e) => setEditData({...editData, newBlockedCountry: e.target.value.toUpperCase()})}
+                            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                            placeholder="Country code (e.g., US, UK)"
+                            maxLength={3}
+                          />
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              if (editData.newBlockedCountry && !editData.blocked_countries.includes(editData.newBlockedCountry)) {
+                                setEditData({
+                                  ...editData,
+                                  blocked_countries: [...editData.blocked_countries, editData.newBlockedCountry],
+                                  newBlockedCountry: ''
+                                });
+                              }
+                            }}
+                          >
+                            Add
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {editData.blocked_countries.map((country) => (
+                            <span key={country} className="inline-flex items-center px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded text-sm">
+                              {country}
+                              <button
+                                onClick={() => setEditData({
+                                  ...editData,
+                                  blocked_countries: editData.blocked_countries.filter(c => c !== country)
+                                })}
+                                className="ml-1 text-red-600 hover:text-red-800"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Blocked Phone Numbers</label>
+                        <div className="flex gap-2 mb-2">
+                          <input
+                            type="text"
+                            value={editData.newBlockedNumber}
+                            onChange={(e) => setEditData({...editData, newBlockedNumber: e.target.value})}
+                            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                            placeholder="+1234567890 or pattern like +1*"
+                          />
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              if (editData.newBlockedNumber && !editData.blocked_numbers.includes(editData.newBlockedNumber)) {
+                                setEditData({
+                                  ...editData,
+                                  blocked_numbers: [...editData.blocked_numbers, editData.newBlockedNumber],
+                                  newBlockedNumber: ''
+                                });
+                              }
+                            }}
+                          >
+                            Add
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {editData.blocked_numbers.map((num) => (
+                            <span key={num} className="inline-flex items-center px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded text-sm">
+                              {num}
+                              <button
+                                onClick={() => setEditData({
+                                  ...editData,
+                                  blocked_numbers: editData.blocked_numbers.filter(n => n !== num)
+                                })}
+                                className="ml-1 text-red-600 hover:text-red-800"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  
+                  {editData.restriction_mode === 'whitelist' && (
+                    <div>
+                      <label className="block text-sm font-medium mb-2">Allowed Countries (only these can call)</label>
+                      <div className="flex gap-2 mb-2">
+                        <input
+                          type="text"
+                          value={editData.newAllowedCountry}
+                          onChange={(e) => setEditData({...editData, newAllowedCountry: e.target.value.toUpperCase()})}
+                          className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                          placeholder="Country code (e.g., BE, FR)"
+                          maxLength={3}
+                        />
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            if (editData.newAllowedCountry && !editData.allowed_countries.includes(editData.newAllowedCountry)) {
+                              setEditData({
+                                ...editData,
+                                allowed_countries: [...editData.allowed_countries, editData.newAllowedCountry],
+                                newAllowedCountry: ''
+                              });
+                            }
+                          }}
+                        >
+                          Add
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {editData.allowed_countries.map((country) => (
+                          <span key={country} className="inline-flex items-center px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded text-sm">
+                            {country}
+                            <button
+                              onClick={() => setEditData({
+                                ...editData,
+                                allowed_countries: editData.allowed_countries.filter(c => c !== country)
+                              })}
+                              className="ml-1 text-green-600 hover:text-green-800"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      {editData.allowed_countries.length === 0 && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                          Warning: No countries added - all calls will be blocked!
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex gap-3 mt-6 pt-4 border-t">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowEditModal(false)}
+                disabled={editLoading}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={handleSavePhoneNumber}
+                disabled={editLoading}
+              >
+                {editLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Saving...
+                  </>
+                ) : (
+                  'Save Changes'
                 )}
               </Button>
             </div>
