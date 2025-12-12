@@ -46,34 +46,41 @@ class AudioSocketSession:
         self._write_lock = asyncio.Lock()
         
     async def handle(self):
+        import time
+        t0 = time.time()
+        def ts():
+            return f"[{(time.time()-t0)*1000:.1f}ms]"
+        
         addr = self.writer.get_extra_info('peername')
-        logger.info(f"AudioSocket connection from {addr}")
+        print(f"{ts()} === AudioSocket CONNECTED from {addr} ===")
         
         try:
             self.is_running = True
             
             # CRITICAL: Set TCP_NODELAY to disable Nagle's algorithm
-            # This ensures data is sent immediately without buffering
             sock = self.writer.get_extra_info('socket')
             if sock:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                logger.info("TCP_NODELAY enabled")
+                print(f"{ts()} TCP_NODELAY set")
             
             # Send first frame IMMEDIATELY using low-level transport
-            # This bypasses asyncio buffering
             header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
             transport = self.writer.transport
             transport.write(header + SILENCE_FRAME)
-            logger.info("First silence frame written to transport")
+            print(f"{ts()} First silence frame WRITTEN to transport ({len(header)+FRAME_SIZE} bytes)")
             
             # Start the continuous send task
             self.send_task = asyncio.create_task(self._send_loop())
+            print(f"{ts()} Send task CREATED")
             
             # Small yield to let send_task start and send more frames
             await asyncio.sleep(0.001)
+            print(f"{ts()} After sleep(0.001)")
             
             # Read UUID
+            print(f"{ts()} Starting UUID read...")
             await self._read_uuid()
+            print(f"{ts()} UUID read complete: {self.call_uuid}")
             
             if not self.call_uuid:
                 logger.error("No UUID")
@@ -108,6 +115,10 @@ class AudioSocketSession:
     
     async def _send_loop(self):
         """Continuously send audio frames to Asterisk"""
+        import time
+        t0 = time.time()
+        print(f"[SEND] Loop STARTED at t={t0}")
+        
         frames_sent = 0
         transport = self.writer.transport
         try:
@@ -115,35 +126,42 @@ class AudioSocketSession:
                 # Get AI audio if available, otherwise use silence
                 try:
                     audio_data = self.ai_audio_queue.get_nowait()
+                    is_ai = True
                 except asyncio.QueueEmpty:
                     audio_data = SILENCE_FRAME
+                    is_ai = False
                 
-                # Send frame directly via transport (faster than writer.write + drain)
+                # Send frame directly via transport
                 header = struct.pack('>BH', MSG_AUDIO, len(audio_data))
                 try:
                     transport.write(header + audio_data)
-                except Exception:
+                except Exception as e:
+                    print(f"[SEND] Transport write FAILED: {e}")
                     break
                 
                 frames_sent += 1
-                if frames_sent == 1:
-                    logger.info("First frame sent in send_loop")
-                if frames_sent % 500 == 0:
-                    logger.info(f"Sent {frames_sent} frames")
+                elapsed = (time.time() - t0) * 1000
+                if frames_sent <= 5:
+                    print(f"[SEND] Frame #{frames_sent} sent at {elapsed:.1f}ms (AI={is_ai})")
+                if frames_sent % 100 == 0:
+                    print(f"[SEND] {frames_sent} frames sent, elapsed={elapsed:.0f}ms")
                 
                 # 20ms per frame = 50fps
                 await asyncio.sleep(0.02)
                 
         except asyncio.CancelledError:
-            pass
+            print(f"[SEND] Loop CANCELLED after {frames_sent} frames")
         except Exception as e:
-            if self.is_running:
-                logger.error(f"Send loop error: {e}")
+            print(f"[SEND] Loop ERROR: {e}")
         
-        logger.info(f"Send loop ended: {frames_sent} frames")
+        print(f"[SEND] Loop ENDED: {frames_sent} frames total")
     
     async def _receive_loop(self):
         """Receive audio from Asterisk"""
+        import time
+        t0 = time.time()
+        print(f"[RECV] Loop STARTED")
+        
         frames = 0
         try:
             while self.is_running:
@@ -153,9 +171,11 @@ class AudioSocketSession:
                         self.reader.readexactly(3),
                         timeout=60.0
                     )
-                except asyncio.IncompleteReadError:
+                except asyncio.IncompleteReadError as e:
+                    print(f"[RECV] IncompleteReadError: {e}")
                     break
                 except asyncio.TimeoutError:
+                    print(f"[RECV] Timeout after {frames} frames")
                     break
                 
                 msg_type = header[0]
@@ -166,58 +186,73 @@ class AudioSocketSession:
                     try:
                         payload = await self.reader.readexactly(payload_len)
                     except asyncio.IncompleteReadError:
+                        print(f"[RECV] Payload incomplete")
                         break
                 else:
                     payload = b''
                 
                 if msg_type == MSG_AUDIO:
                     frames += 1
+                    elapsed = (time.time() - t0) * 1000
                     if frames == 1:
-                        logger.info("First audio from Asterisk")
+                        print(f"[RECV] First audio from Asterisk at {elapsed:.1f}ms")
+                    if frames % 100 == 0:
+                        print(f"[RECV] {frames} frames received")
                     await self._process_audio(payload)
                 elif msg_type == MSG_HANGUP:
-                    logger.info("Hangup received")
+                    print(f"[RECV] HANGUP received")
                     break
                 elif msg_type == MSG_ERROR:
-                    logger.error("Error from Asterisk")
+                    print(f"[RECV] ERROR from Asterisk")
                     break
+                else:
+                    print(f"[RECV] Unknown type: 0x{msg_type:02x}")
                     
         except Exception as e:
-            logger.error(f"Receive error: {e}")
+            print(f"[RECV] Exception: {e}")
         
-        logger.info(f"Receive ended: {frames} frames")
+        print(f"[RECV] Loop ENDED: {frames} frames total")
     
     async def _read_uuid(self):
         """Read UUID packet"""
+        import time
+        t0 = time.time()
         try:
+            print(f"[UUID] Waiting for header...")
             header = await asyncio.wait_for(
                 self.reader.readexactly(3), 
                 timeout=5.0
             )
+            elapsed = (time.time() - t0) * 1000
+            print(f"[UUID] Header received at {elapsed:.1f}ms: {header.hex()}")
             
             msg_type = header[0]
             payload_len = struct.unpack('>H', header[1:3])[0]
             
-            logger.info(f"UUID header: type=0x{msg_type:02x}, len={payload_len}")
+            print(f"[UUID] type=0x{msg_type:02x}, len={payload_len}")
             
             if msg_type == MSG_UUID and payload_len > 0:
                 uuid_bytes = await asyncio.wait_for(
                     self.reader.readexactly(payload_len),
                     timeout=5.0
                 )
+                print(f"[UUID] Payload received: {uuid_bytes[:50]}...")
                 try:
                     self.call_uuid = uuid_bytes.decode('ascii').strip()
                     if len(self.call_uuid) == 36:
-                        logger.info(f"Valid UUID: {self.call_uuid}")
+                        print(f"[UUID] Valid: {self.call_uuid}")
                         return
                 except:
                     pass
             
             self.call_uuid = str(uuid_lib.uuid4())
-            logger.info(f"Generated UUID: {self.call_uuid}")
+            print(f"[UUID] Generated: {self.call_uuid}")
             
+        except asyncio.TimeoutError:
+            print(f"[UUID] TIMEOUT waiting for header!")
+            self.call_uuid = str(uuid_lib.uuid4())
         except Exception as e:
-            logger.error(f"UUID error: {e}")
+            print(f"[UUID] ERROR: {e}")
             self.call_uuid = str(uuid_lib.uuid4())
     
     async def _setup_call(self) -> bool:
@@ -373,8 +408,13 @@ class AudioSocketServer:
             await self.server.wait_closed()
     
     async def _handle(self, reader, writer):
+        import time
+        print(f"\n{'='*60}")
+        print(f"[SERVER] New connection at {time.strftime('%H:%M:%S')}")
+        print(f"{'='*60}")
         session = AudioSocketSession(reader, writer)
         await session.handle()
+        print(f"[SERVER] Connection handler finished")
 
 
 audiosocket_server = AudioSocketServer()
