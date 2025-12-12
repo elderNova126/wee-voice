@@ -679,6 +679,7 @@ VOICE CONSISTENCY INSTRUCTION:
     
     async def send_realtime_input(self):
         """Send queued audio to Gemini"""
+        print(f"[GEMINI-IN] Starting audio input loop", flush=True)
         logger.info(f"Starting audio input for call {self.call.session_id}")
         audio_sent_count = 0
         
@@ -686,6 +687,7 @@ VOICE CONSISTENCY INSTRUCTION:
             while True:
                 # Check if session is still available (may be None after stop/cleanup)
                 if self.session is None:
+                    print(f"[GEMINI-IN] Session is None, stopping", flush=True)
                     logger.info("Session is None, stopping audio input")
                     break
                 
@@ -696,19 +698,27 @@ VOICE CONSISTENCY INSTRUCTION:
                     
                     # Double-check session is still available before sending
                     if self.session is None:
+                        print(f"[GEMINI-IN] Session became None after {audio_sent_count}", flush=True)
                         logger.info("Session became None, stopping audio input")
                         break
                     
                     # Send audio input to Gemini Live API
                     # Format matches test.py: dict with "data" and "mime_type" keys
                     await self.session.send_realtime_input(audio=msg)
+                    
+                    if audio_sent_count <= 10 or audio_sent_count % 50 == 0:
+                        data_len = len(msg.get("data", b"")) if isinstance(msg, dict) else 0
+                        print(f"[GEMINI-IN] #{audio_sent_count} sent ({data_len} bytes)", flush=True)
+                        
                 except asyncio.TimeoutError:
                     # No audio in queue, continue waiting (but check session first)
                     if self.session is None:
+                        print(f"[GEMINI-IN] Session None during timeout", flush=True)
                         logger.info("Session is None during timeout, stopping audio input")
                         break
                     continue
                 except asyncio.CancelledError:
+                    print(f"[GEMINI-IN] Cancelled after {audio_sent_count} packets", flush=True)
                     logger.info("Audio input cancelled")
                     break
                 except Exception as e:
@@ -728,13 +738,16 @@ VOICE CONSISTENCY INSTRUCTION:
                     )
                     
                     if is_websocket_closed:
+                        print(f"[GEMINI-IN] WebSocket closed: {error_msg[:100]}", flush=True)
                         logger.info(f"Websocket closed (code 1000/1011), stopping audio input: {error_msg[:200]}")
                         break
                     else:
+                        print(f"[GEMINI-IN] ERROR: {error_msg[:100]}", flush=True)
                         logger.error(f"Error sending audio input: {e}", exc_info=True)
                         # For non-fatal errors, wait and continue
                         await asyncio.sleep(0.1)
         finally:
+            print(f"[GEMINI-IN] ENDED, {audio_sent_count} packets sent to Gemini", flush=True)
             logger.info(f"Audio input ended for call {self.call.session_id} ({audio_sent_count} chunks sent)")
     
     async def end_session(self):

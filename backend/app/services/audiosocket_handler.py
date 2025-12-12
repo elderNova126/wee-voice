@@ -42,7 +42,8 @@ class AudioSocketSession:
         self.db = None
         self.send_task = None
         self.ai_ready = asyncio.Event()
-        self.ai_audio_queue = asyncio.Queue()
+        self.ai_audio_queue = asyncio.Queue()  # AI audio to send to Asterisk
+        self.caller_audio_queue = asyncio.Queue(maxsize=100)  # Caller audio to send to Gemini
         self._write_lock = asyncio.Lock()
         
     async def handle(self):
@@ -105,18 +106,22 @@ class AudioSocketSession:
             self.ai_ready.set()
             print(f"[HANDLE] AI READY - will now process caller audio", flush=True)
             
-            # Start AI receive task
-            ai_task = asyncio.create_task(self._ai_receive_loop())
+            # Start AI tasks - CRITICAL: must start send_realtime_input to consume audio queue!
+            ai_receive_task = asyncio.create_task(self._ai_receive_loop())
+            caller_to_ai_task = asyncio.create_task(self._caller_audio_to_gemini_loop())
+            gemini_input_task = asyncio.create_task(self.agent_service.send_realtime_input())
+            print(f"[HANDLE] Gemini input task STARTED", flush=True)
             
             # Main receive loop
             await self._receive_loop()
             
-            # Cancel AI task when receive loop ends
-            ai_task.cancel()
-            try:
-                await ai_task
-            except asyncio.CancelledError:
-                pass
+            # Cancel all tasks
+            for task in [caller_to_ai_task, gemini_input_task, ai_receive_task]:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
                     
         except Exception as e:
             print(f"[HANDLE] EXCEPTION: {e}", flush=True)
@@ -209,10 +214,8 @@ class AudioSocketSession:
                 if msg_type == MSG_AUDIO:
                     frames += 1
                     elapsed = (time.time() - t0) * 1000
-                    if frames == 1:
-                        print(f"[RECV] First audio from Asterisk at {elapsed:.1f}ms")
-                    if frames % 100 == 0:
-                        print(f"[RECV] {frames} frames received")
+                    if frames <= 10 or frames % 50 == 0:
+                        print(f"[RECV] Frame #{frames} at {elapsed:.0f}ms", flush=True)
                     await self._process_audio(payload)
                 elif msg_type == MSG_HANGUP:
                     print(f"[RECV] HANGUP received")
@@ -322,11 +325,8 @@ class AudioSocketSession:
             return False
     
     async def _process_audio(self, audio_8k: bytes):
-        """Process audio from Asterisk, send to AI"""
-        if not self.agent_service:
-            return
+        """Process audio from Asterisk, queue for sending to AI"""
         if not self.ai_ready.is_set():
-            # Still waiting for AI to be ready
             return
         if len(audio_8k) < 2:
             return
@@ -335,22 +335,69 @@ class AudioSocketSession:
             if len(audio_8k) % 2:
                 audio_8k = audio_8k[:-1]
             
+            # Check audio level (for debugging)
+            if not hasattr(self, '_audio_level_count'):
+                self._audio_level_count = 0
+            self._audio_level_count += 1
+            
+            try:
+                rms = audioop.rms(audio_8k, 2)
+                max_val = audioop.max(audio_8k, 2)
+                if self._audio_level_count <= 20 or self._audio_level_count % 100 == 0:
+                    print(f"[AUDIO-LEVEL] #{self._audio_level_count} RMS={rms}, MAX={max_val}", flush=True)
+            except:
+                pass
+            
             # Upsample 8kHz to 16kHz for Gemini
             audio_16k, _ = audioop.ratecv(audio_8k, 2, 1, 8000, 16000, None)
             
-            # Debug: log first few sends
-            if not hasattr(self, '_audio_to_ai_count'):
-                self._audio_to_ai_count = 0
-            self._audio_to_ai_count += 1
-            if self._audio_to_ai_count <= 5 or self._audio_to_ai_count % 100 == 0:
-                print(f"[AUDIO→AI] Sending packet #{self._audio_to_ai_count}, size={len(audio_16k)}", flush=True)
-            
-            await self.agent_service.send_audio(audio_16k)
+            # Queue for sending (non-blocking, drop if queue full)
+            try:
+                self.caller_audio_queue.put_nowait(audio_16k)
+            except asyncio.QueueFull:
+                pass  # Drop audio if queue is full (backpressure)
         except Exception as e:
-            print(f"[AUDIO→AI] ERROR: {e}", flush=True)
+            print(f"[AUDIO→AI] Queue ERROR: {e}", flush=True)
+    
+    async def _caller_audio_to_gemini_loop(self):
+        """Forward caller audio to Gemini"""
+        packets_sent = 0
+        audio_buffer = b''
+        BATCH_SIZE = 3200  # ~100ms of 16kHz audio
+        
+        print(f"[AUDIO→AI] Queue loop STARTED", flush=True)
+        try:
+            while self.is_running:
+                try:
+                    # Get audio from queue with short timeout
+                    audio_16k = await asyncio.wait_for(
+                        self.caller_audio_queue.get(),
+                        timeout=0.1
+                    )
+                    audio_buffer += audio_16k
+                except asyncio.TimeoutError:
+                    pass
+                
+                # Send when buffer is big enough
+                if len(audio_buffer) >= BATCH_SIZE and self.agent_service:
+                    packets_sent += 1
+                    # send_audio just queues, send_realtime_input sends to Gemini
+                    await self.agent_service.send_audio(audio_buffer)
+                    
+                    if packets_sent <= 10 or packets_sent % 50 == 0:
+                        print(f"[AUDIO→AI] #{packets_sent} queued ({len(audio_buffer)} bytes)", flush=True)
+                    audio_buffer = b''
+                    
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"[AUDIO→AI] Queue loop ERROR: {e}", flush=True)
+        print(f"[AUDIO→AI] Queue loop ENDED, {packets_sent} packets", flush=True)
     
     async def _ai_receive_loop(self):
         """Receive audio from AI and queue for sending"""
+        ai_packets = 0
+        print(f"[AI→AUDIO] Receive loop STARTED", flush=True)
         try:
             async for audio_24k in self.agent_service.receive_audio():
                 if not self.is_running:
@@ -364,10 +411,15 @@ class AudioSocketSession:
                 audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, 24000, 8000, None)
                 await self.ai_audio_queue.put(audio_8k)
                 
+                ai_packets += 1
+                if ai_packets <= 5 or ai_packets % 50 == 0:
+                    print(f"[AI→AUDIO] #{ai_packets}, {len(audio_8k)} bytes from Gemini", flush=True)
+                
         except asyncio.CancelledError:
-            pass
+            print(f"[AI→AUDIO] Cancelled after {ai_packets} packets", flush=True)
         except Exception as e:
-            logger.error(f"AI receive error: {e}")
+            print(f"[AI→AUDIO] ERROR: {e}", flush=True)
+        print(f"[AI→AUDIO] ENDED, total {ai_packets} packets", flush=True)
     
     async def _cleanup(self):
         """Cleanup"""
