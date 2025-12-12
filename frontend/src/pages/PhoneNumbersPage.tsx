@@ -52,6 +52,24 @@ interface VerificationDocument {
   created_at: string;
 }
 
+interface EditDataType {
+  business_name: string;
+  sip_websocket_url: string;
+  sip_transport: string;
+  sip_username: string;
+  sip_password: string;
+  sip_domain: string;
+  busy_action: 'busy_tone' | 'voicemail';
+  busy_audio_file_url: string;
+  restriction_mode: 'none' | 'blacklist' | 'whitelist';
+  blocked_countries: string[];
+  blocked_numbers: string[];
+  allowed_countries: string[];
+  newBlockedNumber: string;
+  newBlockedCountry: string;
+  newAllowedCountry: string;
+}
+
 export const PhoneNumbersPage: React.FC = () => {
   const t = useTranslation();
   
@@ -108,23 +126,19 @@ export const PhoneNumbersPage: React.FC = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
   const [editAudioUploading, setEditAudioUploading] = useState(false);
-  const [editData, setEditData] = useState({
+  const [editData, setEditData] = useState<EditDataType>({
     business_name: '',
-    // SIP Config
     sip_websocket_url: '',
     sip_transport: 'WSS',
     sip_username: '',
     sip_password: '',
     sip_domain: '',
-    // Busy settings
-    busy_action: 'busy_tone' as 'busy_tone' | 'voicemail',
+    busy_action: 'busy_tone',
     busy_audio_file_url: '',
-    // Call restrictions
-    restriction_mode: 'none' as 'none' | 'blacklist' | 'whitelist',
-    blocked_countries: [] as string[],
-    blocked_numbers: [] as string[],
-    allowed_countries: [] as string[],
-    // Temp inputs
+    restriction_mode: 'none',
+    blocked_countries: [],
+    blocked_numbers: [],
+    allowed_countries: [],
     newBlockedNumber: '',
     newBlockedCountry: '',
     newAllowedCountry: ''
@@ -230,27 +244,6 @@ export const PhoneNumbersPage: React.FC = () => {
     }
   };
 
-  const handleSaveBusySettings = async () => {
-    if (!selectedNumber) return;
-    
-    if (busySettings.busy_action === 'voicemail' && !busySettings.busy_audio_file_url) {
-      toast.error('Please upload an audio file for the voicemail message');
-      return;
-    }
-    
-    setBusySettingsLoading(true);
-    try {
-      await api.put(`/phone-numbers/${selectedNumber.id}/busy-settings`, busySettings);
-      await loadPhoneNumbers();
-      setShowBusySettingsModal(false);
-      toast.success('Busy settings updated successfully');
-    } catch (error: any) {
-      toast.error('Failed to update busy settings: ' + (error.response?.data?.detail || error.message));
-    } finally {
-      setBusySettingsLoading(false);
-    }
-  };
-
   const handleEditAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedNumber || !e.target.files || e.target.files.length === 0) return;
     
@@ -271,7 +264,7 @@ export const PhoneNumbersPage: React.FC = () => {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
-      setEditData(prev => ({
+      setEditData((prev: EditDataType) => ({
         ...prev,
         busy_audio_file_url: response.data.file_url
       }));
@@ -404,9 +397,9 @@ export const PhoneNumbersPage: React.FC = () => {
     }
   };
 
-  const getAgentName = (agentId: number | null) => {
+  const getAgentName = (agentId: number | null): string => {
     if (!agentId) return t.common.status === 'Statut' ? 'Non assigné' : 'Not assigned';
-    const agent = agents.find(a => a.id === agentId);
+    const agent = agents.find((a: Agent) => a.id === agentId);
     return agent ? agent.name : (t?.phoneNumbers?.unknownAgent || 'Unknown Agent');
   };
 
@@ -535,7 +528,7 @@ export const PhoneNumbersPage: React.FC = () => {
         </Card>
       ) : (
         <div className="grid gap-6">
-          {phoneNumbers.map((number) => (
+          {phoneNumbers.map((number: PhoneNumber) => (
             <Card key={number.id}>
               <div className="flex items-start justify-between">
                 <div className="flex items-center space-x-4">
@@ -737,7 +730,7 @@ export const PhoneNumbersPage: React.FC = () => {
                     type="text"
                     required
                     value={existingNumberData.phone_number}
-                    onChange={(e) => setExistingNumberData({ ...existingNumberData, phone_number: e.target.value })}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setExistingNumberData({ ...existingNumberData, phone_number: e.target.value })}
                     className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                     placeholder={t?.phoneNumbers?.phoneNumberPlaceholder || '+32 2 833 2888'}
                   />
@@ -1174,148 +1167,6 @@ export const PhoneNumbersPage: React.FC = () => {
                   )}
                 </Button>
               </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* Busy Settings Modal */}
-      {showBusySettingsModal && selectedNumber && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
-          <Card className="max-w-lg w-full">
-            <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">
-              Busy Line Settings
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-              Configure what happens when a caller calls while another call is in progress on {selectedNumber.phone_number}
-            </p>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
-                  When line is busy:
-                </label>
-                <div className="space-y-2">
-                  <label className="flex items-center space-x-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                    <input
-                      type="radio"
-                      name="busy_action"
-                      value="busy_tone"
-                      checked={busySettings.busy_action === 'busy_tone'}
-                      onChange={(e) => setBusySettings({...busySettings, busy_action: e.target.value as 'busy_tone' | 'voicemail'})}
-                      className="h-4 w-4 text-indigo-600"
-                    />
-                    <div>
-                      <span className="font-medium text-gray-900 dark:text-white">Play busy tone</span>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Standard busy signal (beep-beep-beep)</p>
-                    </div>
-                  </label>
-                  <label className="flex items-center space-x-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                    <input
-                      type="radio"
-                      name="busy_action"
-                      value="voicemail"
-                      checked={busySettings.busy_action === 'voicemail'}
-                      onChange={(e) => setBusySettings({...busySettings, busy_action: e.target.value as 'busy_tone' | 'voicemail'})}
-                      className="h-4 w-4 text-indigo-600"
-                    />
-                    <div>
-                      <span className="font-medium text-gray-900 dark:text-white">Play custom voicemail message</span>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Text-to-speech message for callers</p>
-                    </div>
-                  </label>
-                </div>
-              </div>
-              
-              {busySettings.busy_action === 'voicemail' && (
-                <div>
-                  <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
-                    Voicemail Audio File:
-                  </label>
-                  
-                  {busySettings.busy_audio_file_url ? (
-                    <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <svg className="h-5 w-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                          </svg>
-                          <span className="text-sm text-green-700 dark:text-green-300 font-medium">Audio file uploaded</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setBusySettings({...busySettings, busy_audio_file_url: ''})}
-                          className="text-red-600 hover:text-red-700 text-sm"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      <audio controls className="w-full mt-2" src={busySettings.busy_audio_file_url}>
-                        Your browser does not support the audio element.
-                      </audio>
-                    </div>
-                  ) : (
-                    <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center">
-                      <input
-                        type="file"
-                        accept="audio/*"
-                        onChange={handleBusyAudioUpload}
-                        className="hidden"
-                        id="busy-audio-upload"
-                        disabled={busyAudioUploading}
-                      />
-                      <label
-                        htmlFor="busy-audio-upload"
-                        className="cursor-pointer"
-                      >
-                        {busyAudioUploading ? (
-                          <div className="flex flex-col items-center">
-                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mb-2"></div>
-                            <span className="text-sm text-gray-600 dark:text-gray-400">Uploading...</span>
-                          </div>
-                        ) : (
-                          <div className="flex flex-col items-center">
-                            <svg className="h-10 w-10 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                            </svg>
-                            <span className="text-sm text-indigo-600 dark:text-indigo-400 font-medium">Click to upload audio file</span>
-                            <span className="text-xs text-gray-500 dark:text-gray-400 mt-1">WAV, MP3, OGG, or WebM</span>
-                          </div>
-                        )}
-                      </label>
-                    </div>
-                  )}
-                  
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                    This audio will be played to callers when the line is busy
-                  </p>
-                </div>
-              )}
-            </div>
-            
-            <div className="flex gap-3 mt-6">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setShowBusySettingsModal(false)}
-                disabled={busySettingsLoading}
-              >
-                Cancel
-              </Button>
-              <Button
-                className="flex-1"
-                onClick={handleSaveBusySettings}
-                disabled={busySettingsLoading}
-              >
-                {busySettingsLoading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Saving...
-                  </>
-                ) : (
-                  'Save Settings'
-                )}
-              </Button>
             </div>
           </Card>
         </div>
