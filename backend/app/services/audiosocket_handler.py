@@ -153,18 +153,29 @@ class AudioSocketSession:
         
         frames_sent = 0
         transport = self.writer.transport
+        audio_buffer = b''  # Buffer to accumulate AI audio
+        
         try:
             while self.is_running:
-                # Get AI audio if available, otherwise use silence
-                try:
-                    audio_data = self.ai_audio_queue.get_nowait()
-                    is_ai = True
-                except asyncio.QueueEmpty:
+                # Collect all available AI audio into buffer
+                while True:
+                    try:
+                        chunk = self.ai_audio_queue.get_nowait()
+                        audio_buffer += chunk
+                    except asyncio.QueueEmpty:
+                        break
+                
+                # Get one frame's worth of data
+                if len(audio_buffer) >= FRAME_SIZE:
+                    # Use buffered AI audio
+                    audio_data = audio_buffer[:FRAME_SIZE]
+                    audio_buffer = audio_buffer[FRAME_SIZE:]
+                else:
+                    # Not enough AI audio, use silence
                     audio_data = SILENCE_FRAME
-                    is_ai = False
                 
                 # Send frame directly via transport
-                header = struct.pack('>BH', MSG_AUDIO, len(audio_data))
+                header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
                 try:
                     transport.write(header + audio_data)
                 except Exception as e:
@@ -176,7 +187,7 @@ class AudioSocketSession:
                 if frames_sent <= 5:
                     print(f"[SEND] Frame #{frames_sent} at {elapsed:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    print(f"[SEND] {frames_sent} frames", flush=True)
+                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}", flush=True)
                 
                 # 20ms per frame = 50fps
                 await asyncio.sleep(0.02)
