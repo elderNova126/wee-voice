@@ -53,10 +53,15 @@ class AudioSocketSession:
         try:
             self.is_running = True
             
-            # Start keepalive IMMEDIATELY to prevent Asterisk timeout
+            # CRITICAL: Send first silence frame IMMEDIATELY before anything else!
+            # Asterisk expects audio frames right away - it won't wait for us to read UUID
+            await self._send_frame(SILENCE_FRAME)
+            logger.info("First silence frame sent immediately")
+            
+            # Start keepalive to continue sending silence while we initialize
             self.keepalive_task = asyncio.create_task(self._keepalive_loop())
             
-            # Now read UUID
+            # Now read UUID (keepalive continues in background)
             await self._read_uuid()
             
             if not self.call_uuid:
