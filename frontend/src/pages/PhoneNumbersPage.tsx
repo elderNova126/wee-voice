@@ -34,6 +34,14 @@ interface PhoneNumber {
   sip_username?: string | null;
   sip_domain?: string | null;
   has_sip_config?: boolean;
+  // Busy line behavior
+  busy_action?: 'busy_tone' | 'voicemail' | string;
+  busy_audio_file_url?: string | null;
+  // Call restrictions
+  restriction_mode?: 'none' | 'blacklist' | 'whitelist' | string;
+  blocked_countries?: string[];
+  blocked_numbers?: string[];
+  allowed_countries?: string[];
 }
 
 interface Agent {
@@ -316,12 +324,12 @@ export const PhoneNumbersPage: React.FC = () => {
       sip_username: number.sip_username || '',
       sip_password: '',
       sip_domain: number.sip_domain || '',
-      busy_action: ((number as any).busy_action || 'busy_tone') as 'busy_tone' | 'voicemail',
-      busy_audio_file_url: (number as any).busy_audio_file_url || '',
-      restriction_mode: ((number as any).restriction_mode || 'none') as 'none' | 'blacklist' | 'whitelist',
-      blocked_countries: (number as any).blocked_countries || [],
-      blocked_numbers: (number as any).blocked_numbers || [],
-      allowed_countries: (number as any).allowed_countries || [],
+      busy_action: (number.busy_action || 'busy_tone') as 'busy_tone' | 'voicemail',
+      busy_audio_file_url: number.busy_audio_file_url || '',
+      restriction_mode: (number.restriction_mode || 'none') as 'none' | 'blacklist' | 'whitelist',
+      blocked_countries: number.blocked_countries || [],
+      blocked_numbers: number.blocked_numbers || [],
+      allowed_countries: number.allowed_countries || [],
       newBlockedNumber: '',
       newBlockedCountry: '',
       newAllowedCountry: ''
