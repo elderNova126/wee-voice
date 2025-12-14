@@ -261,12 +261,22 @@ def normalize_phone_for_storage(phone: str) -> str:
 
 
 def _parse_json_field(value) -> list:
-    """Parse a JSON field that might be a list, JSON string, or None"""
+    """Parse a JSON field that might be a list, JSON string, PostgreSQL array, or None"""
     if value is None:
         return []
     if isinstance(value, list):
         return value
     if isinstance(value, str):
+        # Handle empty strings
+        if not value or value.strip() in ('', '[]', '{}'):
+            return []
+        # Handle PostgreSQL array format: {VN} or {VN,UK}
+        if value.startswith('{') and value.endswith('}') and not value.startswith('{"'):
+            inner = value[1:-1]  # Remove { and }
+            if not inner:
+                return []
+            return [item.strip().strip('"') for item in inner.split(',') if item.strip()]
+        # Handle JSON array format: ["VN"] or ["VN","UK"]
         try:
             parsed = json.loads(value)
             return parsed if isinstance(parsed, list) else []
@@ -635,15 +645,15 @@ async def update_phone_number(
     if updates.busy_audio_file_url is not None:
         phone_number.busy_audio_file_url = updates.busy_audio_file_url
     
-    # Call restrictions (JSONB columns - no need for json.dumps)
+    # Call restrictions (Text columns - need json.dumps for lists)
     if updates.restriction_mode is not None:
         phone_number.restriction_mode = updates.restriction_mode
     if updates.blocked_countries is not None:
-        phone_number.blocked_countries = updates.blocked_countries
+        phone_number.blocked_countries = json.dumps(updates.blocked_countries) if updates.blocked_countries else None
     if updates.blocked_numbers is not None:
-        phone_number.blocked_numbers = updates.blocked_numbers
+        phone_number.blocked_numbers = json.dumps(updates.blocked_numbers) if updates.blocked_numbers else None
     if updates.allowed_countries is not None:
-        phone_number.allowed_countries = updates.allowed_countries
+        phone_number.allowed_countries = json.dumps(updates.allowed_countries) if updates.allowed_countries else None
     
     db.commit()
     db.refresh(phone_number)
