@@ -224,15 +224,31 @@ class SIPClientService:
         """Build Authorization header for digest authentication"""
         realm = challenge.get('realm', self.domain)
         nonce = challenge.get('nonce', '')
+        opaque = challenge.get('opaque', '')
+        qop = challenge.get('qop', '')
         uri = self._build_sip_uri()
         
         # Calculate digest response
         ha1 = hashlib.md5(f"{self.username}:{realm}:{self.password}".encode()).hexdigest()
         ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
-        response = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
         
-        auth = f'Authorization: Digest username="{self.username}", realm="{realm}", '
-        auth += f'nonce="{nonce}", uri="{uri}", response="{response}", algorithm=MD5'
+        if qop:
+            # QoP (Quality of Protection) requires cnonce and nc
+            cnonce = ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
+            nc = "00000001"  # nonce count
+            response = hashlib.md5(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}".encode()).hexdigest()
+            
+            auth = f'Authorization: Digest username="{self.username}", realm="{realm}", '
+            auth += f'nonce="{nonce}", uri="{uri}", response="{response}", algorithm=MD5, '
+            auth += f'cnonce="{cnonce}", nc={nc}, qop={qop}'
+        else:
+            response = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+            auth = f'Authorization: Digest username="{self.username}", realm="{realm}", '
+            auth += f'nonce="{nonce}", uri="{uri}", response="{response}", algorithm=MD5'
+        
+        # Add opaque if present
+        if opaque:
+            auth += f', opaque="{opaque}"'
         
         return auth
     
@@ -336,10 +352,13 @@ class SIPClientService:
                 if www_auth:
                     logger.info("Authentication required, sending credentials...")
                     challenge = self._parse_challenge(www_auth)
+                    logger.info(f"Parsed challenge: {challenge}")
                     auth_header = self._build_auth_header(challenge)
+                    logger.info(f"Auth header: {auth_header[:100]}...")
                     
                     # Resend with auth
                     register_msg = self._build_register_request(auth_header)
+                    logger.info(f"Sending authenticated REGISTER:\n{register_msg[:500]}...")
                     await self._send_message(register_msg)
                     
                     # Wait for response
@@ -354,6 +373,7 @@ class SIPClientService:
                         logger.error(f"Registration failed after auth: {status}")
                         if response:
                             logger.error(f"Response headers: {response.get('headers', {})}")
+                            logger.error(f"Full response: {response}")
                         return False
                 else:
                     logger.error("401 response but no WWW-Authenticate header")
