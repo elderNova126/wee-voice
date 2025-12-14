@@ -1,6 +1,7 @@
 """
 Phone Numbers API with SIP Configuration
 """
+import json
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -259,6 +260,21 @@ def normalize_phone_for_storage(phone: str) -> str:
     return normalized
 
 
+def _parse_json_field(value) -> list:
+    """Parse a JSON field that might be a list, JSON string, or None"""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
 def phone_number_to_response(phone: PhoneNumber) -> dict:
     """Convert PhoneNumber object to response dict with has_sip_config"""
     return {
@@ -280,11 +296,11 @@ def phone_number_to_response(phone: PhoneNumber) -> dict:
         # Busy line behavior
         "busy_action": phone.busy_action.value if hasattr(phone.busy_action, 'value') else (phone.busy_action or "busy_tone"),
         "busy_audio_file_url": phone.busy_audio_file_url,
-        # Call restrictions
+        # Call restrictions (parse JSON fields that might be strings or lists)
         "restriction_mode": phone.restriction_mode or "none",
-        "blocked_countries": phone.blocked_countries or [],
-        "blocked_numbers": phone.blocked_numbers or [],
-        "allowed_countries": phone.allowed_countries or [],
+        "blocked_countries": _parse_json_field(phone.blocked_countries),
+        "blocked_numbers": _parse_json_field(phone.blocked_numbers),
+        "allowed_countries": _parse_json_field(phone.allowed_countries),
     }
 
 
@@ -586,8 +602,6 @@ async def update_phone_number(
     db: Session = Depends(get_db)
 ):
     """Update phone number settings including SIP config, busy settings, and restrictions"""
-    import json
-    
     phone_number = db.query(PhoneNumber).filter(
         PhoneNumber.id == phone_number_id,
         PhoneNumber.user_id == current_user.id
@@ -621,15 +635,15 @@ async def update_phone_number(
     if updates.busy_audio_file_url is not None:
         phone_number.busy_audio_file_url = updates.busy_audio_file_url
     
-    # Call restrictions (store as JSON)
+    # Call restrictions (JSONB columns - no need for json.dumps)
     if updates.restriction_mode is not None:
         phone_number.restriction_mode = updates.restriction_mode
     if updates.blocked_countries is not None:
-        phone_number.blocked_countries = json.dumps(updates.blocked_countries)
+        phone_number.blocked_countries = updates.blocked_countries
     if updates.blocked_numbers is not None:
-        phone_number.blocked_numbers = json.dumps(updates.blocked_numbers)
+        phone_number.blocked_numbers = updates.blocked_numbers
     if updates.allowed_countries is not None:
-        phone_number.allowed_countries = json.dumps(updates.allowed_countries)
+        phone_number.allowed_countries = updates.allowed_countries
     
     db.commit()
     db.refresh(phone_number)
