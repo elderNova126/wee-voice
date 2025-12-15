@@ -239,8 +239,8 @@ class AudioSocketSession:
         """
         Send audio frames to Asterisk at precise 20ms intervals.
         
-        Uses small holdover buffer to prevent mid-word silences.
-        When buffer empties, holds last audio briefly before silence.
+        Uses pre-buffer and grace period to ensure smooth playback.
+        Like browser's Web Audio API - buffers enough to absorb Gemini's timing.
         """
         import time
         t0 = time.time()
@@ -251,58 +251,72 @@ class AudioSocketSession:
         audio_buffer = b''
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Track consecutive empty frames to avoid mid-word silence
+        # Pre-buffer: wait for 120ms of audio before starting playback
+        # This absorbs Gemini's generation timing variations
+        PRE_BUFFER_BYTES = FRAME_SIZE * 6  # 120ms
+        playback_started = False
+        
+        # Grace period: wait 200ms before sending silence (10 frames)
+        # Bridges Gemini's pauses between phrases
         empty_count = 0
-        MAX_EMPTY_BEFORE_SILENCE = 4  # 80ms grace period (4 x 20ms)
+        MAX_EMPTY_BEFORE_SILENCE = 10  # 200ms
         
         frame_duration = 0.02  # 20ms
         next_frame_time = time.time()
         
         try:
             while self.is_running:
-                # Get all available audio
+                # Collect all available audio
                 while True:
                     try:
                         chunk = self.ai_audio_queue.get_nowait()
                         audio_buffer += chunk
-                        empty_count = 0  # Reset when we get audio
                     except asyncio.QueueEmpty:
                         break
                 
-                # Determine what to send
-                if len(audio_buffer) >= FRAME_SIZE:
-                    # Have enough audio - send it
+                # Pre-buffer phase: accumulate audio before starting
+                if not playback_started:
+                    if len(audio_buffer) >= PRE_BUFFER_BYTES:
+                        playback_started = True
+                        print(f"[SEND] Playback started with {len(audio_buffer)} bytes buffered", flush=True)
+                        # Send first frame
+                        audio_data = audio_buffer[:FRAME_SIZE]
+                        audio_buffer = audio_buffer[FRAME_SIZE:]
+                    else:
+                        # Still buffering - send silence
+                        audio_data = SILENCE_FRAME
+                elif len(audio_buffer) >= FRAME_SIZE:
+                    # Normal playback
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
                     empty_count = 0
                 elif len(audio_buffer) > 0:
-                    # Partial audio - pad and send (don't lose it)
+                    # Partial frame - use it
                     audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
                     audio_buffer = b''
                     empty_count = 0
                 else:
-                    # No audio - but wait before sending silence
-                    # This prevents mid-word gaps like "assis...tant"
+                    # Buffer empty - wait for more audio
                     empty_count += 1
                     if empty_count <= MAX_EMPTY_BEFORE_SILENCE:
-                        # Brief wait - try to get more audio
+                        # Wait briefly for more audio
                         try:
                             chunk = await asyncio.wait_for(
-                                self.ai_audio_queue.get(), 
-                                timeout=0.015  # 15ms wait
+                                self.ai_audio_queue.get(),
+                                timeout=0.018  # 18ms
                             )
                             audio_buffer += chunk
+                            empty_count = 0
                             if len(audio_buffer) >= FRAME_SIZE:
                                 audio_data = audio_buffer[:FRAME_SIZE]
                                 audio_buffer = audio_buffer[FRAME_SIZE:]
                             else:
                                 audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
                                 audio_buffer = b''
-                            empty_count = 0
                         except asyncio.TimeoutError:
                             audio_data = SILENCE_FRAME
                     else:
-                        # Real silence - no audio coming
+                        # Real pause in speech
                         audio_data = SILENCE_FRAME
                 
                 try:
