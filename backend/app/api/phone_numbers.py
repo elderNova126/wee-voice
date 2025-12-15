@@ -17,6 +17,8 @@ from app.models import (
     VerificationDocument,
     DocumentType,
     VerificationStatus,
+    AgentCollaborator,
+    VoiceAgent,
 )
 from app.core.security import get_current_user
 from app.services.storage_service import get_storage_service
@@ -161,6 +163,16 @@ class PhoneNumberAddExisting(BaseModel):
     sip_config: Optional[SIPConfiguration] = None
 
 
+class CollaboratorInfo(BaseModel):
+    """Collaborator information for display"""
+    id: int
+    user_id: int
+    user_email: str
+    user_name: Optional[str] = None
+    permissions: str
+    is_active: bool
+
+
 class PhoneNumberResponse(BaseModel):
     id: int
     phone_number: str
@@ -176,8 +188,8 @@ class PhoneNumberResponse(BaseModel):
     sip_websocket_url: Optional[str] = None
     sip_transport: Optional[str] = None
     sip_username: Optional[str] = None
+    sip_password: Optional[str] = None
     sip_domain: Optional[str] = None
-    # Note: sip_password is not returned for security
     has_sip_config: bool = False
     # Busy line behavior
     busy_action: Optional[str] = "busy_tone"
@@ -188,6 +200,9 @@ class PhoneNumberResponse(BaseModel):
     blocked_numbers: Optional[List[str]] = None
     allowed_countries: Optional[List[str]] = None
     restriction_mode: Optional[str] = "none"
+    
+    # Collaborators for assigned agent
+    collaborators: Optional[List[CollaboratorInfo]] = None
     
     class Config:
         from_attributes = True
@@ -292,8 +307,39 @@ def _parse_json_field(value) -> list:
     return []
 
 
-def phone_number_to_response(phone: PhoneNumber) -> dict:
+def get_agent_collaborators(db: Session, agent_id: int) -> List[dict]:
+    """Get collaborators for an agent"""
+    if not agent_id:
+        return []
+    
+    collaborators = db.query(AgentCollaborator).filter(
+        AgentCollaborator.agent_id == agent_id,
+        AgentCollaborator.is_active == True
+    ).all()
+    
+    result = []
+    for collab in collaborators:
+        user = db.query(User).filter(User.id == collab.user_id).first()
+        if user:
+            result.append({
+                "id": collab.id,
+                "user_id": collab.user_id,
+                "user_email": user.email,
+                "user_name": user.full_name,
+                "permissions": collab.permissions,
+                "is_active": collab.is_active
+            })
+    
+    return result
+
+
+def phone_number_to_response(phone: PhoneNumber, db: Session = None) -> dict:
     """Convert PhoneNumber object to response dict with has_sip_config"""
+    # Get collaborators if agent is assigned and db is provided
+    collaborators = []
+    if db and phone.agent_id:
+        collaborators = get_agent_collaborators(db, phone.agent_id)
+    
     return {
         "id": phone.id,
         "phone_number": phone.phone_number,
@@ -308,6 +354,7 @@ def phone_number_to_response(phone: PhoneNumber) -> dict:
         "sip_websocket_url": phone.sip_websocket_url,
         "sip_transport": phone.sip_transport,
         "sip_username": phone.sip_username,
+        "sip_password": phone.sip_password,
         "sip_domain": phone.sip_domain,
         "has_sip_config": bool(phone.sip_websocket_url and phone.sip_username and phone.sip_password and phone.sip_domain),
         # Busy line behavior
@@ -318,6 +365,8 @@ def phone_number_to_response(phone: PhoneNumber) -> dict:
         "blocked_countries": _parse_json_field(phone.blocked_countries),
         "blocked_numbers": _parse_json_field(phone.blocked_numbers),
         "allowed_countries": _parse_json_field(phone.allowed_countries),
+        # Collaborators for assigned agent
+        "collaborators": collaborators,
     }
 
 
@@ -382,14 +431,14 @@ async def list_phone_numbers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all phone numbers for current user"""
+    """List all phone numbers for current user with agent collaborators"""
     phone_numbers = safe_query_phone_numbers(
         db,
         "user_id = :user_id ORDER BY created_at DESC",
         {"user_id": current_user.id}
     )
     
-    return [phone_number_to_response(phone) for phone in phone_numbers]
+    return [phone_number_to_response(phone, db) for phone in phone_numbers]
 
 
 @router.get("/{phone_number_id}", response_model=PhoneNumberResponse)

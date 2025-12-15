@@ -15,7 +15,17 @@ import {
   ClockIcon,
   ExclamationTriangleIcon,
   TrashIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline'
+
+interface Collaborator {
+  id: number;
+  user_id: number;
+  user_email: string;
+  user_name: string | null;
+  permissions: string;
+  is_active: boolean;
+}
 
 interface PhoneNumber {
   id: number;
@@ -32,6 +42,7 @@ interface PhoneNumber {
   sip_websocket_url?: string | null;
   sip_transport?: string | null;
   sip_username?: string | null;
+  sip_password?: string | null;
   sip_domain?: string | null;
   has_sip_config?: boolean;
   // Busy line behavior
@@ -42,6 +53,8 @@ interface PhoneNumber {
   blocked_countries?: string[];
   blocked_numbers?: string[];
   allowed_countries?: string[];
+  // Collaborators
+  collaborators?: Collaborator[];
 }
 
 interface Agent {
@@ -322,7 +335,7 @@ export const PhoneNumbersPage: React.FC = () => {
       sip_websocket_url: number.sip_websocket_url || '',
       sip_transport: number.sip_transport || 'WSS',
       sip_username: number.sip_username || '',
-      sip_password: '',
+      sip_password: number.sip_password || '',
       sip_domain: number.sip_domain || '',
       busy_action: (number.busy_action || 'busy_tone') as 'busy_tone' | 'voicemail',
       busy_audio_file_url: number.busy_audio_file_url || '',
@@ -585,6 +598,32 @@ export const PhoneNumbersPage: React.FC = () => {
                         </p>
                       )}
                     </div>
+                    {/* Collaborators Section */}
+                    {number.agent_id && number.collaborators && number.collaborators.length > 0 && (
+                      <div className="mt-3 text-sm">
+                        <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
+                          {t?.phoneNumbers?.collaborators || 'Collaborators'}
+                        </div>
+                        <div className="space-y-1 bg-purple-50 dark:bg-purple-900/20 p-2 rounded-lg">
+                          <div className="flex items-center gap-1 text-purple-700 dark:text-purple-400 font-medium mb-2">
+                            <UserGroupIcon className="h-4 w-4" />
+                            {t?.phoneNumbers?.agentCollaborators || 'Agent Collaborators'}
+                          </div>
+                          <div className="space-y-1">
+                            {number.collaborators.map((collab: Collaborator) => (
+                              <div key={collab.id} className="flex items-center justify-between text-xs">
+                                <span className="text-gray-700 dark:text-gray-300">
+                                  {collab.user_name || collab.user_email}
+                                </span>
+                                <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded text-xs">
+                                  {collab.permissions.split(',').map((p: string) => p.trim()).join(', ')}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="text-right space-y-2">
@@ -622,9 +661,10 @@ export const PhoneNumbersPage: React.FC = () => {
                           onClick={() => openEditModal(number)}
                         >
                           <svg className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                           </svg>
-                          Edit
+                          {t?.phoneNumbers?.settings || 'Settings'}
                         </Button>
                       </>
                     )}
@@ -1180,13 +1220,13 @@ export const PhoneNumbersPage: React.FC = () => {
         </div>
       )}
 
-      {/* Comprehensive Edit Modal */}
+      {/* Phone Number Settings Modal */}
       {showEditModal && selectedNumber && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4 py-6 overflow-y-auto">
           <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                Edit Phone Number: {selectedNumber.phone_number}
+                {t?.phoneNumbers?.phoneNumberSettings || 'Phone Number Settings'}: {selectedNumber.phone_number}
               </h2>
               <button
                 onClick={() => setShowEditModal(false)}
@@ -1260,7 +1300,7 @@ export const PhoneNumbersPage: React.FC = () => {
                       value={editData.sip_password}
                       onChange={(e) => setEditData({...editData, sip_password: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                      placeholder="Leave empty to keep current"
+                      placeholder="Enter SIP password"
                     />
                   </div>
                   <div className="md:col-span-2">
