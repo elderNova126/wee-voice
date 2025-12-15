@@ -147,6 +147,13 @@ export const PhoneNumbersPage: React.FC = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
   const [editAudioUploading, setEditAudioUploading] = useState(false);
+  
+  // Collaborators modal
+  const [showCollaboratorsModal, setShowCollaboratorsModal] = useState(false);
+  const [collaboratorEmail, setCollaboratorEmail] = useState('');
+  const [collaboratorPermissions, setCollaboratorPermissions] = useState('view,edit');
+  const [collaboratorLoading, setCollaboratorLoading] = useState(false);
+  
   const [editData, setEditData] = useState<EditDataType>({
     business_name: '',
     sip_websocket_url: '',
@@ -348,6 +355,54 @@ export const PhoneNumbersPage: React.FC = () => {
       newAllowedCountry: ''
     });
     setShowEditModal(true);
+  };
+
+  const openCollaboratorsModal = (number: PhoneNumber) => {
+    setSelectedNumber(number);
+    setCollaboratorEmail('');
+    setCollaboratorPermissions('view,edit');
+    setShowCollaboratorsModal(true);
+  };
+
+  const handleAddCollaborator = async () => {
+    if (!selectedNumber || !collaboratorEmail) return;
+    
+    setCollaboratorLoading(true);
+    try {
+      await api.post(`/phone-numbers/${selectedNumber.id}/collaborators`, {
+        email: collaboratorEmail,
+        permissions: collaboratorPermissions
+      });
+      toast.success(t?.phoneNumbers?.collaboratorAdded || 'Collaborator added successfully');
+      setCollaboratorEmail('');
+      // Reload phone numbers and update selectedNumber
+      const response = await api.get('/phone-numbers/');
+      setPhoneNumbers(response.data);
+      const updated = response.data.find((p: PhoneNumber) => p.id === selectedNumber.id);
+      if (updated) setSelectedNumber(updated);
+    } catch (error: any) {
+      toast.error((t?.phoneNumbers?.collaboratorError || 'Failed to add collaborator') + ': ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setCollaboratorLoading(false);
+    }
+  };
+
+  const handleRemoveCollaborator = async (collaboratorId: number) => {
+    if (!selectedNumber) return;
+    
+    if (!confirm(t?.phoneNumbers?.confirmRemoveCollaborator || 'Remove this collaborator?')) return;
+    
+    try {
+      await api.delete(`/phone-numbers/${selectedNumber.id}/collaborators/${collaboratorId}`);
+      toast.success(t?.phoneNumbers?.collaboratorRemoved || 'Collaborator removed');
+      // Reload phone numbers and update selectedNumber
+      const response = await api.get('/phone-numbers/');
+      setPhoneNumbers(response.data);
+      const updated = response.data.find((p: PhoneNumber) => p.id === selectedNumber.id);
+      if (updated) setSelectedNumber(updated);
+    } catch (error: any) {
+      toast.error((t?.phoneNumbers?.collaboratorError || 'Failed to remove collaborator') + ': ' + (error.response?.data?.detail || error.message));
+    }
   };
 
   const handleRequestNumber = async (e: React.FormEvent) => {
@@ -599,16 +654,24 @@ export const PhoneNumbersPage: React.FC = () => {
                       )}
                     </div>
                     {/* Collaborators Section */}
-                    {number.agent_id && number.collaborators && number.collaborators.length > 0 && (
-                      <div className="mt-3 text-sm">
-                        <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
-                          {t?.phoneNumbers?.collaborators || 'Collaborators'}
-                        </div>
-                        <div className="space-y-1 bg-purple-50 dark:bg-purple-900/20 p-2 rounded-lg">
-                          <div className="flex items-center gap-1 text-purple-700 dark:text-purple-400 font-medium mb-2">
+                    <div className="mt-3 text-sm">
+                      <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
+                        {t?.phoneNumbers?.collaborators || 'Collaborators'}
+                      </div>
+                      <div className="space-y-1 bg-purple-50 dark:bg-purple-900/20 p-2 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1 text-purple-700 dark:text-purple-400 font-medium">
                             <UserGroupIcon className="h-4 w-4" />
-                            {t?.phoneNumbers?.agentCollaborators || 'Agent Collaborators'}
+                            {t?.phoneNumbers?.phoneCollaborators || 'Collaborators'}
                           </div>
+                          <button
+                            onClick={() => openCollaboratorsModal(number)}
+                            className="text-xs text-purple-600 dark:text-purple-400 hover:underline"
+                          >
+                            {t?.phoneNumbers?.manage || 'Manage'}
+                          </button>
+                        </div>
+                        {number.collaborators && number.collaborators.length > 0 ? (
                           <div className="space-y-1">
                             {number.collaborators.map((collab: Collaborator) => (
                               <div key={collab.id} className="flex items-center justify-between text-xs">
@@ -621,9 +684,13 @@ export const PhoneNumbersPage: React.FC = () => {
                               </div>
                             ))}
                           </div>
-                        </div>
+                        ) : (
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {t?.phoneNumbers?.noCollaborators || 'No collaborators added yet'}
+                          </p>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
                 </div>
                 <div className="text-right space-y-2">
@@ -1573,6 +1640,128 @@ export const PhoneNumbersPage: React.FC = () => {
                 ) : (
                   'Save Changes'
                 )}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Collaborators Modal */}
+      {showCollaboratorsModal && selectedNumber && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4">
+          <Card className="max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                {t?.phoneNumbers?.manageCollaborators || 'Manage Collaborators'}
+              </h2>
+              <button
+                onClick={() => setShowCollaboratorsModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              {t?.phoneNumbers?.collaboratorsFor || 'Collaborators for'} <strong>{selectedNumber.phone_number}</strong>
+            </p>
+            
+            {/* Add Collaborator Form */}
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  {t?.phoneNumbers?.collaboratorEmail || 'Collaborator Email'}
+                </label>
+                <input
+                  type="email"
+                  value={collaboratorEmail}
+                  onChange={(e) => setCollaboratorEmail(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  placeholder="user@example.com"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  {t?.phoneNumbers?.permissions || 'Permissions'}
+                </label>
+                <select
+                  value={collaboratorPermissions}
+                  onChange={(e) => setCollaboratorPermissions(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                >
+                  <option value="view">{t?.phoneNumbers?.viewOnly || 'View Only'}</option>
+                  <option value="view,edit">{t?.phoneNumbers?.viewEdit || 'View & Edit'}</option>
+                  <option value="view,edit,delete">{t?.phoneNumbers?.fullAccess || 'Full Access'}</option>
+                </select>
+              </div>
+              <Button
+                onClick={handleAddCollaborator}
+                disabled={!collaboratorEmail || collaboratorLoading}
+                className="w-full"
+              >
+                {collaboratorLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    {t?.phoneNumbers?.adding || 'Adding...'}
+                  </>
+                ) : (
+                  <>
+                    <UserGroupIcon className="h-4 w-4 mr-2" />
+                    {t?.phoneNumbers?.addCollaborator || 'Add Collaborator'}
+                  </>
+                )}
+              </Button>
+            </div>
+            
+            {/* Current Collaborators List */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+                {t?.phoneNumbers?.currentCollaborators || 'Current Collaborators'}
+              </h3>
+              {selectedNumber.collaborators && selectedNumber.collaborators.length > 0 ? (
+                <div className="space-y-2">
+                  {selectedNumber.collaborators.map((collab: Collaborator) => (
+                    <div
+                      key={collab.id}
+                      className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg"
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">
+                          {collab.user_name || collab.user_email}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {collab.user_email}
+                        </p>
+                        <span className="inline-block mt-1 px-2 py-0.5 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded text-xs">
+                          {collab.permissions.split(',').map((p: string) => p.trim()).join(', ')}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveCollaborator(collab.id)}
+                        className="text-red-600 hover:text-red-700 p-1"
+                        title={t?.phoneNumbers?.removeCollaborator || 'Remove collaborator'}
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+                  {t?.phoneNumbers?.noCollaboratorsYet || 'No collaborators added yet'}
+                </p>
+              )}
+            </div>
+            
+            <div className="mt-6 pt-4 border-t">
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => setShowCollaboratorsModal(false)}
+              >
+                {t?.common?.close || 'Close'}
               </Button>
             </div>
           </Card>

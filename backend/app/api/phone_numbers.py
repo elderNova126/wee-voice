@@ -17,10 +17,9 @@ from app.models import (
     VerificationDocument,
     DocumentType,
     VerificationStatus,
-    AgentCollaborator,
-    VoiceAgent,
 )
 from app.core.security import get_current_user
+from pydantic import EmailStr
 from app.services.storage_service import get_storage_service
 import logging
 
@@ -104,7 +103,7 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address, busy_action, busy_audio_file_url,
                    restriction_mode, blocked_countries, blocked_numbers, allowed_countries,
-                   created_at, updated_at, activated_at
+                   collaborators, created_at, updated_at, activated_at
             FROM phone_numbers
             WHERE {filter_clause}
         """), params)
@@ -136,9 +135,10 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
             phone.blocked_countries = row[21]
             phone.blocked_numbers = row[22]
             phone.allowed_countries = row[23]
-            phone.created_at = row[24]
-            phone.updated_at = row[25]
-            phone.activated_at = row[26]
+            phone.collaborators = row[24]
+            phone.created_at = row[25]
+            phone.updated_at = row[26]
+            phone.activated_at = row[27]
             phones.append(phone)
         return phones
     except Exception as e:
@@ -307,38 +307,21 @@ def _parse_json_field(value) -> list:
     return []
 
 
-def get_agent_collaborators(db: Session, agent_id: int) -> List[dict]:
-    """Get collaborators for an agent"""
-    if not agent_id:
+def parse_collaborators(collaborators_json: str) -> List[dict]:
+    """Parse collaborators JSON field from phone number"""
+    if not collaborators_json:
         return []
-    
-    collaborators = db.query(AgentCollaborator).filter(
-        AgentCollaborator.agent_id == agent_id,
-        AgentCollaborator.is_active == True
-    ).all()
-    
-    result = []
-    for collab in collaborators:
-        user = db.query(User).filter(User.id == collab.user_id).first()
-        if user:
-            result.append({
-                "id": collab.id,
-                "user_id": collab.user_id,
-                "user_email": user.email,
-                "user_name": user.full_name,
-                "permissions": collab.permissions,
-                "is_active": collab.is_active
-            })
-    
-    return result
+    try:
+        collaborators = json.loads(collaborators_json)
+        return collaborators if isinstance(collaborators, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 def phone_number_to_response(phone: PhoneNumber, db: Session = None) -> dict:
     """Convert PhoneNumber object to response dict with has_sip_config"""
-    # Get collaborators if agent is assigned and db is provided
-    collaborators = []
-    if db and phone.agent_id:
-        collaborators = get_agent_collaborators(db, phone.agent_id)
+    # Parse collaborators from JSON field
+    collaborators = parse_collaborators(phone.collaborators) if phone.collaborators else []
     
     return {
         "id": phone.id,
@@ -793,3 +776,190 @@ async def upload_busy_audio(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload audio file: {str(e)}"
         )
+
+
+# ===================================================================
+# PHONE NUMBER COLLABORATORS ENDPOINTS
+# ===================================================================
+
+class CollaboratorCreate(BaseModel):
+    email: EmailStr
+    permissions: str  # Comma-separated: "view,edit" or "view,edit,delete"
+
+
+class CollaboratorUpdate(BaseModel):
+    permissions: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class CollaboratorResponse(BaseModel):
+    id: int
+    user_id: int
+    user_email: str
+    user_name: Optional[str] = None
+    permissions: str
+    is_active: bool = True
+    added_at: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+@router.get("/{phone_number_id}/collaborators", response_model=List[CollaboratorResponse])
+async def list_phone_collaborators(
+    phone_number_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all collaborators for a phone number"""
+    # Check if user owns this phone number
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    
+    collaborators = parse_collaborators(phone_number.collaborators)
+    return collaborators
+
+
+@router.post("/{phone_number_id}/collaborators", response_model=CollaboratorResponse)
+async def add_phone_collaborator(
+    phone_number_id: int,
+    collaborator_data: CollaboratorCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add a collaborator to a phone number"""
+    # Check if user owns this phone number
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    
+    # Find user by email
+    user = db.query(User).filter(User.email == collaborator_data.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if user is trying to add themselves
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot add yourself as a collaborator")
+    
+    # Parse existing collaborators
+    collaborators = parse_collaborators(phone_number.collaborators)
+    
+    # Check if collaborator already exists
+    existing_idx = None
+    for idx, collab in enumerate(collaborators):
+        if collab.get("user_id") == user.id:
+            existing_idx = idx
+            break
+    
+    # Create new collaborator entry
+    new_collab = {
+        "id": user.id,  # Use user_id as collaborator id for simplicity
+        "user_id": user.id,
+        "user_email": user.email,
+        "user_name": user.full_name,
+        "permissions": collaborator_data.permissions,
+        "is_active": True,
+        "added_at": datetime.utcnow().isoformat()
+    }
+    
+    if existing_idx is not None:
+        # Update existing collaborator
+        collaborators[existing_idx] = new_collab
+    else:
+        # Add new collaborator
+        collaborators.append(new_collab)
+    
+    # Save updated collaborators
+    phone_number.collaborators = json.dumps(collaborators)
+    db.commit()
+    
+    logger.info(f"Added collaborator {user.email} to phone number {phone_number.phone_number}")
+    
+    return new_collab
+
+
+@router.put("/{phone_number_id}/collaborators/{collaborator_id}", response_model=CollaboratorResponse)
+async def update_phone_collaborator(
+    phone_number_id: int,
+    collaborator_id: int,
+    update_data: CollaboratorUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a phone number collaborator's permissions"""
+    # Check if user owns this phone number
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    
+    # Parse collaborators and find the one to update
+    collaborators = parse_collaborators(phone_number.collaborators)
+    
+    found_idx = None
+    for idx, collab in enumerate(collaborators):
+        if collab.get("user_id") == collaborator_id or collab.get("id") == collaborator_id:
+            found_idx = idx
+            break
+    
+    if found_idx is None:
+        raise HTTPException(status_code=404, detail="Collaborator not found")
+    
+    # Update fields
+    if update_data.permissions is not None:
+        collaborators[found_idx]["permissions"] = update_data.permissions
+    if update_data.is_active is not None:
+        collaborators[found_idx]["is_active"] = update_data.is_active
+    
+    # Save updated collaborators
+    phone_number.collaborators = json.dumps(collaborators)
+    db.commit()
+    
+    return collaborators[found_idx]
+
+
+@router.delete("/{phone_number_id}/collaborators/{collaborator_id}")
+async def remove_phone_collaborator(
+    phone_number_id: int,
+    collaborator_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a collaborator from a phone number"""
+    # Check if user owns this phone number
+    phone_number = db.query(PhoneNumber).filter(
+        PhoneNumber.id == phone_number_id,
+        PhoneNumber.user_id == current_user.id
+    ).first()
+    
+    if not phone_number:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    
+    # Parse collaborators and find the one to remove
+    collaborators = parse_collaborators(phone_number.collaborators)
+    
+    new_collaborators = [c for c in collaborators if c.get("user_id") != collaborator_id and c.get("id") != collaborator_id]
+    
+    if len(new_collaborators) == len(collaborators):
+        raise HTTPException(status_code=404, detail="Collaborator not found")
+    
+    # Save updated collaborators
+    phone_number.collaborators = json.dumps(new_collaborators) if new_collaborators else None
+    db.commit()
+    
+    logger.info(f"Removed collaborator {collaborator_id} from phone number {phone_number.phone_number}")
+    
+    return {"message": "Collaborator removed successfully"}

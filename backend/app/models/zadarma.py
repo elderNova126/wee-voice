@@ -85,6 +85,10 @@ class PhoneNumber(Base):
     allowed_countries = Column(Text, nullable=True)  # JSON array of allowed country codes (whitelist mode)
     restriction_mode = Column(String, default="none")  # "none", "blacklist", "whitelist"
     
+    # Collaborators - stored as JSON array
+    # Format: [{"user_id": 1, "email": "user@example.com", "name": "User Name", "permissions": "view,edit", "added_at": "..."}]
+    collaborators = Column(Text, nullable=True)
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
