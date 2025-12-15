@@ -44,10 +44,12 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    High-quality audio resampling using scipy (FFT-based).
+    High-quality audio resampling using scipy.signal.resample_poly.
     
-    scipy.signal.resample uses Fourier method which properly handles
-    anti-aliasing and preserves audio quality much better than audioop.
+    resample_poly uses polyphase filtering which:
+    - Has proper anti-aliasing (preserves "assistant" clarity)
+    - Works well for streaming (no trembling between chunks)
+    - Lower latency than FFT-based resample
     """
     if from_rate == to_rate:
         return audio_bytes, state
@@ -55,13 +57,18 @@ def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None
     if SCIPY_AVAILABLE:
         try:
             # Convert bytes to numpy array (16-bit signed PCM)
-            samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+            samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float64)
             
-            # Calculate new number of samples
-            num_samples = int(len(samples) * to_rate / from_rate)
+            # Calculate up/down factors for rational resampling
+            # 24000 → 8000: ratio is 1/3, so up=1, down=3
+            # 8000 → 16000: ratio is 2/1, so up=2, down=1
+            from math import gcd
+            g = gcd(from_rate, to_rate)
+            up = to_rate // g
+            down = from_rate // g
             
-            # Use scipy's FFT-based resampling (high quality)
-            resampled = signal.resample(samples, num_samples)
+            # Use polyphase resampling (better for streaming)
+            resampled = signal.resample_poly(samples, up, down)
             
             # Convert back to int16
             resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
@@ -70,7 +77,7 @@ def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None
         except Exception as e:
             print(f"[RESAMPLE] scipy failed: {e}, falling back to audioop", flush=True)
     
-    # Fallback: use audioop (lower quality but always available)
+    # Fallback: use audioop
     if state is None:
         state = {}
     s = state.get('s')
