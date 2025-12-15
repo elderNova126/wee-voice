@@ -2,6 +2,7 @@
 Asterisk AudioSocket Handler
 
 Uses asyncio with TCP_NODELAY to ensure immediate frame delivery.
+Uses scipy for high-quality audio resampling.
 """
 import asyncio
 import socket
@@ -9,8 +10,16 @@ import struct
 import logging
 import audioop
 import uuid as uuid_lib
+import numpy as np
 from typing import Optional
 from datetime import datetime
+
+try:
+    from scipy import signal
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("[AUDIO] WARNING: scipy not available, using audioop for resampling", flush=True)
 
 from sqlalchemy.orm import Session
 
@@ -35,35 +44,35 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    Resample audio with state continuity.
+    High-quality audio resampling using scipy (FFT-based).
     
-    For 24k→8k: use two steps (24k→16k→8k) for cleaner conversion.
-    Single 3:1 ratio causes aliasing artifacts.
+    scipy.signal.resample uses Fourier method which properly handles
+    anti-aliasing and preserves audio quality much better than audioop.
     """
     if from_rate == to_rate:
         return audio_bytes, state
     
-    # Initialize state dict
+    if SCIPY_AVAILABLE:
+        try:
+            # Convert bytes to numpy array (16-bit signed PCM)
+            samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+            
+            # Calculate new number of samples
+            num_samples = int(len(samples) * to_rate / from_rate)
+            
+            # Use scipy's FFT-based resampling (high quality)
+            resampled = signal.resample(samples, num_samples)
+            
+            # Convert back to int16
+            resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
+            
+            return resampled.tobytes(), state
+        except Exception as e:
+            print(f"[RESAMPLE] scipy failed: {e}, falling back to audioop", flush=True)
+    
+    # Fallback: use audioop (lower quality but always available)
     if state is None:
         state = {}
-    
-    # Special case: 24kHz → 8kHz (Gemini output to phone)
-    # Use two steps: 24k→16k (1.5:1) then 16k→8k (2:1)
-    # This produces cleaner audio than single 3:1 step
-    if from_rate == 24000 and to_rate == 8000:
-        # Step 1: 24k → 16k
-        s1 = state.get('s1')
-        temp, s1 = audioop.ratecv(audio_bytes, 2, 1, 24000, 16000, s1)
-        state['s1'] = s1
-        
-        # Step 2: 16k → 8k  
-        s2 = state.get('s2')
-        result, s2 = audioop.ratecv(temp, 2, 1, 16000, 8000, s2)
-        state['s2'] = s2
-        
-        return result, state
-    
-    # All other conversions: single step
     s = state.get('s')
     result, s = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, s)
     state['s'] = s
@@ -200,30 +209,24 @@ class AudioSocketSession:
         """
         Send audio frames to Asterisk at precise 20ms intervals.
         
-        Uses small pre-buffer to smooth out brief Gemini pauses.
+        Simple: send audio immediately when available, silence when not.
+        Like web agent - no buffering, just direct passthrough.
         """
         import time
         t0 = time.time()
-        print(f"[SEND] Loop STARTED", flush=True)
+        print(f"[SEND] Loop STARTED (direct mode)", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
-        audio_buffer = b''  # Buffer to accumulate AI audio
+        audio_buffer = b''
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Small pre-buffer to smooth Gemini's generation pauses
-        # 60ms = 3 frames worth of audio at 8kHz
-        PRE_BUFFER_BYTES = FRAME_SIZE * 3  # 960 bytes = 60ms
-        playback_started = False
-        empty_frames = 0  # Count consecutive empty frames
-        
-        # Timing: maintain precise 20ms frame rate
         frame_duration = 0.02  # 20ms
         next_frame_time = time.time()
         
         try:
             while self.is_running:
-                # Collect all available AI audio into buffer (non-blocking)
+                # Get all available audio
                 while True:
                     try:
                         chunk = self.ai_audio_queue.get_nowait()
@@ -231,51 +234,29 @@ class AudioSocketSession:
                     except asyncio.QueueEmpty:
                         break
                 
-                # Pre-buffer: wait for 60ms of audio before starting
-                if not playback_started:
-                    if len(audio_buffer) >= PRE_BUFFER_BYTES:
-                        playback_started = True
-                        print(f"[SEND] Playback starting, buffer={len(audio_buffer)} bytes", flush=True)
-                    audio_data = SILENCE_FRAME
-                elif len(audio_buffer) >= FRAME_SIZE:
-                    # Normal playback
+                # Send audio or silence
+                if len(audio_buffer) >= FRAME_SIZE:
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
-                    empty_frames = 0
                 else:
-                    # Buffer low - allow 3 empty frames (60ms) before silence
-                    # This bridges brief Gemini generation pauses
-                    empty_frames += 1
-                    if len(audio_buffer) > 0:
-                        # Partial frame - pad with silence
-                        audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
-                        audio_buffer = b''
-                    elif empty_frames <= 3:
-                        # Brief pause - keep last audio level to avoid clicks
-                        audio_data = SILENCE_FRAME
-                    else:
-                        # Real silence
-                        audio_data = SILENCE_FRAME
+                    audio_data = SILENCE_FRAME
                 
-                # Send frame
                 try:
                     transport.write(header + audio_data)
                 except Exception as e:
-                    print(f"[SEND] Transport write FAILED: {e}", flush=True)
+                    print(f"[SEND] Write FAILED: {e}", flush=True)
                     break
                 
                 frames_sent += 1
-                if frames_sent <= 5:
-                    print(f"[SEND] Frame #{frames_sent} at {(time.time()-t0)*1000:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)} bytes", flush=True)
+                    print(f"[SEND] {frames_sent} frames", flush=True)
                 
-                # Precise timing: wait until next frame time
+                # Precise timing
                 next_frame_time += frame_duration
                 sleep_time = next_frame_time - time.time()
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
-                elif sleep_time < -0.1:  # More than 100ms behind, reset timing
+                elif sleep_time < -0.1:
                     next_frame_time = time.time()
                 
         except asyncio.CancelledError:
