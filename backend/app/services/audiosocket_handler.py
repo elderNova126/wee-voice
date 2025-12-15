@@ -101,11 +101,11 @@ class AudioSocketSession:
             await self.writer.drain()
             print(f"{ts()} 5 silence frames sent via writer.drain()", flush=True)
             
-            # Start the continuous send task
+            # Start the continuous send task with jitter buffering
             self.send_task = asyncio.create_task(self._send_loop())
             print(f"{ts()} Send task CREATED", flush=True)
             
-            # Read UUID
+            # Read UUID - do this quickly
             print(f"{ts()} Starting UUID read...", flush=True)
             await self._read_uuid()
             print(f"{ts()} UUID read complete: {self.call_uuid}", flush=True)
@@ -116,7 +116,9 @@ class AudioSocketSession:
             
             logger.info(f"Call UUID: {self.call_uuid}")
             
-            # Setup call (takes time for Gemini init)
+            # OPTIMIZATION: Start setup in parallel phases
+            # Phase 1: Quick DB checks (busy/blocked) - must complete before allowing call
+            # Phase 2: Gemini init - can overlap with starting to receive audio
             print(f"[HANDLE] Starting _setup_call...", flush=True)
             if not await self._setup_call():
                 print(f"[HANDLE] _setup_call FAILED", flush=True)
@@ -136,15 +138,15 @@ class AudioSocketSession:
                     await self._play_busy_message()
                 return
             
-            # Signal AI is ready
+            # Signal AI is ready - greeting should already be generating
             self.ai_ready.set()
-            print(f"[HANDLE] AI READY - will now process caller audio", flush=True)
+            print(f"{ts()} AI READY - will now process caller audio", flush=True)
             
             # Start AI tasks - CRITICAL: must start send_realtime_input to consume audio queue!
             ai_receive_task = asyncio.create_task(self._ai_receive_loop())
             caller_to_ai_task = asyncio.create_task(self._caller_audio_to_gemini_loop())
             gemini_input_task = asyncio.create_task(self.agent_service.send_realtime_input())
-            print(f"[HANDLE] Gemini input task STARTED", flush=True)
+            print(f"{ts()} Gemini input task STARTED", flush=True)
             
             # Main receive loop
             await self._receive_loop()
@@ -168,15 +170,27 @@ class AudioSocketSession:
             print(f"[HANDLE] Cleanup done", flush=True)
     
     async def _send_loop(self):
-        """Continuously send audio frames to Asterisk at precise 20ms intervals"""
+        """Continuously send audio frames to Asterisk at precise 20ms intervals with jitter buffering"""
         import time
         t0 = time.time()
-        print(f"[SEND] Loop STARTED", flush=True)
+        print(f"[SEND] Loop STARTED with jitter buffer", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
         audio_buffer = b''  # Buffer to accumulate AI audio
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        
+        # Jitter buffer configuration
+        # Wait for minimum buffer before starting playback to avoid stuttering
+        MIN_BUFFER_MS = 100  # Wait for 100ms of audio before starting
+        MIN_BUFFER_BYTES = int(8000 * 2 * MIN_BUFFER_MS / 1000)  # 8kHz * 2 bytes * seconds
+        IDEAL_BUFFER_MS = 150  # Try to maintain 150ms buffer
+        IDEAL_BUFFER_BYTES = int(8000 * 2 * IDEAL_BUFFER_MS / 1000)
+        
+        # State tracking
+        playback_started = False
+        silence_frames_sent = 0
+        last_had_audio = False
         
         # Timing: maintain precise 20ms frame rate
         frame_duration = 0.02  # 20ms
@@ -192,13 +206,51 @@ class AudioSocketSession:
                     except asyncio.QueueEmpty:
                         break
                 
-                # Get one frame's worth of data
-                if len(audio_buffer) >= FRAME_SIZE:
-                    audio_data = audio_buffer[:FRAME_SIZE]
-                    audio_buffer = audio_buffer[FRAME_SIZE:]
+                # Jitter buffer logic
+                buffer_len = len(audio_buffer)
+                
+                # If we haven't started playback yet, wait for minimum buffer
+                if not playback_started:
+                    if buffer_len >= MIN_BUFFER_BYTES:
+                        playback_started = True
+                        print(f"[SEND] Playback starting with {buffer_len} bytes buffered ({buffer_len/16:.0f}ms)", flush=True)
+                    else:
+                        # Not enough buffer yet, send silence
+                        audio_data = SILENCE_FRAME
+                        silence_frames_sent += 1
                 else:
-                    # Not enough audio, send silence
-                    audio_data = SILENCE_FRAME
+                    # Playback has started
+                    if buffer_len >= FRAME_SIZE:
+                        # We have audio to send
+                        audio_data = audio_buffer[:FRAME_SIZE]
+                        audio_buffer = audio_buffer[FRAME_SIZE:]
+                        
+                        # Smooth transition from silence to audio (fade in first frame)
+                        if not last_had_audio:
+                            audio_data = self._fade_in(audio_data)
+                        
+                        last_had_audio = True
+                        silence_frames_sent = 0
+                    else:
+                        # Buffer underrun - but don't immediately send silence
+                        # Wait a tiny bit to see if more audio arrives
+                        if silence_frames_sent < 3:  # Allow 60ms grace period
+                            # Stretch the last audio if we have any
+                            if buffer_len > 0:
+                                # Pad with zeros to make a full frame
+                                audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - buffer_len)
+                                audio_buffer = b''
+                            else:
+                                audio_data = SILENCE_FRAME
+                        else:
+                            # Real underrun - fade out then silence
+                            if last_had_audio:
+                                audio_data = self._fade_out(SILENCE_FRAME)
+                                last_had_audio = False
+                            else:
+                                audio_data = SILENCE_FRAME
+                        
+                        silence_frames_sent += 1
                 
                 # Send frame
                 try:
@@ -211,7 +263,8 @@ class AudioSocketSession:
                 if frames_sent <= 5:
                     print(f"[SEND] Frame #{frames_sent} at {(time.time()-t0)*1000:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}", flush=True)
+                    status = "playing" if playback_started else "buffering"
+                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)} bytes, {status}", flush=True)
                 
                 # Precise timing: wait until next frame time
                 next_frame_time += frame_duration
@@ -227,6 +280,43 @@ class AudioSocketSession:
             print(f"[SEND] ERROR: {e}", flush=True)
         
         print(f"[SEND] ENDED: {frames_sent} total", flush=True)
+    
+    def _fade_in(self, audio_data: bytes, duration_samples: int = 40) -> bytes:
+        """Apply fade-in to audio frame to avoid clicks"""
+        if len(audio_data) < 4:
+            return audio_data
+        
+        samples = []
+        for i in range(0, len(audio_data), 2):
+            sample = struct.unpack('<h', audio_data[i:i+2])[0]
+            samples.append(sample)
+        
+        # Apply linear fade-in to first N samples
+        for i in range(min(duration_samples, len(samples))):
+            factor = i / duration_samples
+            samples[i] = int(samples[i] * factor)
+        
+        # Pack back to bytes
+        return b''.join(struct.pack('<h', s) for s in samples)
+    
+    def _fade_out(self, audio_data: bytes, duration_samples: int = 40) -> bytes:
+        """Apply fade-out to audio frame to avoid clicks"""
+        if len(audio_data) < 4:
+            return audio_data
+        
+        samples = []
+        for i in range(0, len(audio_data), 2):
+            sample = struct.unpack('<h', audio_data[i:i+2])[0]
+            samples.append(sample)
+        
+        # Apply linear fade-out to last N samples
+        fade_start = max(0, len(samples) - duration_samples)
+        for i in range(fade_start, len(samples)):
+            factor = (len(samples) - i) / duration_samples
+            samples[i] = int(samples[i] * factor)
+        
+        # Pack back to bytes
+        return b''.join(struct.pack('<h', s) for s in samples)
     
     async def _receive_loop(self):
         """Receive audio from Asterisk"""
