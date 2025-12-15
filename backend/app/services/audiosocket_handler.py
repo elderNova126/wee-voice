@@ -29,6 +29,28 @@ MSG_ERROR = 0xFF
 FRAME_SIZE = 320  # 160 samples * 2 bytes = 20ms at 8kHz
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
+
+def high_quality_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
+    """
+    Higher quality resampling using audioop with proper state management.
+    For downsampling, we do it in steps to preserve quality.
+    """
+    if from_rate == to_rate:
+        return audio_bytes, state
+    
+    # For large rate changes, do in steps for better quality
+    if from_rate == 24000 and to_rate == 8000:
+        # 24k -> 12k -> 8k (two steps)
+        audio_12k, state1 = audioop.ratecv(audio_bytes, 2, 1, 24000, 12000, state)
+        audio_8k, state2 = audioop.ratecv(audio_12k, 2, 1, 12000, 8000, None)
+        return audio_8k, state2
+    elif from_rate == 8000 and to_rate == 16000:
+        # Direct 2x upsampling is fine
+        return audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state)
+    else:
+        # Default
+        return audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state)
+
 # Track active calls per phone number
 _active_calls: dict[int, str] = {}  # phone_number_id -> call_uuid
 _active_calls_lock = asyncio.Lock()
@@ -146,7 +168,7 @@ class AudioSocketSession:
             print(f"[HANDLE] Cleanup done", flush=True)
     
     async def _send_loop(self):
-        """Continuously send audio frames to Asterisk"""
+        """Continuously send audio frames to Asterisk at precise 20ms intervals"""
         import time
         t0 = time.time()
         print(f"[SEND] Loop STARTED", flush=True)
@@ -154,6 +176,11 @@ class AudioSocketSession:
         frames_sent = 0
         transport = self.writer.transport
         audio_buffer = b''  # Buffer to accumulate AI audio
+        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        
+        # Timing: maintain precise 20ms frame rate
+        frame_duration = 0.02  # 20ms
+        next_frame_time = time.time()
         
         try:
             while self.is_running:
@@ -167,15 +194,12 @@ class AudioSocketSession:
                 
                 # Get one frame's worth of data
                 if len(audio_buffer) >= FRAME_SIZE:
-                    # Use buffered AI audio
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
                 else:
-                    # Not enough AI audio, use silence
                     audio_data = SILENCE_FRAME
                 
-                # Send frame directly via transport
-                header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+                # Send frame
                 try:
                     transport.write(header + audio_data)
                 except Exception as e:
@@ -183,14 +207,18 @@ class AudioSocketSession:
                     break
                 
                 frames_sent += 1
-                elapsed = (time.time() - t0) * 1000
                 if frames_sent <= 5:
-                    print(f"[SEND] Frame #{frames_sent} at {elapsed:.1f}ms", flush=True)
+                    print(f"[SEND] Frame #{frames_sent} at {(time.time()-t0)*1000:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
                     print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}", flush=True)
                 
-                # 20ms per frame = 50fps
-                await asyncio.sleep(0.02)
+                # Precise timing: wait until next frame time
+                next_frame_time += frame_duration
+                sleep_time = next_frame_time - time.time()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                elif sleep_time < -0.1:  # More than 100ms behind, reset timing
+                    next_frame_time = time.time()
                 
         except asyncio.CancelledError:
             print(f"[SEND] CANCELLED after {frames_sent}", flush=True)
@@ -306,60 +334,119 @@ class AudioSocketSession:
             callerid_file = f"/tmp/callerid_{self.call_uuid}"
             if os.path.exists(callerid_file):
                 with open(callerid_file, 'r') as f:
-                    self.caller_id = f.read().strip()
+                    raw_caller_id = f.read().strip()
                 os.unlink(callerid_file)  # Delete after reading
-                print(f"[UUID] Caller ID from file: {self.caller_id}")
+                
+                # Clean up caller ID (remove quotes, extra chars)
+                self.caller_id = raw_caller_id.strip('"\'').strip()
+                
+                # Normalize: ensure it starts with + for international
+                if self.caller_id and not self.caller_id.startswith('+') and self.caller_id[0].isdigit():
+                    # If starts with country code like 84xxx, add +
+                    if len(self.caller_id) > 9:
+                        self.caller_id = '+' + self.caller_id
+                
+                print(f"[UUID] Caller ID from file: raw='{raw_caller_id}', normalized='{self.caller_id}'", flush=True)
+                logger.info(f"[UUID] Read caller ID: raw='{raw_caller_id}', normalized='{self.caller_id}' from {callerid_file}")
             else:
-                print(f"[UUID] No caller ID file found")
+                print(f"[UUID] No caller ID file found at {callerid_file}", flush=True)
+                logger.warning(f"[UUID] No caller ID file at {callerid_file}")
                 self.caller_id = None
         except Exception as e:
-            print(f"[UUID] Error reading caller ID: {e}")
+            print(f"[UUID] Error reading caller ID: {e}", flush=True)
+            logger.error(f"[UUID] Error reading caller ID: {e}")
             self.caller_id = None
+    
+    def _parse_restriction_list(self, value) -> list:
+        """Parse restriction list that might be JSON, PostgreSQL array, or already a list"""
+        import json
+        
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            if not value or value.strip() in ('', '[]', '{}'):
+                return []
+            # Handle PostgreSQL array format: {VN} or {VN,UK}
+            if value.startswith('{') and value.endswith('}') and not value.startswith('{"'):
+                inner = value[1:-1]
+                if not inner:
+                    return []
+                return [item.strip().strip('"') for item in inner.split(',') if item.strip()]
+            # Handle JSON array format: ["VN"] or ["VN","UK"]
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
     
     def _is_caller_blocked(self, phone, caller_phone: str) -> bool:
         """Check if caller is blocked based on phone number restrictions"""
-        import json
-        
         restriction_mode = phone.restriction_mode or 'none'
         
+        # Log the restriction settings
+        logger.info(f"[RESTRICT] Checking call from {caller_phone}")
+        logger.info(f"[RESTRICT] Mode: {restriction_mode}")
+        logger.info(f"[RESTRICT] Raw blocked_countries: {phone.blocked_countries}")
+        logger.info(f"[RESTRICT] Raw blocked_numbers: {phone.blocked_numbers}")
+        logger.info(f"[RESTRICT] Raw allowed_countries: {phone.allowed_countries}")
+        print(f"[RESTRICT] Checking call from {caller_phone}, mode={restriction_mode}", flush=True)
+        
         if restriction_mode == 'none':
+            logger.info(f"[RESTRICT] No restrictions, allowing call")
+            print(f"[RESTRICT] No restrictions, allowing call", flush=True)
             return False
         
-        # Parse JSON fields
-        try:
-            blocked_countries = json.loads(phone.blocked_countries) if phone.blocked_countries else []
-            blocked_numbers = json.loads(phone.blocked_numbers) if phone.blocked_numbers else []
-            allowed_countries = json.loads(phone.allowed_countries) if phone.allowed_countries else []
-        except:
-            return False
+        # Parse restriction lists (handles both JSON and PostgreSQL array formats)
+        blocked_countries = self._parse_restriction_list(phone.blocked_countries)
+        blocked_numbers = self._parse_restriction_list(phone.blocked_numbers)
+        allowed_countries = self._parse_restriction_list(phone.allowed_countries)
+        
+        logger.info(f"[RESTRICT] Parsed blocked_countries: {blocked_countries}")
+        logger.info(f"[RESTRICT] Parsed blocked_numbers: {blocked_numbers}")
+        logger.info(f"[RESTRICT] Parsed allowed_countries: {allowed_countries}")
+        print(f"[RESTRICT] Parsed: blocked_countries={blocked_countries}, blocked_numbers={blocked_numbers}, allowed_countries={allowed_countries}", flush=True)
         
         # Get country code from phone number (basic extraction)
         caller_country = self._get_country_from_number(caller_phone)
+        logger.info(f"[RESTRICT] Detected caller country: {caller_country} from number {caller_phone}")
+        print(f"[RESTRICT] Caller country detected: {caller_country}", flush=True)
         
         if restriction_mode == 'blacklist':
             # Check if caller's country is blocked
-            if caller_country and caller_country in blocked_countries:
-                print(f"[RESTRICT] Country {caller_country} is blocked", flush=True)
+            if caller_country and caller_country.upper() in [c.upper() for c in blocked_countries]:
+                logger.warning(f"[RESTRICT] BLOCKED: Country {caller_country} is in blacklist")
+                print(f"[RESTRICT] BLOCKED: Country {caller_country} is in blacklist", flush=True)
                 return True
             
             # Check if caller's number matches blocked patterns
             for pattern in blocked_numbers:
                 if self._number_matches_pattern(caller_phone, pattern):
-                    print(f"[RESTRICT] Number {caller_phone} matches blocked pattern {pattern}", flush=True)
+                    logger.warning(f"[RESTRICT] BLOCKED: Number {caller_phone} matches pattern {pattern}")
+                    print(f"[RESTRICT] BLOCKED: Number {caller_phone} matches pattern {pattern}", flush=True)
                     return True
             
+            logger.info(f"[RESTRICT] ALLOWED: Caller {caller_phone} not in blacklist")
+            print(f"[RESTRICT] ALLOWED: Not in blacklist", flush=True)
             return False
         
         elif restriction_mode == 'whitelist':
             # Only allow if caller's country is in whitelist
             if not allowed_countries:
                 # Empty whitelist = block all
+                logger.warning(f"[RESTRICT] BLOCKED: Empty whitelist blocks all")
+                print(f"[RESTRICT] BLOCKED: Empty whitelist", flush=True)
                 return True
             
-            if caller_country and caller_country in allowed_countries:
+            if caller_country and caller_country.upper() in [c.upper() for c in allowed_countries]:
+                logger.info(f"[RESTRICT] ALLOWED: Country {caller_country} is in whitelist")
+                print(f"[RESTRICT] ALLOWED: In whitelist", flush=True)
                 return False
             
-            print(f"[RESTRICT] Country {caller_country} not in whitelist", flush=True)
+            logger.warning(f"[RESTRICT] BLOCKED: Country {caller_country} not in whitelist {allowed_countries}")
+            print(f"[RESTRICT] BLOCKED: Country {caller_country} not in whitelist", flush=True)
             return True
         
         return False
@@ -415,7 +502,12 @@ class AudioSocketSession:
                 logger.error("No phone number with SIP config found")
                 return False
             
+            # Refresh to get latest data from database
+            self.db.refresh(phone)
+            
             print(f"[SETUP] Found phone: {phone.phone_number}, agent_id: {phone.agent_id}", flush=True)
+            logger.info(f"[SETUP] Phone ID: {phone.id}, Number: {phone.phone_number}")
+            logger.info(f"[SETUP] Restriction config: mode={phone.restriction_mode}, blocked_countries={phone.blocked_countries}, blocked_numbers={phone.blocked_numbers}")
             self.phone_number_id = phone.id
             
             # Check if line is busy
@@ -460,13 +552,21 @@ class AudioSocketSession:
             if hasattr(self, 'caller_id') and self.caller_id:
                 caller_phone = self.caller_id
             
+            logger.info(f"[SETUP] Incoming call from: {caller_phone}")
+            logger.info(f"[SETUP] Phone number config - restriction_mode: {phone.restriction_mode}")
+            logger.info(f"[SETUP] Phone number config - blocked_countries: {phone.blocked_countries}")
+            logger.info(f"[SETUP] Phone number config - blocked_numbers: {phone.blocked_numbers}")
+            print(f"[SETUP] Caller: {caller_phone}, restriction_mode: {phone.restriction_mode}", flush=True)
+            
             # Check call restrictions
             if self._is_caller_blocked(phone, caller_phone):
                 print(f"[SETUP] BLOCKED: Caller {caller_phone} is restricted", flush=True)
-                logger.info(f"Call blocked from {caller_phone} due to restrictions")
+                logger.warning(f"[SETUP] Call BLOCKED from {caller_phone} due to restrictions")
                 self.is_busy_response = True
                 self.busy_config = {'action': 'busy_tone', 'audio_file_url': None}
                 return False
+            
+            logger.info(f"[SETUP] Call ALLOWED from {caller_phone}")
             
             self.call = Call(
                 user_id=self.agent.user_id,
@@ -523,6 +623,7 @@ class AudioSocketSession:
             # Check audio level (for debugging)
             if not hasattr(self, '_audio_level_count'):
                 self._audio_level_count = 0
+                self._caller_resample_state = None
             self._audio_level_count += 1
             
             try:
@@ -533,8 +634,10 @@ class AudioSocketSession:
             except:
                 pass
             
-            # Upsample 8kHz to 16kHz for Gemini
-            audio_16k, _ = audioop.ratecv(audio_8k, 2, 1, 8000, 16000, None)
+            # Upsample 8kHz to 16kHz for Gemini (with state for continuity)
+            audio_16k, self._caller_resample_state = high_quality_resample(
+                audio_8k, 8000, 16000, self._caller_resample_state
+            )
             
             # Queue for sending (non-blocking, drop if queue full)
             try:
@@ -545,10 +648,12 @@ class AudioSocketSession:
             print(f"[AUDIO→AI] Queue ERROR: {e}", flush=True)
     
     async def _caller_audio_to_gemini_loop(self):
-        """Forward caller audio to Gemini"""
+        """Forward caller audio to Gemini with low latency"""
         packets_sent = 0
         audio_buffer = b''
-        BATCH_SIZE = 3200  # ~100ms of 16kHz audio
+        # Smaller batch for lower latency (50ms instead of 100ms)
+        # 16kHz * 2 bytes * 0.05s = 1600 bytes
+        BATCH_SIZE = 1600  # ~50ms of 16kHz audio
         
         print(f"[AUDIO→AI] Queue loop STARTED", flush=True)
         try:
@@ -557,20 +662,26 @@ class AudioSocketSession:
                     # Get audio from queue with short timeout
                     audio_16k = await asyncio.wait_for(
                         self.caller_audio_queue.get(),
-                        timeout=0.1
+                        timeout=0.05  # Shorter timeout for responsiveness
                     )
                     audio_buffer += audio_16k
                 except asyncio.TimeoutError:
-                    pass
+                    # Send whatever we have even if not full batch (for responsiveness)
+                    if len(audio_buffer) >= 640 and self.agent_service:  # At least 20ms
+                        packets_sent += 1
+                        await self.agent_service.send_audio(audio_buffer)
+                        if packets_sent <= 10 or packets_sent % 50 == 0:
+                            print(f"[AUDIO→AI] #{packets_sent} sent ({len(audio_buffer)} bytes)", flush=True)
+                        audio_buffer = b''
+                    continue
                 
                 # Send when buffer is big enough
                 if len(audio_buffer) >= BATCH_SIZE and self.agent_service:
                     packets_sent += 1
-                    # send_audio just queues, send_realtime_input sends to Gemini
                     await self.agent_service.send_audio(audio_buffer)
                     
                     if packets_sent <= 10 or packets_sent % 50 == 0:
-                        print(f"[AUDIO→AI] #{packets_sent} queued ({len(audio_buffer)} bytes)", flush=True)
+                        print(f"[AUDIO→AI] #{packets_sent} sent ({len(audio_buffer)} bytes)", flush=True)
                     audio_buffer = b''
                     
         except asyncio.CancelledError:
@@ -582,6 +693,7 @@ class AudioSocketSession:
     async def _ai_receive_loop(self):
         """Receive audio from AI and queue for sending"""
         ai_packets = 0
+        resample_state = None  # Maintain state for better resampling
         print(f"[AI→AUDIO] Receive loop STARTED", flush=True)
         try:
             async for audio_24k in self.agent_service.receive_audio():
@@ -593,7 +705,8 @@ class AudioSocketSession:
                 if len(audio_24k) % 2:
                     audio_24k = audio_24k[:-1]
                 
-                audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, 24000, 8000, None)
+                # Use high quality resampling (24kHz → 8kHz in two steps)
+                audio_8k, resample_state = high_quality_resample(audio_24k, 24000, 8000, resample_state)
                 await self.ai_audio_queue.put(audio_8k)
                 
                 ai_packets += 1
