@@ -239,17 +239,21 @@ class AudioSocketSession:
         """
         Send audio frames to Asterisk at precise 20ms intervals.
         
-        Simple: send audio immediately when available, silence when not.
-        Like web agent - no buffering, just direct passthrough.
+        Uses small holdover buffer to prevent mid-word silences.
+        When buffer empties, holds last audio briefly before silence.
         """
         import time
         t0 = time.time()
-        print(f"[SEND] Loop STARTED (direct mode)", flush=True)
+        print(f"[SEND] Loop STARTED", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
         audio_buffer = b''
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        
+        # Track consecutive empty frames to avoid mid-word silence
+        empty_count = 0
+        MAX_EMPTY_BEFORE_SILENCE = 4  # 80ms grace period (4 x 20ms)
         
         frame_duration = 0.02  # 20ms
         next_frame_time = time.time()
@@ -261,15 +265,45 @@ class AudioSocketSession:
                     try:
                         chunk = self.ai_audio_queue.get_nowait()
                         audio_buffer += chunk
+                        empty_count = 0  # Reset when we get audio
                     except asyncio.QueueEmpty:
                         break
                 
-                # Send audio or silence
+                # Determine what to send
                 if len(audio_buffer) >= FRAME_SIZE:
+                    # Have enough audio - send it
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
+                    empty_count = 0
+                elif len(audio_buffer) > 0:
+                    # Partial audio - pad and send (don't lose it)
+                    audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
+                    audio_buffer = b''
+                    empty_count = 0
                 else:
-                    audio_data = SILENCE_FRAME
+                    # No audio - but wait before sending silence
+                    # This prevents mid-word gaps like "assis...tant"
+                    empty_count += 1
+                    if empty_count <= MAX_EMPTY_BEFORE_SILENCE:
+                        # Brief wait - try to get more audio
+                        try:
+                            chunk = await asyncio.wait_for(
+                                self.ai_audio_queue.get(), 
+                                timeout=0.015  # 15ms wait
+                            )
+                            audio_buffer += chunk
+                            if len(audio_buffer) >= FRAME_SIZE:
+                                audio_data = audio_buffer[:FRAME_SIZE]
+                                audio_buffer = audio_buffer[FRAME_SIZE:]
+                            else:
+                                audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
+                                audio_buffer = b''
+                            empty_count = 0
+                        except asyncio.TimeoutError:
+                            audio_data = SILENCE_FRAME
+                    else:
+                        # Real silence - no audio coming
+                        audio_data = SILENCE_FRAME
                 
                 try:
                     transport.write(header + audio_data)
@@ -279,7 +313,7 @@ class AudioSocketSession:
                 
                 frames_sent += 1
                 if frames_sent % 100 == 0:
-                    print(f"[SEND] {frames_sent} frames", flush=True)
+                    print(f"[SEND] {frames_sent} frames, buf={len(audio_buffer)}", flush=True)
                 
                 # Precise timing
                 next_frame_time += frame_duration
