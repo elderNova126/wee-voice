@@ -244,43 +244,26 @@ class AudioSocketSession:
     
     async def _unified_audio_loop(self):
         """
-        Adaptive buffer - adjusts to Gemini's variable timing.
+        Simple approach like Twilio example.
         
-        - Starts quickly with small buffer (100ms)
-        - Adapts frame rate based on buffer level
-        - When buffer low: slow down (22ms frames)
-        - When buffer high: speed up (18ms frames)
-        - Target: maintain 200ms buffer
+        - Simple soxr.resample (not streaming)
+        - Simple buffer
+        - Wait for audio when buffer empty (don't send silence immediately)
         """
         import time
         
-        print(f"[UNIFIED] Starting adaptive buffer", flush=True)
+        print(f"[UNIFIED] Starting (Twilio-style simple)", flush=True)
         
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         frames_sent = 0
         
-        # Streaming resampler
-        resampler = StreamingResampler(24000, 8000)
-        
-        # Buffer
-        audio_buffer = bytearray()
-        buffer_lock = asyncio.Lock()
+        # Simple queue
+        audio_queue = asyncio.Queue()
         receiver_done = False
         
-        # Adaptive settings
-        MIN_START_BUFFER = FRAME_SIZE * 5   # 100ms to start
-        TARGET_BUFFER = FRAME_SIZE * 10     # 200ms target
-        LOW_BUFFER = FRAME_SIZE * 3         # 60ms - slow down below this
-        HIGH_BUFFER = FRAME_SIZE * 15       # 300ms - speed up above this
-        
-        # Frame timing
-        NORMAL_FRAME = 0.020   # 20ms
-        SLOW_FRAME = 0.023     # 23ms (15% slower)
-        FAST_FRAME = 0.017     # 17ms (15% faster)
-        
         async def receiver():
-            """Fill buffer continuously"""
+            """Receive, resample with simple soxr, queue"""
             nonlocal receiver_done
             chunks = 0
             
@@ -293,10 +276,16 @@ class AudioSocketSession:
                     if len(audio_24k) % 2:
                         audio_24k = audio_24k[:-1]
                     
-                    audio_8k = resampler.process(audio_24k)
+                    # Simple resample like Twilio code
+                    if SOXR_AVAILABLE:
+                        audio_np = np.frombuffer(audio_24k, dtype=np.int16)
+                        audio_float = audio_np.astype(np.float32) / 32768.0
+                        resampled = soxr.resample(audio_float, 24000, 8000)
+                        audio_8k = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16).tobytes()
+                    else:
+                        audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, 24000, 8000, None)
                     
-                    async with buffer_lock:
-                        audio_buffer.extend(audio_8k)
+                    await audio_queue.put(audio_8k)
                     chunks += 1
                         
             except asyncio.CancelledError:
@@ -305,72 +294,74 @@ class AudioSocketSession:
                 print(f"[UNIFIED] Receiver error: {e}", flush=True)
             
             receiver_done = True
+            await audio_queue.put(None)  # Signal end
             print(f"[UNIFIED] Receiver done: {chunks} chunks", flush=True)
         
         async def sender():
-            """Adaptive sender - adjusts speed based on buffer"""
+            """Simple sender - wait for audio, don't rush to send silence"""
             nonlocal frames_sent
             
-            started = False
-            last_log = 0
+            audio_buffer = b''
+            frame_time = 0.02  # 20ms
             
             try:
                 while self.is_running:
-                    frame_start = time.perf_counter()
-                    
-                    async with buffer_lock:
-                        buf_len = len(audio_buffer)
-                        
-                        if receiver_done and buf_len == 0:
+                    # Collect available audio
+                    while True:
+                        try:
+                            chunk = audio_queue.get_nowait()
+                            if chunk is None:
+                                # End signal - drain buffer
+                                while len(audio_buffer) >= FRAME_SIZE:
+                                    transport.write(header + audio_buffer[:FRAME_SIZE])
+                                    audio_buffer = audio_buffer[FRAME_SIZE:]
+                                    frames_sent += 1
+                                    await asyncio.sleep(frame_time)
+                                if audio_buffer:
+                                    transport.write(header + audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer)))
+                                    frames_sent += 1
+                                return
+                            audio_buffer += chunk
+                        except asyncio.QueueEmpty:
                             break
-                        
-                        # Start after minimum buffer
-                        if not started:
-                            if buf_len >= MIN_START_BUFFER:
-                                started = True
-                                print(f"[UNIFIED] Started, buf={buf_len}", flush=True)
-                            else:
-                                transport.write(header + SILENCE_FRAME)
-                                frames_sent += 1
-                                await asyncio.sleep(NORMAL_FRAME)
-                                continue
-                        
-                        # Get frame
-                        if buf_len >= FRAME_SIZE:
-                            audio_data = bytes(audio_buffer[:FRAME_SIZE])
-                            del audio_buffer[:FRAME_SIZE]
-                        elif buf_len > 0:
-                            audio_data = bytes(audio_buffer) + b'\x00' * (FRAME_SIZE - buf_len)
-                            audio_buffer.clear()
-                        else:
-                            audio_data = SILENCE_FRAME
                     
-                    # Send
-                    try:
-                        transport.write(header + audio_data)
+                    # Send frame if we have enough
+                    if len(audio_buffer) >= FRAME_SIZE:
+                        transport.write(header + audio_buffer[:FRAME_SIZE])
+                        audio_buffer = audio_buffer[FRAME_SIZE:]
                         frames_sent += 1
-                    except:
-                        break
-                    
-                    # Adaptive timing based on buffer level
-                    if buf_len < LOW_BUFFER:
-                        frame_time = SLOW_FRAME  # Slow down to let buffer refill
-                    elif buf_len > HIGH_BUFFER:
-                        frame_time = FAST_FRAME  # Speed up to drain excess
+                    elif len(audio_buffer) > 0:
+                        # Partial buffer - wait for more or timeout
+                        try:
+                            chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.1)
+                            if chunk is None:
+                                transport.write(header + audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer)))
+                                frames_sent += 1
+                                return
+                            audio_buffer += chunk
+                            continue  # Try again with more data
+                        except asyncio.TimeoutError:
+                            # Timeout - send what we have
+                            transport.write(header + audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer)))
+                            audio_buffer = b''
+                            frames_sent += 1
                     else:
-                        frame_time = NORMAL_FRAME
+                        # No audio - wait up to 100ms for more
+                        try:
+                            chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.1)
+                            if chunk is None:
+                                return
+                            audio_buffer += chunk
+                            continue
+                        except asyncio.TimeoutError:
+                            # Really no audio - send silence
+                            transport.write(header + SILENCE_FRAME)
+                            frames_sent += 1
                     
-                    # Log periodically
-                    if frames_sent - last_log >= 100:
-                        last_log = frames_sent
-                        mode = "SLOW" if frame_time > NORMAL_FRAME else ("FAST" if frame_time < NORMAL_FRAME else "NORMAL")
-                        print(f"[UNIFIED] {frames_sent} frames, buf={buf_len}, mode={mode}", flush=True)
+                    if frames_sent % 100 == 0:
+                        print(f"[UNIFIED] {frames_sent} frames, buf={len(audio_buffer)}", flush=True)
                     
-                    # Wait
-                    elapsed = time.perf_counter() - frame_start
-                    sleep_time = frame_time - elapsed
-                    if sleep_time > 0:
-                        await asyncio.sleep(sleep_time)
+                    await asyncio.sleep(frame_time)
                         
             except asyncio.CancelledError:
                 pass
