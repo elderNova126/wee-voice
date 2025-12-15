@@ -167,9 +167,8 @@ class AudioSocketSession:
             await self.writer.drain()
             print(f"{ts()} 5 silence frames sent via writer.drain()", flush=True)
             
-            # Start the continuous send task with jitter buffering
-            self.send_task = asyncio.create_task(self._send_loop())
-            print(f"{ts()} Send task CREATED", flush=True)
+            # Note: Audio sending is handled by _unified_audio_loop (started later)
+            print(f"{ts()} Ready for audio", flush=True)
             
             # Read UUID - do this quickly
             print(f"{ts()} Starting UUID read...", flush=True)
@@ -189,14 +188,7 @@ class AudioSocketSession:
             if not await self._setup_call():
                 print(f"[HANDLE] _setup_call FAILED", flush=True)
                 
-                # Cancel the send task before playing busy tone
-                if self.send_task:
-                    self.send_task.cancel()
-                    try:
-                        await self.send_task
-                    except asyncio.CancelledError:
-                        pass
-                    print(f"[HANDLE] Send task cancelled", flush=True)
+                print(f"[HANDLE] Preparing busy response", flush=True)
                 
                 # Check if this was due to busy line or blocked call
                 if self.is_busy_response:
@@ -208,17 +200,18 @@ class AudioSocketSession:
             self.ai_ready.set()
             print(f"{ts()} AI READY - will now process caller audio", flush=True)
             
-            # Start AI tasks - CRITICAL: must start send_realtime_input to consume audio queue!
-            ai_receive_task = asyncio.create_task(self._ai_receive_loop())
+            # Start tasks
+            # CRITICAL: Use unified audio loop for Gemini→Phone (eliminates queue latency)
+            unified_audio_task = asyncio.create_task(self._unified_audio_loop())
             caller_to_ai_task = asyncio.create_task(self._caller_audio_to_gemini_loop())
             gemini_input_task = asyncio.create_task(self.agent_service.send_realtime_input())
-            print(f"{ts()} Gemini input task STARTED", flush=True)
+            print(f"{ts()} Unified audio loop STARTED", flush=True)
             
-            # Main receive loop
+            # Main receive loop (Asterisk → us)
             await self._receive_loop()
             
             # Cancel all tasks
-            for task in [caller_to_ai_task, gemini_input_task, ai_receive_task]:
+            for task in [caller_to_ai_task, gemini_input_task, unified_audio_task]:
                 task.cancel()
                 try:
                     await task
@@ -234,6 +227,91 @@ class AudioSocketSession:
             print(f"[HANDLE] Cleanup starting...", flush=True)
             await self._cleanup()
             print(f"[HANDLE] Cleanup done", flush=True)
+    
+    async def _unified_audio_loop(self):
+        """
+        UNIFIED audio loop - like web agent's direct path.
+        
+        Receives from Gemini and sends to Asterisk in ONE loop.
+        No queue = no latency between receive and send.
+        """
+        import time
+        
+        print(f"[UNIFIED] Starting - direct Gemini→Phone path", flush=True)
+        
+        transport = self.writer.transport
+        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        audio_buffer = b''
+        resample_state = None
+        frames_sent = 0
+        
+        frame_duration = 0.02  # 20ms
+        next_frame_time = time.time()
+        
+        # Create async iterator from Gemini
+        gemini_iter = self.agent_service.receive_audio().__aiter__()
+        pending_gemini = None  # Pending task for next Gemini chunk
+        
+        try:
+            while self.is_running:
+                # Try to get audio from Gemini (non-blocking)
+                if pending_gemini is None:
+                    pending_gemini = asyncio.create_task(gemini_iter.__anext__())
+                
+                # Check if Gemini audio is ready
+                if pending_gemini.done():
+                    try:
+                        audio_24k = pending_gemini.result()
+                        pending_gemini = None  # Get next chunk on next iteration
+                        
+                        if audio_24k and len(audio_24k) >= 2:
+                            if len(audio_24k) % 2:
+                                audio_24k = audio_24k[:-1]
+                            # Resample immediately - DIRECT like web agent
+                            audio_8k, resample_state = simple_resample(
+                                audio_24k, 24000, 8000, resample_state
+                            )
+                            audio_buffer += audio_8k
+                    except StopAsyncIteration:
+                        break
+                    except Exception as e:
+                        print(f"[UNIFIED] Gemini error: {e}", flush=True)
+                        break
+                
+                # Send frame to Asterisk
+                if len(audio_buffer) >= FRAME_SIZE:
+                    audio_data = audio_buffer[:FRAME_SIZE]
+                    audio_buffer = audio_buffer[FRAME_SIZE:]
+                else:
+                    audio_data = SILENCE_FRAME
+                
+                try:
+                    transport.write(header + audio_data)
+                    frames_sent += 1
+                except Exception as e:
+                    print(f"[UNIFIED] Write error: {e}", flush=True)
+                    break
+                
+                if frames_sent % 100 == 0:
+                    print(f"[UNIFIED] {frames_sent} frames, buf={len(audio_buffer)}", flush=True)
+                
+                # Precise 20ms timing
+                next_frame_time += frame_duration
+                sleep_time = next_frame_time - time.time()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                elif sleep_time < -0.1:
+                    next_frame_time = time.time()
+                    
+        except asyncio.CancelledError:
+            print(f"[UNIFIED] Cancelled after {frames_sent} frames", flush=True)
+        except Exception as e:
+            print(f"[UNIFIED] Error: {e}", flush=True)
+        finally:
+            if pending_gemini and not pending_gemini.done():
+                pending_gemini.cancel()
+        
+        print(f"[UNIFIED] Ended, {frames_sent} frames sent", flush=True)
     
     async def _send_loop(self):
         """
