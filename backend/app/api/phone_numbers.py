@@ -201,8 +201,14 @@ class PhoneNumberResponse(BaseModel):
     allowed_countries: Optional[List[str]] = None
     restriction_mode: Optional[str] = "none"
     
-    # Collaborators for assigned agent
+    # Collaborators
     collaborators: Optional[List[CollaboratorInfo]] = None
+    
+    # Ownership info
+    is_owner: Optional[bool] = True
+    role: Optional[str] = "owner"  # "owner" or "collaborator"
+    permissions: Optional[List[str]] = None  # User's permissions if collaborator
+    owner_email: Optional[str] = None  # Email of the owner (for collaborators)
     
     class Config:
         from_attributes = True
@@ -318,10 +324,29 @@ def parse_collaborators(collaborators_json: str) -> List[dict]:
         return []
 
 
-def phone_number_to_response(phone: PhoneNumber, db: Session = None) -> dict:
-    """Convert PhoneNumber object to response dict with has_sip_config"""
+def phone_number_to_response(phone: PhoneNumber, db: Session = None, current_user_id: int = None) -> dict:
+    """Convert PhoneNumber object to response dict with has_sip_config and ownership info"""
     # Parse collaborators from JSON field
     collaborators = parse_collaborators(phone.collaborators) if phone.collaborators else []
+    
+    # Determine ownership and role
+    is_owner = current_user_id is not None and phone.user_id == current_user_id
+    role = "owner"
+    permissions = ["view", "edit", "delete", "manage_collaborators"] if is_owner else []
+    owner_email = None
+    
+    if not is_owner and current_user_id:
+        # Check if user is a collaborator
+        for collab in collaborators:
+            if collab.get("user_id") == current_user_id and collab.get("is_active", True):
+                role = "collaborator"
+                perm_str = collab.get("permissions", "view")
+                permissions = [p.strip() for p in perm_str.split(",")]
+                # Get owner email
+                if db:
+                    owner = db.query(User).filter(User.id == phone.user_id).first()
+                    owner_email = owner.email if owner else None
+                break
     
     return {
         "id": phone.id,
@@ -348,8 +373,13 @@ def phone_number_to_response(phone: PhoneNumber, db: Session = None) -> dict:
         "blocked_countries": _parse_json_field(phone.blocked_countries),
         "blocked_numbers": _parse_json_field(phone.blocked_numbers),
         "allowed_countries": _parse_json_field(phone.allowed_countries),
-        # Collaborators for assigned agent
+        # Collaborators
         "collaborators": collaborators,
+        # Ownership info
+        "is_owner": is_owner,
+        "role": role,
+        "permissions": permissions,
+        "owner_email": owner_email,
     }
 
 
@@ -414,14 +444,44 @@ async def list_phone_numbers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all phone numbers for current user with agent collaborators"""
-    phone_numbers = safe_query_phone_numbers(
+    """List all phone numbers for current user (owned and collaborated)"""
+    # Get phone numbers owned by the user
+    owned_phones = safe_query_phone_numbers(
         db,
-        "user_id = :user_id ORDER BY created_at DESC",
+        "user_id = :user_id",
         {"user_id": current_user.id}
     )
     
-    return [phone_number_to_response(phone, db) for phone in phone_numbers]
+    # Get phone numbers where user is a collaborator
+    # Query all phone numbers with collaborators and filter in Python
+    all_phones_with_collabs = safe_query_phone_numbers(
+        db,
+        "collaborators IS NOT NULL AND collaborators != '' AND collaborators != '[]'"
+    )
+    
+    collaborated_phones = []
+    for phone in all_phones_with_collabs:
+        # Skip if user owns this phone
+        if phone.user_id == current_user.id:
+            continue
+        
+        # Check if user is in collaborators
+        collaborators = parse_collaborators(phone.collaborators)
+        for collab in collaborators:
+            if collab.get("user_id") == current_user.id and collab.get("is_active", True):
+                collaborated_phones.append(phone)
+                break
+    
+    # Combine and deduplicate (owned phones first, then collaborated)
+    all_phones = {phone.id: phone for phone in owned_phones}
+    for phone in collaborated_phones:
+        if phone.id not in all_phones:
+            all_phones[phone.id] = phone
+    
+    # Sort by created_at descending
+    sorted_phones = sorted(all_phones.values(), key=lambda p: p.created_at or datetime.min, reverse=True)
+    
+    return [phone_number_to_response(phone, db, current_user.id) for phone in sorted_phones]
 
 
 @router.get("/{phone_number_id}", response_model=PhoneNumberResponse)

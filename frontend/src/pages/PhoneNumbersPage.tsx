@@ -55,6 +55,11 @@ interface PhoneNumber {
   allowed_countries?: string[];
   // Collaborators
   collaborators?: Collaborator[];
+  // Ownership info
+  is_owner?: boolean;
+  role?: 'owner' | 'collaborator';
+  permissions?: string[];
+  owner_email?: string | null;
 }
 
 interface Agent {
@@ -605,11 +610,11 @@ export const PhoneNumbersPage: React.FC = () => {
       ) : (
         <div className="grid gap-6">
           {phoneNumbers.map((number: PhoneNumber) => (
-            <Card key={number.id}>
+            <Card key={number.id} className={number.role === 'collaborator' ? 'border-2 border-purple-200 dark:border-purple-800' : ''}>
               <div className="flex items-start justify-between">
                 <div className="flex items-center space-x-4">
-                  <div className="p-3 bg-indigo-100 dark:bg-indigo-900 rounded-lg">
-                    <PhoneIcon className="text-indigo-600 dark:text-indigo-400 h-6 w-6" />
+                  <div className={`p-3 rounded-lg ${number.role === 'collaborator' ? 'bg-purple-100 dark:bg-purple-900' : 'bg-indigo-100 dark:bg-indigo-900'}`}>
+                    <PhoneIcon className={`h-6 w-6 ${number.role === 'collaborator' ? 'text-purple-600 dark:text-purple-400' : 'text-indigo-600 dark:text-indigo-400'}`} />
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
@@ -653,7 +658,8 @@ export const PhoneNumbersPage: React.FC = () => {
                         </p>
                       )}
                     </div>
-                    {/* Collaborators Section */}
+                    {/* Collaborators Section - Only show for owners */}
+                    {number.is_owner !== false && (
                     <div className="mt-3 text-sm">
                       <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
                         {t?.phoneNumbers?.collaborators || 'Collaborators'}
@@ -691,10 +697,32 @@ export const PhoneNumbersPage: React.FC = () => {
                         )}
                       </div>
                     </div>
+                    )}
                   </div>
                 </div>
                 <div className="text-right space-y-2">
-                  {getStatusBadge(number.status)}
+                  <div className="flex flex-wrap gap-2 justify-end">
+                    {getStatusBadge(number.status)}
+                    {number.role === 'collaborator' && (
+                      <Badge className="bg-purple-500">
+                        {t?.phoneNumbers?.shared || 'Shared'}
+                      </Badge>
+                    )}
+                  </div>
+                  {number.role === 'collaborator' && number.owner_email && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {t?.phoneNumbers?.sharedBy || 'Shared by'}: {number.owner_email}
+                    </p>
+                  )}
+                  {number.role === 'collaborator' && number.permissions && (
+                    <div className="flex flex-wrap gap-1 justify-end">
+                      {number.permissions.map((perm) => (
+                        <span key={perm} className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded text-xs">
+                          {perm}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex flex-col gap-2">
                     {number.status === 'pending' || number.status === 'documents_submitted' ? (
                       <Button
@@ -710,7 +738,7 @@ export const PhoneNumbersPage: React.FC = () => {
                         {t?.phoneNumbers?.uploadDocuments || 'Upload Documents'}
                       </Button>
                     ) : null}
-                    {(number.status === 'active' || number.status === 'approved') && (
+                    {(number.status === 'active' || number.status === 'approved') && (number.is_owner || number.permissions?.includes('edit')) && (
                       <>
                         <Button
                           size="sm"
@@ -735,18 +763,20 @@ export const PhoneNumbersPage: React.FC = () => {
                         </Button>
                       </>
                     )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 border-red-300 dark:border-red-700"
-                      onClick={() => {
-                        setPhoneNumberToDelete(number);
-                        setShowDeleteModal(true);
-                      }}
-                    >
-                      <TrashIcon className="mr-2 h-3.5 w-3.5" />
-                      {t?.common?.delete || 'Delete'}
-                    </Button>
+                    {(number.is_owner || number.permissions?.includes('delete')) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 border-red-300 dark:border-red-700"
+                        onClick={() => {
+                          setPhoneNumberToDelete(number);
+                          setShowDeleteModal(true);
+                        }}
+                      >
+                        <TrashIcon className="mr-2 h-3.5 w-3.5" />
+                        {t?.common?.delete || 'Delete'}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
