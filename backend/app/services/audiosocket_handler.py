@@ -813,9 +813,15 @@ class AudioSocketSession:
     async def _ai_receive_loop(self):
         """Receive audio from AI and queue for sending"""
         ai_packets = 0
-        resample_state = None  # Maintain state for continuity between chunks
+        resample_state = None
         total_bytes_in = 0
         total_bytes_out = 0
+        
+        # Accumulate audio before resampling to reduce edge effects
+        # 40ms at 24kHz = 960 samples * 2 bytes = 1920 bytes minimum
+        MIN_RESAMPLE_BYTES = 1920
+        pending_audio = b''
+        
         print(f"[AI→AUDIO] Receive loop STARTED", flush=True)
         try:
             async for audio_24k in self.agent_service.receive_audio():
@@ -827,10 +833,17 @@ class AudioSocketSession:
                 if len(audio_24k) % 2:
                     audio_24k = audio_24k[:-1]
                 
+                # Accumulate audio
+                pending_audio += audio_24k
                 total_bytes_in += len(audio_24k)
                 
-                # Resample 24kHz to 8kHz for phone
-                audio_8k, resample_state = simple_resample(audio_24k, 24000, 8000, resample_state)
+                # Only resample when we have enough data (reduces edge effects)
+                if len(pending_audio) < MIN_RESAMPLE_BYTES:
+                    continue
+                
+                # Resample the accumulated audio
+                audio_8k, resample_state = simple_resample(pending_audio, 24000, 8000, resample_state)
+                pending_audio = b''
                 total_bytes_out += len(audio_8k)
                 
                 await self.ai_audio_queue.put(audio_8k)
@@ -839,6 +852,12 @@ class AudioSocketSession:
                 if ai_packets <= 5 or ai_packets % 50 == 0:
                     ratio = total_bytes_out / total_bytes_in if total_bytes_in > 0 else 0
                     print(f"[AI→AUDIO] #{ai_packets}, in={len(audio_24k)}, out={len(audio_8k)}, ratio={ratio:.2f}", flush=True)
+            
+            # Flush any remaining audio
+            if pending_audio and len(pending_audio) >= 4:
+                audio_8k, _ = simple_resample(pending_audio, 24000, 8000, resample_state)
+                await self.ai_audio_queue.put(audio_8k)
+                total_bytes_out += len(audio_8k)
                 
         except asyncio.CancelledError:
             print(f"[AI→AUDIO] Cancelled after {ai_packets} packets", flush=True)
