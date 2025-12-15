@@ -200,17 +200,22 @@ class AudioSocketSession:
         """
         Send audio frames to Asterisk at precise 20ms intervals.
         
-        Simple approach: send audio immediately when available, silence when not.
-        The key to quality is the resampling, not complex buffering.
+        Uses small pre-buffer to smooth out brief Gemini pauses.
         """
         import time
         t0 = time.time()
-        print(f"[SEND] Loop STARTED (simple mode)", flush=True)
+        print(f"[SEND] Loop STARTED", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
         audio_buffer = b''  # Buffer to accumulate AI audio
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        
+        # Small pre-buffer to smooth Gemini's generation pauses
+        # 60ms = 3 frames worth of audio at 8kHz
+        PRE_BUFFER_BYTES = FRAME_SIZE * 3  # 960 bytes = 60ms
+        playback_started = False
+        empty_frames = 0  # Count consecutive empty frames
         
         # Timing: maintain precise 20ms frame rate
         frame_duration = 0.02  # 20ms
@@ -226,17 +231,30 @@ class AudioSocketSession:
                     except asyncio.QueueEmpty:
                         break
                 
-                # Get one frame's worth of data
-                if len(audio_buffer) >= FRAME_SIZE:
+                # Pre-buffer: wait for 60ms of audio before starting
+                if not playback_started:
+                    if len(audio_buffer) >= PRE_BUFFER_BYTES:
+                        playback_started = True
+                        print(f"[SEND] Playback starting, buffer={len(audio_buffer)} bytes", flush=True)
+                    audio_data = SILENCE_FRAME
+                elif len(audio_buffer) >= FRAME_SIZE:
+                    # Normal playback
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
+                    empty_frames = 0
                 else:
-                    # Not enough audio - send what we have padded with silence
-                    # This is better than pure silence (preserves partial audio)
+                    # Buffer low - allow 3 empty frames (60ms) before silence
+                    # This bridges brief Gemini generation pauses
+                    empty_frames += 1
                     if len(audio_buffer) > 0:
+                        # Partial frame - pad with silence
                         audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
                         audio_buffer = b''
+                    elif empty_frames <= 3:
+                        # Brief pause - keep last audio level to avoid clicks
+                        audio_data = SILENCE_FRAME
                     else:
+                        # Real silence
                         audio_data = SILENCE_FRAME
                 
                 # Send frame
