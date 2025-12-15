@@ -363,7 +363,12 @@ class AudioSocketSession:
             if os.path.exists(callerid_file):
                 with open(callerid_file, 'r') as f:
                     raw_caller_id = f.read().strip()
-                os.unlink(callerid_file)  # Delete after reading
+                
+                # Try to delete the file (may fail due to /tmp sticky bit)
+                try:
+                    os.unlink(callerid_file)
+                except PermissionError:
+                    pass  # Can't delete, that's OK - Asterisk can clean it up
                 
                 print(f"[UUID] Raw file content: '{raw_caller_id}'", flush=True)
                 
