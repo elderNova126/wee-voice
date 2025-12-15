@@ -16,6 +16,11 @@ import {
   ExclamationTriangleIcon,
   TrashIcon,
   UserGroupIcon,
+  Cog6ToothIcon,
+  EnvelopeIcon,
+  GlobeAltIcon,
+  SignalIcon,
+  BellAlertIcon,
 } from '@heroicons/react/24/outline'
 
 interface Collaborator {
@@ -25,6 +30,20 @@ interface Collaborator {
   user_name: string | null;
   permissions: string;
   is_active: boolean;
+  status?: string;
+}
+
+interface PendingInvite {
+  id: number;
+  user_id: number;
+  user_email: string;
+  user_name: string | null;
+  permissions: string;
+  status: string;
+  phone_number_id: number;
+  phone_number_display: string;
+  business_name?: string;
+  invited_by_email?: string;
 }
 
 interface PhoneNumber {
@@ -148,6 +167,10 @@ export const PhoneNumbersPage: React.FC = () => {
   const [phoneNumberToDelete, setPhoneNumberToDelete] = useState<PhoneNumber | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   
+  // Pending invites
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [inviteLoading, setInviteLoading] = useState(false);
+  
   // Edit phone number modal
   const [showEditModal, setShowEditModal] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
@@ -185,6 +208,7 @@ export const PhoneNumbersPage: React.FC = () => {
   useEffect(() => {
     loadPhoneNumbers();
     loadAgents();
+    loadPendingInvites();
   }, []);
 
   const loadPhoneNumbers = async () => {
@@ -204,6 +228,31 @@ export const PhoneNumbersPage: React.FC = () => {
       setAgents(response.data);
     } catch (error) {
       console.error('Error loading agents:', error);
+    }
+  };
+
+  const loadPendingInvites = async () => {
+    try {
+      const response = await api.get('/phone-numbers/invites/pending');
+      setPendingInvites(response.data);
+    } catch (error) {
+      console.error('Error loading pending invites:', error);
+    }
+  };
+
+  const handleRespondToInvite = async (phoneNumberId: number, action: 'accept' | 'reject') => {
+    setInviteLoading(true);
+    try {
+      await api.post(`/phone-numbers/invites/${phoneNumberId}/respond`, { action });
+      toast.success(action === 'accept' ? 
+        (t?.phoneNumbers?.inviteAccepted || 'Invite accepted!') : 
+        (t?.phoneNumbers?.inviteRejected || 'Invite rejected'));
+      await loadPendingInvites();
+      await loadPhoneNumbers();
+    } catch (error: any) {
+      toast.error((t?.phoneNumbers?.inviteError || 'Failed to respond to invite') + ': ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setInviteLoading(false);
     }
   };
 
@@ -564,295 +613,363 @@ export const PhoneNumbersPage: React.FC = () => {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t?.phoneNumbers?.title || 'Phone Numbers'}</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
-            {t?.phoneNumbers?.subtitle || 'Manage phone numbers for your voice agents'}
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <Button 
-            onClick={() => setShowAddExistingModal(true)}
-          >
-            <PhoneIcon className="h-4 w-4 mr-2" />
-            {t?.phoneNumbers?.addExistingNumber || 'Add Existing Number'}
-          </Button>
-          <Button onClick={() => setShowRequestModal(true)} variant="outline">
-            {t?.phoneNumbers?.requestNewNumber || 'Request New Number'}
-          </Button>
+      <div className="space-y-8">
+      {/* Modern Header with gradient accent */}
+      <div className="relative">
+        <div className="absolute inset-0 bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-pink-600/10 dark:from-indigo-600/5 dark:via-purple-600/5 dark:to-pink-600/5 rounded-2xl blur-xl"></div>
+        <div className="relative bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-2xl p-6 border border-gray-200/50 dark:border-gray-700/50">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-lg shadow-indigo-500/25">
+                  <PhoneIcon className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">
+                    {t?.phoneNumbers?.title || 'Phone Numbers'}
+                  </h1>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    {t?.phoneNumbers?.subtitle || 'Manage phone numbers for your voice agents'}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <Button 
+                onClick={() => setShowAddExistingModal(true)}
+                className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-lg shadow-indigo-500/25 border-0"
+              >
+                <PhoneIcon className="h-4 w-4 mr-2" />
+                {t?.phoneNumbers?.addExistingNumber || 'Add Number'}
+              </Button>
+              <Button onClick={() => setShowRequestModal(true)} variant="outline" className="border-gray-300 dark:border-gray-600">
+                {t?.phoneNumbers?.requestNewNumber || 'Request New'}
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Phone Numbers List */}
-      {phoneNumbers.length === 0 ? (
-        <Card>
-            <div className="text-center py-12">
-              <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-4 text-lg font-medium text-gray-900 dark:text-white">
-                {t?.phoneNumbers?.noPhoneNumbers || 'No Phone Numbers'}
-              </h3>
-              <p className="mt-2 text-gray-600 dark:text-gray-400">
-                {t?.phoneNumbers?.noPhoneNumbersDesc || 'Add your existing Zadarma number or request a new one'}
-              </p>
-              <div className="flex gap-3 justify-center mt-4">
-                <Button onClick={() => setShowAddExistingModal(true)}>
-                  {t?.phoneNumbers?.addExistingNumber || 'Add Existing Number'}
-                </Button>
-                <Button onClick={() => setShowRequestModal(true)} variant="outline">
-                  {t?.phoneNumbers?.requestNewNumber || 'Request New Number'}
-                </Button>
+      {/* Pending Invites Section */}
+      {pendingInvites.length > 0 && (
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-2xl blur-xl"></div>
+          <div className="relative bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-2xl border border-amber-200/50 dark:border-amber-700/30 overflow-hidden">
+            <div className="px-6 py-4 bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-b border-amber-200/50 dark:border-amber-700/30">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 dark:bg-amber-800/30 rounded-lg">
+                  <BellAlertIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="font-semibold text-amber-900 dark:text-amber-100">
+                    {t?.phoneNumbers?.pendingInvites || 'Pending Invites'}
+                  </h2>
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    {t?.phoneNumbers?.pendingInvitesDesc || 'You have collaboration invites waiting for your response'}
+                  </p>
+                </div>
               </div>
             </div>
-        </Card>
-      ) : (
-        <div className="grid gap-6">
-          {phoneNumbers.map((number: PhoneNumber) => (
-            <Card key={number.id} className={number.role === 'collaborator' ? 'border-2 border-purple-200 dark:border-purple-800' : ''}>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center space-x-4">
-                  <div className={`p-3 rounded-lg ${number.role === 'collaborator' ? 'bg-purple-100 dark:bg-purple-900' : 'bg-indigo-100 dark:bg-indigo-900'}`}>
-                    <PhoneIcon className={`h-6 w-6 ${number.role === 'collaborator' ? 'text-purple-600 dark:text-purple-400' : 'text-indigo-600 dark:text-indigo-400'}`} />
+            <div className="p-4 space-y-3">
+              {pendingInvites.map((invite) => (
+                <div 
+                  key={`${invite.phone_number_id}-${invite.user_id}`}
+                  className="flex items-center justify-between p-4 bg-white dark:bg-gray-700/50 rounded-xl border border-gray-200 dark:border-gray-600/50 hover:shadow-md transition-all"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="p-2.5 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl">
+                      <PhoneIcon className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-900 dark:text-white">
+                        {invite.phone_number_display}
+                      </h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {invite.business_name && <span>{invite.business_name} • </span>}
+                        {t?.phoneNumbers?.invitedBy || 'Invited by'}: <span className="font-medium">{invite.invited_by_email}</span>
+                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-600 rounded-full text-gray-600 dark:text-gray-300">
+                          {invite.permissions}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                      {number.phone_number}
-                    </h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      {number.business_name} • {number.country_code}
-                    </p>
-                    <div className="flex items-center gap-4 mt-2 text-sm">
-                      <span className="text-gray-500">{t?.phoneNumbers?.monthly || 'Monthly'} ${number.monthly_cost}</span>
-                      <span className="text-gray-500">{t?.phoneNumbers?.perMinute || 'Per minute'} ${number.per_minute_cost}</span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => handleRespondToInvite(invite.phone_number_id, 'accept')}
+                      disabled={inviteLoading}
+                      className="bg-emerald-500 hover:bg-emerald-600 text-white border-0"
+                    >
+                      <CheckCircleIcon className="h-4 w-4 mr-1" />
+                      {t?.phoneNumbers?.accept || 'Accept'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleRespondToInvite(invite.phone_number_id, 'reject')}
+                      disabled={inviteLoading}
+                      className="border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:hover:bg-red-900/20"
+                    >
+                      <XCircleIcon className="h-4 w-4 mr-1" />
+                      {t?.phoneNumbers?.reject || 'Reject'}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phone Numbers Grid */}
+      {phoneNumbers.length === 0 ? (
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-gray-50 dark:from-gray-800 dark:to-gray-900 rounded-2xl"></div>
+          <div className="relative text-center py-16 px-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-indigo-100 to-purple-100 dark:from-indigo-900/50 dark:to-purple-900/50 rounded-2xl mb-6">
+              <PhoneIcon className="h-8 w-8 text-indigo-600 dark:text-indigo-400" />
+            </div>
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+              {t?.phoneNumbers?.noPhoneNumbers || 'No Phone Numbers'}
+            </h3>
+            <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-6">
+              {t?.phoneNumbers?.noPhoneNumbersDesc || 'Add your existing phone number or request a new one to start receiving AI-powered calls'}
+            </p>
+            <div className="flex gap-3 justify-center">
+              <Button 
+                onClick={() => setShowAddExistingModal(true)}
+                className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-lg border-0"
+              >
+                {t?.phoneNumbers?.addExistingNumber || 'Add Existing Number'}
+              </Button>
+              <Button onClick={() => setShowRequestModal(true)} variant="outline">
+                {t?.phoneNumbers?.requestNewNumber || 'Request New Number'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-5">
+          {phoneNumbers.map((number: PhoneNumber) => (
+            <div 
+              key={number.id} 
+              className={`group relative bg-white dark:bg-gray-800 rounded-2xl border transition-all duration-300 hover:shadow-xl ${
+                number.role === 'collaborator' 
+                  ? 'border-purple-200 dark:border-purple-700/50 hover:border-purple-300 dark:hover:border-purple-600' 
+                  : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600'
+              }`}
+            >
+              {/* Subtle gradient overlay on hover */}
+              <div className={`absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl ${
+                number.role === 'collaborator'
+                  ? 'bg-gradient-to-br from-purple-50/50 to-pink-50/50 dark:from-purple-900/10 dark:to-pink-900/10'
+                  : 'bg-gradient-to-br from-indigo-50/50 to-purple-50/50 dark:from-indigo-900/10 dark:to-purple-900/10'
+              }`}></div>
+              
+              <div className="relative p-6">
+                {/* Top row: Main info and status */}
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-start gap-4">
+                    <div className={`p-3 rounded-xl shadow-sm ${
+                      number.role === 'collaborator'
+                        ? 'bg-gradient-to-br from-purple-500 to-pink-500'
+                        : 'bg-gradient-to-br from-indigo-500 to-purple-500'
+                    }`}>
+                      <PhoneIcon className="h-6 w-6 text-white" />
                     </div>
-                    <div className="mt-2 text-sm">
-                      <span className="text-gray-700 dark:text-gray-300 font-medium">{t?.phoneNumbers?.agent || 'Agent'}: </span>
-                      <span className={number.agent_id ? "text-green-600 dark:text-green-400 font-medium" : "text-orange-600 dark:text-orange-400"}>
-                        {getAgentName(number.agent_id)}
-                      </span>
-                    </div>
-                    <div className="mt-3 text-sm">
-                      <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
-                        {t?.phoneNumbers?.sipConfiguration || 'SIP Configuration'}
+                    <div>
+                      <div className="flex items-center gap-3">
+                        <h3 className="text-xl font-bold text-gray-900 dark:text-white tracking-tight">
+                          {number.phone_number}
+                        </h3>
+                        {getStatusBadge(number.status)}
+                        {number.role === 'collaborator' && (
+                          <span className="px-2.5 py-1 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 text-xs font-medium rounded-full">
+                            {t?.phoneNumbers?.shared || 'Shared'}
+                          </span>
+                        )}
                       </div>
-                      {number.has_sip_config ? (
-                        <div className="space-y-1 text-gray-700 dark:text-gray-300 bg-green-50 dark:bg-green-900/20 p-2 rounded-lg">
-                          <div className="flex items-center gap-1 text-green-700 dark:text-green-400 font-medium">
-                            <CheckCircleIcon className="h-4 w-4" />
-                            {t?.phoneNumbers?.sipConfigured || 'SIP Configured'}
-                          </div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">
-                            <span className="font-medium">{t?.phoneNumbers?.websocketUrl || 'WebSocket URL'}:</span>{' '}
-                            <span className="font-mono">{number.sip_websocket_url}</span>
-                          </div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">
-                            <span className="font-medium">{t?.phoneNumbers?.sipUsername || 'SIP Username'}:</span>{' '}
-                            <span className="font-mono">{number.sip_username}@{number.sip_domain}</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="text-amber-600 dark:text-amber-400">
-                          {t?.phoneNumbers?.sipConfigDesc || 'SIP not configured - add SIP settings to handle incoming calls'}
-                        </p>
-                      )}
-                    </div>
-                    {/* Collaborators Section - Only show for owners */}
-                    {number.is_owner !== false && (
-                    <div className="mt-3 text-sm">
-                      <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
-                        {t?.phoneNumbers?.collaborators || 'Collaborators'}
-                      </div>
-                      <div className="space-y-1 bg-purple-50 dark:bg-purple-900/20 p-2 rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-1 text-purple-700 dark:text-purple-400 font-medium">
-                            <UserGroupIcon className="h-4 w-4" />
-                            {t?.phoneNumbers?.phoneCollaborators || 'Collaborators'}
-                          </div>
-                          <button
-                            onClick={() => openCollaboratorsModal(number)}
-                            className="text-xs text-purple-600 dark:text-purple-400 hover:underline"
-                          >
-                            {t?.phoneNumbers?.manage || 'Manage'}
-                          </button>
-                        </div>
-                        {number.collaborators && number.collaborators.length > 0 ? (
-                          <div className="space-y-1">
-                            {number.collaborators.map((collab: Collaborator) => (
-                              <div key={collab.id} className="flex items-center justify-between text-xs">
-                                <span className="text-gray-700 dark:text-gray-300">
-                                  {collab.user_name || collab.user_email}
-                                </span>
-                                <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded text-xs">
-                                  {collab.permissions.split(',').map((p: string) => p.trim()).join(', ')}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-xs text-gray-500 dark:text-gray-400">
-                            {t?.phoneNumbers?.noCollaborators || 'No collaborators added yet'}
-                          </p>
+                      <div className="flex items-center gap-3 mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        {number.business_name && <span className="font-medium text-gray-700 dark:text-gray-300">{number.business_name}</span>}
+                        <span className="flex items-center gap-1">
+                          <GlobeAltIcon className="h-3.5 w-3.5" />
+                          {number.country_code}
+                        </span>
+                        {number.role === 'collaborator' && number.owner_email && (
+                          <span className="text-purple-600 dark:text-purple-400">
+                            {t?.phoneNumbers?.sharedBy || 'Shared by'}: {number.owner_email}
+                          </span>
                         )}
                       </div>
                     </div>
-                    )}
                   </div>
-                </div>
-                <div className="text-right space-y-2">
-                  <div className="flex flex-wrap gap-2 justify-end">
-                    {getStatusBadge(number.status)}
-                    {number.role === 'collaborator' && (
-                      <Badge className="bg-purple-500">
-                        {t?.phoneNumbers?.shared || 'Shared'}
-                      </Badge>
-                    )}
-                  </div>
-                  {number.role === 'collaborator' && number.owner_email && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {t?.phoneNumbers?.sharedBy || 'Shared by'}: {number.owner_email}
-                    </p>
-                  )}
-                  {number.role === 'collaborator' && number.permissions && (
-                    <div className="flex flex-wrap gap-1 justify-end">
-                      {number.permissions.map((perm) => (
-                        <span key={perm} className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded text-xs">
-                          {perm}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex flex-col gap-2">
-                    {number.status === 'pending' || number.status === 'documents_submitted' ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setSelectedNumber(number);
-                          loadDocuments(number.id);
-                          setShowUploadModal(true);
-                        }}
-                      >
-                        <CloudArrowUpIcon className="mr-2 h-3.5 w-3.5" />
-                        {t?.phoneNumbers?.uploadDocuments || 'Upload Documents'}
-                      </Button>
-                    ) : null}
+                  
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-2">
                     {(number.status === 'active' || number.status === 'approved') && (number.is_owner || number.permissions?.includes('edit')) && (
                       <>
-                        <Button
-                          size="sm"
+                        <button
                           onClick={() => {
                             setSelectedNumber(number);
                             setSelectedAgentId(number.agent_id);
                             setShowAssignAgentModal(true);
                           }}
+                          className="p-2 text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors"
+                          title={number.agent_id ? (t?.phoneNumbers?.changeAgent || 'Change Agent') : (t?.phoneNumbers?.assignAgent || 'Assign Agent')}
                         >
-                          {number.agent_id ? (t?.phoneNumbers?.changeAgent || 'Change Agent') : (t?.phoneNumbers?.assignAgent || 'Assign Agent')}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
+                          <UserGroupIcon className="h-5 w-5" />
+                        </button>
+                        <button
                           onClick={() => openEditModal(number)}
+                          className="p-2 text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors"
+                          title={t?.phoneNumbers?.settings || 'Settings'}
                         >
-                          <svg className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
-                          {t?.phoneNumbers?.settings || 'Settings'}
-                        </Button>
+                          <Cog6ToothIcon className="h-5 w-5" />
+                        </button>
                       </>
                     )}
                     {(number.is_owner || number.permissions?.includes('delete')) && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 border-red-300 dark:border-red-700"
+                      <button
                         onClick={() => {
                           setPhoneNumberToDelete(number);
                           setShowDeleteModal(true);
                         }}
+                        className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                        title={t?.common?.delete || 'Delete'}
                       >
-                        <TrashIcon className="mr-2 h-3.5 w-3.5" />
-                        {t?.common?.delete || 'Delete'}
-                      </Button>
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
                     )}
                   </div>
                 </div>
-              </div>
 
-              {/* Show uploaded documents */}
-              {selectedNumber?.id === number.id && (
-                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                    {t?.phoneNumbers?.verificationDocuments || 'Verification Documents'}
-                  </h4>
-                  {documentsLoading ? (
-                    <div className="space-y-2">
-                      {[1, 2].map((i) => (
-                        <div
-                          key={i}
-                          className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg animate-pulse"
-                        >
-                          <div className="flex items-center space-x-3">
-                            <div className="w-5 h-5 bg-gray-300 dark:bg-gray-600 rounded-full"></div>
-                            <div className="space-y-1">
-                              <div className="h-4 w-32 bg-gray-300 dark:bg-gray-600 rounded"></div>
-                              <div className="h-3 w-24 bg-gray-300 dark:bg-gray-600 rounded"></div>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="h-6 w-16 bg-gray-300 dark:bg-gray-600 rounded-full"></div>
-                          </div>
-                        </div>
-                      ))}
+                {/* Info Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                  {/* Agent Info */}
+                  <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-xl">
+                    <div className="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                      <UserGroupIcon className="h-3.5 w-3.5" />
+                      {t?.phoneNumbers?.agent || 'Agent'}
                     </div>
-                  ) : documents.length > 0 ? (
-                    <div className="space-y-2">
-                      {documents.map((doc) => (
-                        <div
-                          key={doc.id}
-                          className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg"
-                        >
-                          <div className="flex items-center space-x-3">
-                            {getStatusIcon(doc.status)}
-                            <div>
-                              <p className="text-sm font-medium text-gray-900 dark:text-white">
-                                {doc.document_name}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                {doc.document_type.replace('_', ' ')}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <Badge
-                              className={
-                                doc.status === 'accepted'
-                                  ? 'bg-green-500'
-                                  : doc.status === 'rejected'
-                                  ? 'bg-red-500'
-                                  : 'bg-yellow-500'
-                              }
-                            >
-                              {doc.status}
-                            </Badge>
-                            {doc.rejection_reason && (
-                              <p className="text-xs text-red-600 mt-1">{doc.rejection_reason}</p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                    <p className={`font-semibold ${number.agent_id ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                      {getAgentName(number.agent_id)}
+                    </p>
+                  </div>
+
+                  {/* SIP Status */}
+                  <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-xl">
+                    <div className="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                      <SignalIcon className="h-3.5 w-3.5" />
+                      {t?.phoneNumbers?.sipStatus || 'SIP Status'}
                     </div>
-                  ) : (
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{t?.phoneNumbers?.noDocumentsUploaded || 'No documents uploaded'}</p>
+                    {number.has_sip_config ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                          {t?.phoneNumbers?.configured || 'Configured'}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-amber-500 rounded-full"></div>
+                        <span className="font-semibold text-amber-600 dark:text-amber-400">
+                          {t?.phoneNumbers?.notConfigured || 'Not Configured'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Collaborators - Only for owners */}
+                  {number.is_owner !== false && (
+                    <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-xl">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                          <EnvelopeIcon className="h-3.5 w-3.5" />
+                          {t?.phoneNumbers?.collaborators || 'Collaborators'}
+                        </div>
+                        <button
+                          onClick={() => openCollaboratorsModal(number)}
+                          className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+                        >
+                          {t?.phoneNumbers?.manage || 'Manage'}
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {number.collaborators && number.collaborators.length > 0 ? (
+                          <>
+                            <div className="flex -space-x-2">
+                              {number.collaborators.slice(0, 3).map((collab, idx) => (
+                                <div 
+                                  key={collab.id}
+                                  className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-white text-xs font-medium border-2 border-white dark:border-gray-800"
+                                  title={collab.user_name || collab.user_email}
+                                >
+                                  {(collab.user_name || collab.user_email).charAt(0).toUpperCase()}
+                                </div>
+                              ))}
+                              {number.collaborators.length > 3 && (
+                                <div className="w-7 h-7 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center text-xs font-medium border-2 border-white dark:border-gray-800">
+                                  +{number.collaborators.length - 3}
+                                </div>
+                              )}
+                            </div>
+                            <span className="text-sm text-gray-600 dark:text-gray-300">
+                              {number.collaborators.length} {number.collaborators.length === 1 ? 'person' : 'people'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-sm text-gray-400">
+                            {t?.phoneNumbers?.noCollaborators || 'None'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Permissions for collaborators */}
+                  {number.role === 'collaborator' && number.permissions && (
+                    <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-xl">
+                      <div className="flex items-center gap-2 text-xs font-medium text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-2">
+                        <CheckCircleIcon className="h-3.5 w-3.5" />
+                        {t?.phoneNumbers?.yourPermissions || 'Your Permissions'}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {number.permissions.map((perm) => (
+                          <span key={perm} className="px-2 py-0.5 bg-purple-100 dark:bg-purple-800/50 text-purple-700 dark:text-purple-300 rounded-full text-xs font-medium">
+                            {perm}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
-              )}
-            </Card>
+
+                {/* Upload documents button for pending status */}
+                {(number.status === 'pending' || number.status === 'documents_submitted') && (
+                  <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setSelectedNumber(number);
+                        loadDocuments(number.id);
+                        setShowUploadModal(true);
+                      }}
+                      className="w-full border-dashed"
+                    >
+                      <CloudArrowUpIcon className="mr-2 h-4 w-4" />
+                      {t?.phoneNumbers?.uploadDocuments || 'Upload Verification Documents'}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
           ))}
         </div>
       )}
+
 
       {/* Add Existing Number Modal */}
       {showAddExistingModal && (

@@ -336,9 +336,11 @@ def phone_number_to_response(phone: PhoneNumber, db: Session = None, current_use
     owner_email = None
     
     if not is_owner and current_user_id:
-        # Check if user is a collaborator
+        # Check if user is an accepted collaborator
         for collab in collaborators:
-            if collab.get("user_id") == current_user_id and collab.get("is_active", True):
+            if (collab.get("user_id") == current_user_id and 
+                collab.get("is_active", True) and
+                collab.get("status", "pending") == "accepted"):
                 role = "collaborator"
                 perm_str = collab.get("permissions", "view")
                 permissions = [p.strip() for p in perm_str.split(",")]
@@ -465,10 +467,12 @@ async def list_phone_numbers(
         if phone.user_id == current_user.id:
             continue
         
-        # Check if user is in collaborators
+        # Check if user is in collaborators with accepted status
         collaborators = parse_collaborators(phone.collaborators)
         for collab in collaborators:
-            if collab.get("user_id") == current_user.id and collab.get("is_active", True):
+            if (collab.get("user_id") == current_user.id and 
+                collab.get("is_active", True) and 
+                collab.get("status", "pending") == "accepted"):
                 collaborated_phones.append(phone)
                 break
     
@@ -850,6 +854,7 @@ class CollaboratorCreate(BaseModel):
 class CollaboratorUpdate(BaseModel):
     permissions: Optional[str] = None
     is_active: Optional[bool] = None
+    status: Optional[str] = None  # pending, accepted, rejected
 
 
 class CollaboratorResponse(BaseModel):
@@ -859,10 +864,17 @@ class CollaboratorResponse(BaseModel):
     user_name: Optional[str] = None
     permissions: str
     is_active: bool = True
+    status: str = "pending"  # pending, accepted, rejected
     added_at: Optional[str] = None
+    invited_by_email: Optional[str] = None
+    phone_number_display: Optional[str] = None  # For showing in invites list
     
     class Config:
         from_attributes = True
+
+
+class InviteAction(BaseModel):
+    action: str  # "accept" or "reject"
 
 
 @router.get("/{phone_number_id}/collaborators", response_model=List[CollaboratorResponse])
@@ -929,11 +941,14 @@ async def add_phone_collaborator(
         "user_name": user.full_name,
         "permissions": collaborator_data.permissions,
         "is_active": True,
-        "added_at": datetime.utcnow().isoformat()
+        "status": "pending",  # New invites start as pending
+        "added_at": datetime.utcnow().isoformat(),
+        "invited_by_email": current_user.email,
+        "phone_number_display": phone_number.phone_number
     }
     
     if existing_idx is not None:
-        # Update existing collaborator
+        # Update existing collaborator - reset to pending
         collaborators[existing_idx] = new_collab
     else:
         # Add new collaborator
@@ -943,7 +958,7 @@ async def add_phone_collaborator(
     phone_number.collaborators = json.dumps(collaborators)
     db.commit()
     
-    logger.info(f"Added collaborator {user.email} to phone number {phone_number.phone_number}")
+    logger.info(f"Invited collaborator {user.email} to phone number {phone_number.phone_number}")
     
     return new_collab
 
@@ -1023,3 +1038,96 @@ async def remove_phone_collaborator(
     logger.info(f"Removed collaborator {collaborator_id} from phone number {phone_number.phone_number}")
     
     return {"message": "Collaborator removed successfully"}
+
+
+# ===================================================================
+# INVITE MANAGEMENT ENDPOINTS
+# ===================================================================
+
+@router.get("/invites/pending", response_model=List[CollaboratorResponse])
+async def get_pending_invites(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all pending collaboration invites for the current user"""
+    # Query all phone numbers with collaborators
+    all_phones = safe_query_phone_numbers(
+        db,
+        "collaborators IS NOT NULL AND collaborators != '' AND collaborators != '[]'"
+    )
+    
+    pending_invites = []
+    for phone in all_phones:
+        # Skip if user owns this phone
+        if phone.user_id == current_user.id:
+            continue
+        
+        # Check if user has a pending invite
+        collaborators = parse_collaborators(phone.collaborators)
+        for collab in collaborators:
+            if (collab.get("user_id") == current_user.id and 
+                collab.get("is_active", True) and
+                collab.get("status", "pending") == "pending"):
+                # Add phone number info to the invite
+                invite = {
+                    **collab,
+                    "phone_number_id": phone.id,
+                    "phone_number_display": phone.phone_number,
+                    "business_name": phone.business_name
+                }
+                pending_invites.append(invite)
+                break
+    
+    return pending_invites
+
+
+@router.post("/invites/{phone_number_id}/respond")
+async def respond_to_invite(
+    phone_number_id: int,
+    action: InviteAction,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Accept or reject a collaboration invite"""
+    if action.action not in ["accept", "reject"]:
+        raise HTTPException(status_code=400, detail="Action must be 'accept' or 'reject'")
+    
+    # Get the phone number
+    phone_number = db.query(PhoneNumber).filter(PhoneNumber.id == phone_number_id).first()
+    
+    if not phone_number:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    
+    # Parse collaborators
+    collaborators = parse_collaborators(phone_number.collaborators)
+    
+    # Find the user's invite
+    found_idx = None
+    for idx, collab in enumerate(collaborators):
+        if collab.get("user_id") == current_user.id:
+            found_idx = idx
+            break
+    
+    if found_idx is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    
+    if collaborators[found_idx].get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Invite has already been responded to")
+    
+    # Update the status
+    if action.action == "accept":
+        collaborators[found_idx]["status"] = "accepted"
+        collaborators[found_idx]["accepted_at"] = datetime.utcnow().isoformat()
+        message = "Invite accepted successfully"
+    else:
+        collaborators[found_idx]["status"] = "rejected"
+        collaborators[found_idx]["rejected_at"] = datetime.utcnow().isoformat()
+        message = "Invite rejected"
+    
+    # Save updated collaborators
+    phone_number.collaborators = json.dumps(collaborators)
+    db.commit()
+    
+    logger.info(f"User {current_user.email} {action.action}ed invite for phone number {phone_number.phone_number}")
+    
+    return {"message": message, "status": collaborators[found_idx]["status"]}
