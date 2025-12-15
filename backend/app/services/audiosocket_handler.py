@@ -44,10 +44,13 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    High-quality streaming resampling.
+    High-quality streaming resampling optimized for voice (French & English).
     
-    Uses scipy low-pass filter to remove frequencies above Nyquist,
+    Uses scipy low-pass filter to prevent aliasing,
     then audioop.ratecv for stateful resampling (smooth between chunks).
+    
+    Filter tuned for voice: preserves consonants, sibilants, and 
+    French-specific sounds (nasals, liaisons).
     """
     if from_rate == to_rate:
         return audio_bytes, state
@@ -61,35 +64,42 @@ def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None
             # Convert to float for filtering
             samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float64)
             
+            if len(samples) == 0:
+                return audio_bytes, state
+            
             # Design low-pass filter at target Nyquist frequency
-            # For 8kHz output, filter at 4kHz (with some margin)
+            # For 8kHz output: Nyquist is 4kHz
+            # Cutoff at 3.9kHz preserves voice clarity while preventing aliasing
             nyquist = from_rate / 2
-            cutoff = (to_rate / 2) * 0.9  # 3.6kHz for 8kHz output
+            cutoff = (to_rate / 2) * 0.975  # 3.9kHz for 8kHz output
             normalized_cutoff = cutoff / nyquist
             
-            # Use 4th order Butterworth filter (smooth, no ringing)
+            # Use 3rd order Butterworth (gentler rolloff, less phase distortion)
+            # Good for voice - preserves transients better
             if state.get('filter_b') is None:
-                b, a = signal.butter(4, normalized_cutoff, btype='low')
+                b, a = signal.butter(3, normalized_cutoff, btype='low')
                 state['filter_b'] = b
                 state['filter_a'] = a
             else:
                 b = state['filter_b']
                 a = state['filter_a']
             
-            # Apply filter with state for continuity
+            # Apply filter with proper state initialization
             zi = state.get('filter_zi')
             if zi is None:
-                zi = signal.lfilter_zi(b, a) * samples[0] if len(samples) > 0 else None
+                # Initialize filter state based on first sample for smooth start
+                zi = signal.lfilter_zi(b, a) * samples[0]
+                state['filter_zi'] = zi
             
-            if zi is not None and len(samples) > 0:
-                filtered, state['filter_zi'] = signal.lfilter(b, a, samples, zi=zi)
-            else:
-                filtered = samples
+            # Apply filter
+            filtered, new_zi = signal.lfilter(b, a, samples, zi=zi)
+            state['filter_zi'] = new_zi
             
             # Convert back to int16
             audio_bytes = np.clip(filtered, -32768, 32767).astype(np.int16).tobytes()
         except Exception as e:
-            pass  # Fall through to audioop
+            # Log error but continue with unfiltered audio
+            print(f"[RESAMPLE] Filter error: {e}", flush=True)
     
     # Use audioop for actual resampling (maintains state between chunks)
     s = state.get('audioop')
