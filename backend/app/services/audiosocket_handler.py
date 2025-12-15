@@ -50,14 +50,63 @@ FRAME_SIZE = 320
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 
+class StreamingResampler:
+    """
+    Streaming resampler using soxr for high-quality continuous resampling.
+    
+    Unlike stateless soxr.resample(), this maintains state between calls
+    for smooth, gap-free audio.
+    """
+    def __init__(self, from_rate: int, to_rate: int):
+        self.from_rate = from_rate
+        self.to_rate = to_rate
+        self.resampler = None
+        
+        if SOXR_AVAILABLE:
+            try:
+                # Create streaming resampler
+                self.resampler = soxr.ResampleStream(
+                    from_rate, to_rate,
+                    num_channels=1,
+                    dtype=np.float32
+                )
+            except Exception as e:
+                print(f"[RESAMPLE] soxr stream init error: {e}", flush=True)
+        
+        # Fallback state for audioop
+        self.audioop_state = None
+    
+    def process(self, audio_bytes: bytes) -> bytes:
+        """Process audio chunk with streaming resampler."""
+        if len(audio_bytes) < 2:
+            return audio_bytes
+        
+        if self.resampler is not None:
+            try:
+                # Convert to float32
+                audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+                audio_float = audio_np.astype(np.float32) / 32768.0
+                
+                # Streaming resample (maintains state!)
+                resampled = self.resampler.resample_chunk(audio_float)
+                
+                # Convert back to int16
+                resampled_int16 = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+                return resampled_int16.tobytes()
+            except Exception as e:
+                print(f"[RESAMPLE] soxr process error: {e}", flush=True)
+        
+        # Fallback to audioop (also stateful)
+        result, self.audioop_state = audioop.ratecv(
+            audio_bytes, 2, 1, self.from_rate, self.to_rate, self.audioop_state
+        )
+        return result
+
+
 def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    High-quality resampling using soxr (SoX Resampler).
-    
-    soxr is the gold standard for audio resampling - same as used by
-    professional audio software. Much better than audioop or scipy.
-    
-    Based on working Twilio + OpenAI implementation.
+    Simple wrapper for backward compatibility.
+    For new code, use StreamingResampler directly.
     """
     if from_rate == to_rate:
         return audio_bytes, state
@@ -65,34 +114,12 @@ def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None
     if state is None:
         state = {}
     
-    # Use soxr for high-quality resampling (like the Twilio example)
-    if SOXR_AVAILABLE:
-        try:
-            # Convert to numpy array
-            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
-            
-            if len(audio_np) == 0:
-                return audio_bytes, state
-            
-            # For 24k→8k: convert to float, resample, convert back
-            # This is exactly what the working Twilio code does
-            audio_float = audio_np.astype(np.float32) / 32768.0
-            
-            # soxr.resample - high quality resampling
-            resampled = soxr.resample(audio_float, from_rate, to_rate)
-            
-            # Convert back to int16
-            resampled_int16 = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-            
-            return resampled_int16.tobytes(), state
-        except Exception as e:
-            print(f"[RESAMPLE] soxr error: {e}", flush=True)
+    # Create or get streaming resampler
+    key = f'{from_rate}_{to_rate}'
+    if key not in state:
+        state[key] = StreamingResampler(from_rate, to_rate)
     
-    # Fallback to audioop if soxr not available
-    s = state.get('audioop')
-    result, s = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, s)
-    state['audioop'] = s
-    
+    result = state[key].process(audio_bytes)
     return result, state
 
 # Track active calls per phone number
@@ -217,31 +244,29 @@ class AudioSocketSession:
     
     async def _unified_audio_loop(self):
         """
-        Optimized for both fast response AND smooth playback.
+        Robust audio loop with streaming soxr resampler.
         
-        Key insight: Start immediately, use smart gap filling.
-        
-        1. NO pre-buffer - start as soon as first audio arrives
-        2. Aggressive audio collection - check queue every 5ms
-        3. Smart gap handling - multiple attempts to get audio before silence
+        Uses asyncio.Queue for efficient producer/consumer pattern.
+        Small pre-buffer (100ms) for stability, fast response.
         """
         import time
         
-        print(f"[UNIFIED] Starting (no pre-buffer, fast response)", flush=True)
+        print(f"[UNIFIED] Starting with streaming resampler", flush=True)
         
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
-        resample_state = {'audioop': None, 'filter_zi': None}
         frames_sent = 0
         
-        # Shared buffer - no queue overhead
-        audio_buffer = bytearray()
-        buffer_lock = asyncio.Lock()
-        receiver_done = asyncio.Event()
+        # Create streaming resampler (maintains state between chunks!)
+        resampler = StreamingResampler(24000, 8000)
+        
+        # Queue for audio chunks
+        audio_queue = asyncio.Queue()
+        receiver_active = True
         
         async def receiver():
-            """Receive and resample immediately"""
-            nonlocal resample_state
+            """Receive from Gemini and resample with streaming resampler"""
+            nonlocal receiver_active
             chunks = 0
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -252,106 +277,100 @@ class AudioSocketSession:
                     if len(audio_24k) % 2:
                         audio_24k = audio_24k[:-1]
                     
-                    audio_8k, resample_state = simple_resample(
-                        audio_24k, 24000, 8000, resample_state
-                    )
+                    # Streaming resample - maintains continuity!
+                    audio_8k = resampler.process(audio_24k)
                     
-                    async with buffer_lock:
-                        audio_buffer.extend(audio_8k)
+                    await audio_queue.put(audio_8k)
                     chunks += 1
                         
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 print(f"[UNIFIED] Receiver error: {e}", flush=True)
-            receiver_done.set()
+            
+            receiver_active = False
+            await audio_queue.put(None)  # Signal end
             print(f"[UNIFIED] Receiver done, {chunks} chunks", flush=True)
         
         async def sender():
-            """Fast sender with smart gap handling"""
+            """Send frames at 20ms intervals with small pre-buffer"""
             nonlocal frames_sent
             
-            frame_duration = 0.02  # 20ms
+            audio_buffer = b''
+            PRE_BUFFER = FRAME_SIZE * 5  # 100ms pre-buffer
+            started = False
+            
+            frame_duration = 0.02
             next_frame_time = time.time()
-            first_audio_sent = False
             
             try:
-                while self.is_running and not receiver_done.is_set():
-                    # Check buffer
-                    async with buffer_lock:
-                        buf_len = len(audio_buffer)
-                        if buf_len >= FRAME_SIZE:
-                            audio_data = bytes(audio_buffer[:FRAME_SIZE])
-                            del audio_buffer[:FRAME_SIZE]
-                            first_audio_sent = True
-                        elif buf_len > 0 and first_audio_sent:
-                            # Partial - use it
-                            audio_data = bytes(audio_buffer) + b'\x00' * (FRAME_SIZE - buf_len)
-                            audio_buffer.clear()
-                        else:
-                            audio_data = None
+                while self.is_running:
+                    # Collect audio from queue
+                    while True:
+                        try:
+                            chunk = audio_queue.get_nowait()
+                            if chunk is None:
+                                # End of audio - drain buffer and exit
+                                while len(audio_buffer) >= FRAME_SIZE:
+                                    transport.write(header + audio_buffer[:FRAME_SIZE])
+                                    audio_buffer = audio_buffer[FRAME_SIZE:]
+                                    frames_sent += 1
+                                    await asyncio.sleep(frame_duration)
+                                if audio_buffer:
+                                    transport.write(header + audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer)))
+                                    frames_sent += 1
+                                return
+                            audio_buffer += chunk
+                        except asyncio.QueueEmpty:
+                            break
                     
-                    if audio_data is None:
-                        # No audio available - try multiple times before silence
-                        got_audio = False
-                        for attempt in range(4):  # 4 attempts x 5ms = 20ms total
-                            await asyncio.sleep(0.005)  # 5ms wait
-                            async with buffer_lock:
-                                if len(audio_buffer) >= FRAME_SIZE:
-                                    audio_data = bytes(audio_buffer[:FRAME_SIZE])
-                                    del audio_buffer[:FRAME_SIZE]
-                                    got_audio = True
-                                    first_audio_sent = True
-                                    break
-                                elif len(audio_buffer) > 0:
-                                    audio_data = bytes(audio_buffer) + b'\x00' * (FRAME_SIZE - len(audio_buffer))
-                                    audio_buffer.clear()
-                                    got_audio = True
-                                    first_audio_sent = True
-                                    break
-                        
-                        if not got_audio:
-                            audio_data = SILENCE_FRAME
+                    # Pre-buffer before starting
+                    if not started:
+                        if len(audio_buffer) >= PRE_BUFFER:
+                            started = True
+                            print(f"[UNIFIED] Started, buf={len(audio_buffer)}", flush=True)
+                        else:
+                            transport.write(header + SILENCE_FRAME)
+                            frames_sent += 1
+                            await asyncio.sleep(frame_duration)
+                            continue
                     
                     # Send frame
-                    try:
-                        transport.write(header + audio_data)
-                        frames_sent += 1
-                    except:
-                        break
+                    if len(audio_buffer) >= FRAME_SIZE:
+                        audio_data = audio_buffer[:FRAME_SIZE]
+                        audio_buffer = audio_buffer[FRAME_SIZE:]
+                    elif len(audio_buffer) > 0:
+                        audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
+                        audio_buffer = b''
+                    else:
+                        # Buffer empty - wait briefly for more
+                        try:
+                            chunk = await asyncio.wait_for(audio_queue.get(), timeout=0.015)
+                            if chunk is None:
+                                return
+                            audio_buffer += chunk
+                            continue  # Go back to send loop
+                        except asyncio.TimeoutError:
+                            audio_data = SILENCE_FRAME
+                    
+                    transport.write(header + audio_data)
+                    frames_sent += 1
                     
                     if frames_sent % 100 == 0:
-                        async with buffer_lock:
-                            bl = len(audio_buffer)
-                        print(f"[UNIFIED] {frames_sent} frames, buf={bl}", flush=True)
+                        print(f"[UNIFIED] {frames_sent} frames, buf={len(audio_buffer)}", flush=True)
                     
-                    # Maintain 20ms timing
+                    # Timing
                     next_frame_time += frame_duration
                     now = time.time()
                     if next_frame_time > now:
                         await asyncio.sleep(next_frame_time - now)
                     elif now - next_frame_time > 0.1:
                         next_frame_time = now
-                
-                # Drain remaining buffer after receiver done
-                async with buffer_lock:
-                    remaining = bytes(audio_buffer)
-                while len(remaining) > 0:
-                    if len(remaining) >= FRAME_SIZE:
-                        audio_data = remaining[:FRAME_SIZE]
-                        remaining = remaining[FRAME_SIZE:]
-                    else:
-                        audio_data = remaining + b'\x00' * (FRAME_SIZE - len(remaining))
-                        remaining = b''
-                    try:
-                        transport.write(header + audio_data)
-                        frames_sent += 1
-                    except:
-                        break
-                    await asyncio.sleep(frame_duration)
                         
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                print(f"[UNIFIED] Sender error: {e}", flush=True)
         
         try:
             await asyncio.gather(
