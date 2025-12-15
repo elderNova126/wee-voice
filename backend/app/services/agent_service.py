@@ -113,6 +113,20 @@ INSTRUCTION LINGUISTIQUE CRITIQUE:
 [OUTIL DISPONIBLE: search_documents]
 Si l'utilisateur pose une question nécessitant des informations spécifiques des documents téléchargés, utilise l'outil 'search_documents' pour chercher l'information avant de répondre.
 """
+            callback_instruction = """
+
+[OUTIL DISPONIBLE: request_callback]
+Utilise cet outil pour demander un rappel humain quand:
+- L'appelant est frustré ou en colère et a besoin d'une assistance humaine
+- Le problème est trop complexe pour être résolu par l'IA
+- L'appelant demande explicitement de parler à un humain
+- Des opportunités commerciales importantes (prospects chauds) nécessitent un suivi humain
+- Des questions sensibles nécessitent un jugement humain
+
+Paramètres: reason (raison détaillée), priority ("urgent"/"high"/"normal"/"low"), caller_name, caller_phone, caller_email, preferred_callback_time
+
+Après avoir utilisé cet outil, informe l'appelant qu'un membre de l'équipe le rappellera bientôt.
+"""
         else:  # English
             language_note = """
 
@@ -128,9 +142,26 @@ CRITICAL LANGUAGE INSTRUCTION:
 [AVAILABLE TOOL: search_documents]
 If the user asks a question requiring specific information from uploaded documents, use the 'search_documents' tool to find the information before answering.
 """
+            callback_instruction = """
+
+[AVAILABLE TOOL: request_callback]
+Use this tool to request a human callback when:
+- The caller is frustrated or angry and needs human assistance
+- The issue is too complex for AI to handle
+- The caller explicitly asks to speak with a human
+- Important business opportunities (hot leads) need human follow-up
+- Sensitive matters require human judgment
+
+Parameters: reason (detailed reason), priority ("urgent"/"high"/"normal"/"low"), caller_name, caller_phone, caller_email, preferred_callback_time
+
+After using this tool, inform the caller that a team member will call them back soon.
+"""
         
         # Add RAG instructions if enabled (minimal)
         rag_note = rag_instruction if self.agent.rag_enabled else ""
+        
+        # Callback instruction is always included
+        callback_note = callback_instruction
         
         # Build system instruction with USER'S PROMPT as PRIMARY identity
         # Add strong identity enforcement to prevent model from defaulting to "I am Gemini"
@@ -244,7 +275,7 @@ VOICE CONSISTENCY INSTRUCTION:
         # Build final system instruction with all components (USER'S PROMPT FIRST)
         system_instruction = f"""{self.agent.system_prompt}
 
-{identity_enforcement}{greeting_instruction}{voice_instruction}{language_note}{rag_note}"""
+{identity_enforcement}{greeting_instruction}{voice_instruction}{language_note}{rag_note}{callback_note}"""
         
         # Update config with final system instruction
         config["system_instruction"] = system_instruction
@@ -350,6 +381,48 @@ VOICE CONSISTENCY INSTRUCTION:
                     "time": time
                 }
             tools.append(book_appointment)
+        
+        # Request Callback Tool - ALWAYS available for all agents
+        # This allows the AI to flag calls that need human follow-up
+        def request_callback(
+            reason: str,
+            priority: str = "normal",
+            caller_name: str = "",
+            caller_phone: str = "",
+            caller_email: str = "",
+            preferred_callback_time: str = ""
+        ) -> dict:
+            """
+            Request a human callback when the AI cannot fully resolve the caller's issue.
+            Use this when:
+            - The caller is frustrated or angry and needs human assistance
+            - The issue is too complex for AI to handle
+            - The caller explicitly asks to speak with a human
+            - Important business opportunities (hot leads) need human follow-up
+            - Sensitive matters require human judgment
+            
+            Args:
+                reason: Why a callback is needed (be specific and detailed)
+                priority: "urgent", "high", "normal", or "low"
+                caller_name: The caller's name if provided
+                caller_phone: The caller's phone number if provided
+                caller_email: The caller's email if provided
+                preferred_callback_time: When the caller prefers to be called back
+                
+            Returns:
+                Confirmation that the callback request was created
+            """
+            return {
+                "status": "callback_requested",
+                "reason": reason,
+                "priority": priority,
+                "caller_name": caller_name,
+                "caller_phone": caller_phone,
+                "caller_email": caller_email,
+                "preferred_callback_time": preferred_callback_time
+            }
+        
+        tools.append(request_callback)
         
         return tools
     
@@ -659,6 +732,70 @@ VOICE CONSISTENCY INSTRUCTION:
                 except Exception as e:
                     logger.error(f"Error in document search: {e}")
                     result = {"found": False, "error": str(e)}
+            
+            # Handle callback request - creates a callback for human follow-up
+            elif call.name == "request_callback":
+                try:
+                    from app.models.database import SessionLocal
+                    from app.models import CallbackRequest
+                    
+                    reason = call.args.get("reason", "Callback requested by AI agent")
+                    priority = call.args.get("priority", "normal")
+                    caller_name = call.args.get("caller_name", "")
+                    caller_phone = call.args.get("caller_phone", "")
+                    caller_email = call.args.get("caller_email", "")
+                    preferred_callback_time = call.args.get("preferred_callback_time", "")
+                    
+                    logger.info(f"Creating callback request: reason={reason}, priority={priority}")
+                    
+                    db = SessionLocal()
+                    try:
+                        # Create the callback request
+                        callback_request = CallbackRequest(
+                            call_id=self.call.id,
+                            user_id=self.agent.user_id,  # The agent owner gets the callback
+                            agent_id=self.agent.id,
+                            reason=reason,
+                            priority=priority,
+                            caller_name=caller_name or self.call.caller_name,
+                            caller_phone=caller_phone or self.call.caller_phone,
+                            caller_email=caller_email,
+                            preferred_callback_time=preferred_callback_time,
+                            status="pending"
+                        )
+                        db.add(callback_request)
+                        
+                        # Update call record to mark callback requested
+                        self.call.callback_requested = True
+                        self.call.callback_reason = reason
+                        db.add(self.call)
+                        
+                        db.commit()
+                        db.refresh(callback_request)
+                        
+                        logger.info(f"✅ Callback request created: ID={callback_request.id} for call {self.call.id}")
+                        
+                        result = {
+                            "success": True,
+                            "callback_id": callback_request.id,
+                            "message": "Callback request created successfully. A team member will follow up."
+                        }
+                        
+                        # Try to send notification email (don't fail if it doesn't work)
+                        try:
+                            from app.services.notification_service import get_notification_service
+                            notification_service = get_notification_service()
+                            await notification_service.send_callback_notification(db, callback_request)
+                        except Exception as notify_error:
+                            logger.warning(f"Failed to send callback notification: {notify_error}")
+                        
+                    finally:
+                        db.close()
+                    
+                except Exception as e:
+                    logger.error(f"Error creating callback request: {e}", exc_info=True)
+                    result = {"success": False, "error": str(e)}
+            
             else:
                 # Default tool response
                 result = {"status": "success", "message": "Tool executed"}
