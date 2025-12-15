@@ -59,6 +59,9 @@ def high_quality_resample(audio_bytes: bytes, from_rate: int, to_rate: int, stat
         result, state2 = audioop.ratecv(intermediate, 2, 1, 12000, 8000, state2)
         state['step2'] = state2
         
+        # Step 3: Normalize volume for consistent loudness
+        result = normalize_audio(result)
+        
         return result, state
     
     # For 8kHz → 16kHz (caller audio to Gemini)
@@ -75,6 +78,54 @@ def high_quality_resample(audio_bytes: bytes, from_rate: int, to_rate: int, stat
     result, s = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, s)
     state[state_key] = s
     return result, state
+
+
+def normalize_audio(audio_bytes: bytes, target_rms: int = 3000) -> bytes:
+    """
+    Normalize audio to consistent loudness level.
+    
+    This fixes the "uneven loudness" issue by ensuring all audio
+    chunks have similar volume levels.
+    
+    Args:
+        audio_bytes: 16-bit PCM audio
+        target_rms: Target RMS level (3000 is moderate, not too loud)
+    
+    Returns:
+        Normalized audio bytes
+    """
+    if len(audio_bytes) < 4:
+        return audio_bytes
+    
+    try:
+        # Calculate current RMS (root mean square = loudness measure)
+        current_rms = audioop.rms(audio_bytes, 2)
+        
+        if current_rms == 0:
+            return audio_bytes  # Silent audio, nothing to normalize
+        
+        # Noise gate: if audio is very quiet, it's probably silence/noise
+        # Replace with true silence to reduce background noise
+        if current_rms < 100:
+            return b'\x00' * len(audio_bytes)
+        
+        # Calculate gain factor needed
+        # Limit gain to avoid amplifying noise too much (max 2.5x boost)
+        gain = min(target_rms / current_rms, 2.5)
+        
+        # Don't attenuate too much either (min 0.5x)
+        gain = max(gain, 0.5)
+        
+        # Apply gain if significant adjustment needed
+        if 0.85 < gain < 1.15:
+            return audio_bytes  # Already close enough, avoid processing
+        
+        # Use audioop.mul for efficient volume adjustment
+        normalized = audioop.mul(audio_bytes, 2, gain)
+        
+        return normalized
+    except Exception:
+        return audio_bytes  # On any error, return original
 
 # Track active calls per phone number
 _active_calls: dict[int, str] = {}  # phone_number_id -> call_uuid
