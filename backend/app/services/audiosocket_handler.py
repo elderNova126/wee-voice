@@ -230,86 +230,92 @@ class AudioSocketSession:
     
     async def _unified_audio_loop(self):
         """
-        UNIFIED audio loop - like web agent's direct path.
+        Optimized audio loop - receives immediately, sends at 20ms intervals.
         
-        Receives from Gemini and sends to Asterisk in ONE loop.
-        No queue = no latency between receive and send.
+        Two parallel paths:
+        1. Receiver: Gets audio from Gemini IMMEDIATELY when available
+        2. Sender: Sends frames every 20ms from buffer
         """
         import time
         
-        print(f"[UNIFIED] Starting - direct Gemini→Phone path", flush=True)
+        print(f"[UNIFIED] Starting optimized audio loop", flush=True)
         
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
-        audio_buffer = b''
-        resample_state = None
+        audio_buffer = bytearray()  # Shared buffer
+        resample_state = {'audioop': None, 'filter_zi': None}
         frames_sent = 0
+        buffer_lock = asyncio.Lock()
         
-        frame_duration = 0.02  # 20ms
-        next_frame_time = time.time()
-        
-        # Create async iterator from Gemini
-        gemini_iter = self.agent_service.receive_audio().__aiter__()
-        pending_gemini = None  # Pending task for next Gemini chunk
-        
-        try:
-            while self.is_running:
-                # Try to get audio from Gemini (non-blocking)
-                if pending_gemini is None:
-                    pending_gemini = asyncio.create_task(gemini_iter.__anext__())
-                
-                # Check if Gemini audio is ready
-                if pending_gemini.done():
-                    try:
-                        audio_24k = pending_gemini.result()
-                        pending_gemini = None  # Get next chunk on next iteration
-                        
-                        if audio_24k and len(audio_24k) >= 2:
-                            if len(audio_24k) % 2:
-                                audio_24k = audio_24k[:-1]
-                            # Resample immediately - DIRECT like web agent
-                            audio_8k, resample_state = simple_resample(
-                                audio_24k, 24000, 8000, resample_state
-                            )
-                            audio_buffer += audio_8k
-                    except StopAsyncIteration:
+        async def receiver():
+            """Receive from Gemini immediately - no waiting"""
+            nonlocal audio_buffer, resample_state
+            try:
+                async for audio_24k in self.agent_service.receive_audio():
+                    if not self.is_running:
                         break
-                    except Exception as e:
-                        print(f"[UNIFIED] Gemini error: {e}", flush=True)
-                        break
-                
-                # Send frame to Asterisk
-                if len(audio_buffer) >= FRAME_SIZE:
-                    audio_data = audio_buffer[:FRAME_SIZE]
-                    audio_buffer = audio_buffer[FRAME_SIZE:]
-                else:
-                    audio_data = SILENCE_FRAME
-                
-                try:
-                    transport.write(header + audio_data)
-                    frames_sent += 1
-                except Exception as e:
-                    print(f"[UNIFIED] Write error: {e}", flush=True)
-                    break
-                
-                if frames_sent % 100 == 0:
-                    print(f"[UNIFIED] {frames_sent} frames, buf={len(audio_buffer)}", flush=True)
-                
-                # Precise 20ms timing
-                next_frame_time += frame_duration
-                sleep_time = next_frame_time - time.time()
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
-                elif sleep_time < -0.1:
-                    next_frame_time = time.time()
+                    if not audio_24k or len(audio_24k) < 2:
+                        continue
+                    if len(audio_24k) % 2:
+                        audio_24k = audio_24k[:-1]
                     
+                    # Resample immediately
+                    audio_8k, resample_state = simple_resample(
+                        audio_24k, 24000, 8000, resample_state
+                    )
+                    
+                    # Add to buffer (thread-safe)
+                    async with buffer_lock:
+                        audio_buffer.extend(audio_8k)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                print(f"[UNIFIED] Receiver error: {e}", flush=True)
+        
+        async def sender():
+            """Send frames at precise 20ms intervals"""
+            nonlocal audio_buffer, frames_sent
+            frame_duration = 0.02
+            next_frame_time = time.time()
+            
+            try:
+                while self.is_running:
+                    # Get frame from buffer
+                    async with buffer_lock:
+                        if len(audio_buffer) >= FRAME_SIZE:
+                            audio_data = bytes(audio_buffer[:FRAME_SIZE])
+                            del audio_buffer[:FRAME_SIZE]
+                        else:
+                            audio_data = SILENCE_FRAME
+                    
+                    # Send
+                    try:
+                        transport.write(header + audio_data)
+                        frames_sent += 1
+                    except Exception as e:
+                        print(f"[UNIFIED] Send error: {e}", flush=True)
+                        break
+                    
+                    if frames_sent % 100 == 0:
+                        async with buffer_lock:
+                            buf_size = len(audio_buffer)
+                        print(f"[UNIFIED] {frames_sent} frames, buf={buf_size}", flush=True)
+                    
+                    # Precise timing
+                    next_frame_time += frame_duration
+                    sleep_time = next_frame_time - time.time()
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
+                    elif sleep_time < -0.1:
+                        next_frame_time = time.time()
+            except asyncio.CancelledError:
+                pass
+        
+        # Run both in parallel
+        try:
+            await asyncio.gather(receiver(), sender())
         except asyncio.CancelledError:
-            print(f"[UNIFIED] Cancelled after {frames_sent} frames", flush=True)
-        except Exception as e:
-            print(f"[UNIFIED] Error: {e}", flush=True)
-        finally:
-            if pending_gemini and not pending_gemini.done():
-                pending_gemini.cancel()
+            pass
         
         print(f"[UNIFIED] Ended, {frames_sent} frames sent", flush=True)
     
