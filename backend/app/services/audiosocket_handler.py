@@ -30,6 +30,14 @@ FRAME_SIZE = 320  # 160 samples * 2 bytes = 20ms at 8kHz
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 
+class ResampleState:
+    """Maintains resampling state for continuous audio streams"""
+    def __init__(self):
+        self.state_24_12 = None
+        self.state_12_8 = None
+        self.state_8_16 = None
+
+
 def high_quality_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
     Higher quality resampling using audioop with proper state management.
@@ -38,18 +46,22 @@ def high_quality_resample(audio_bytes: bytes, from_rate: int, to_rate: int, stat
     if from_rate == to_rate:
         return audio_bytes, state
     
+    if state is None:
+        state = ResampleState()
+    
     # For large rate changes, do in steps for better quality
     if from_rate == 24000 and to_rate == 8000:
-        # 24k -> 12k -> 8k (two steps)
-        audio_12k, state1 = audioop.ratecv(audio_bytes, 2, 1, 24000, 12000, state)
-        audio_8k, state2 = audioop.ratecv(audio_12k, 2, 1, 12000, 8000, None)
-        return audio_8k, state2
+        # 24k -> 12k -> 8k (two steps with maintained state)
+        audio_12k, state.state_24_12 = audioop.ratecv(audio_bytes, 2, 1, 24000, 12000, state.state_24_12)
+        audio_8k, state.state_12_8 = audioop.ratecv(audio_12k, 2, 1, 12000, 8000, state.state_12_8)
+        return audio_8k, state
     elif from_rate == 8000 and to_rate == 16000:
         # Direct 2x upsampling is fine
-        return audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state)
+        audio_16k, state.state_8_16 = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state.state_8_16)
+        return audio_16k, state
     else:
-        # Default
-        return audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state)
+        # Default single-step conversion
+        return audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, None)
 
 # Track active calls per phone number
 _active_calls: dict[int, str] = {}  # phone_number_id -> call_uuid
@@ -182,22 +194,87 @@ class AudioSocketSession:
         frame_duration = 0.02  # 20ms
         next_frame_time = time.time()
         
+        # Track if we're in the middle of playing AI speech
+        ai_speaking = False
+        silence_frames_sent = 0
+        MAX_SILENCE_DURING_SPEECH = 3  # Only allow 3 silence frames (60ms) during speech
+        
+        # Pre-buffer threshold: wait for this much audio before starting to play
+        PRE_BUFFER_SIZE = FRAME_SIZE * 5  # 100ms of pre-buffering
+        pre_buffering = True
+        
         try:
             while self.is_running:
                 # Collect all available AI audio into buffer
+                collected = 0
                 while True:
                     try:
                         chunk = self.ai_audio_queue.get_nowait()
                         audio_buffer += chunk
+                        collected += len(chunk)
                     except asyncio.QueueEmpty:
                         break
+                
+                # Pre-buffering phase: wait until we have enough audio
+                if pre_buffering and len(audio_buffer) < PRE_BUFFER_SIZE:
+                    # Send silence while pre-buffering
+                    try:
+                        transport.write(header + SILENCE_FRAME)
+                    except Exception as e:
+                        print(f"[SEND] Transport write FAILED: {e}", flush=True)
+                        break
+                    
+                    frames_sent += 1
+                    if frames_sent <= 5:
+                        print(f"[SEND] Pre-buffer frame #{frames_sent}, buffer={len(audio_buffer)}", flush=True)
+                    
+                    next_frame_time += frame_duration
+                    sleep_time = next_frame_time - time.time()
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
+                    continue
+                
+                if pre_buffering:
+                    print(f"[SEND] Pre-buffer complete, starting playback with {len(audio_buffer)} bytes", flush=True)
+                    pre_buffering = False
                 
                 # Get one frame's worth of data
                 if len(audio_buffer) >= FRAME_SIZE:
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
+                    ai_speaking = True
+                    silence_frames_sent = 0
+                elif ai_speaking and silence_frames_sent < MAX_SILENCE_DURING_SPEECH:
+                    # During AI speech, if buffer is temporarily empty, wait a bit for more audio
+                    # instead of immediately sending silence
+                    try:
+                        # Wait up to 40ms for more audio
+                        chunk = await asyncio.wait_for(self.ai_audio_queue.get(), timeout=0.04)
+                        audio_buffer += chunk
+                        # Try to get more if available
+                        while True:
+                            try:
+                                chunk = self.ai_audio_queue.get_nowait()
+                                audio_buffer += chunk
+                            except asyncio.QueueEmpty:
+                                break
+                        
+                        if len(audio_buffer) >= FRAME_SIZE:
+                            audio_data = audio_buffer[:FRAME_SIZE]
+                            audio_buffer = audio_buffer[FRAME_SIZE:]
+                            silence_frames_sent = 0
+                        else:
+                            audio_data = SILENCE_FRAME
+                            silence_frames_sent += 1
+                    except asyncio.TimeoutError:
+                        audio_data = SILENCE_FRAME
+                        silence_frames_sent += 1
                 else:
+                    # Not in AI speech or exceeded silence limit
                     audio_data = SILENCE_FRAME
+                    if silence_frames_sent >= MAX_SILENCE_DURING_SPEECH:
+                        ai_speaking = False  # AI stopped speaking
+                        pre_buffering = True  # Re-enable pre-buffering for next speech
                 
                 # Send frame
                 try:
@@ -210,7 +287,7 @@ class AudioSocketSession:
                 if frames_sent <= 5:
                     print(f"[SEND] Frame #{frames_sent} at {(time.time()-t0)*1000:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}", flush=True)
+                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}, speaking={ai_speaking}", flush=True)
                 
                 # Precise timing: wait until next frame time
                 next_frame_time += frame_duration
@@ -384,6 +461,10 @@ class AudioSocketSession:
     
     def _is_caller_blocked(self, phone, caller_phone: str) -> bool:
         """Check if caller is blocked based on phone number restrictions"""
+        print(f"[RESTRICT] === _is_caller_blocked() CALLED ===", flush=True)
+        print(f"[RESTRICT] caller_phone: {caller_phone}", flush=True)
+        print(f"[RESTRICT] phone.restriction_mode: '{phone.restriction_mode}'", flush=True)
+        
         restriction_mode = phone.restriction_mode or 'none'
         
         # Log the restriction settings
@@ -392,7 +473,9 @@ class AudioSocketSession:
         logger.info(f"[RESTRICT] Raw blocked_countries: {phone.blocked_countries}")
         logger.info(f"[RESTRICT] Raw blocked_numbers: {phone.blocked_numbers}")
         logger.info(f"[RESTRICT] Raw allowed_countries: {phone.allowed_countries}")
-        print(f"[RESTRICT] Checking call from {caller_phone}, mode={restriction_mode}", flush=True)
+        print(f"[RESTRICT] Effective mode after 'or none': '{restriction_mode}'", flush=True)
+        print(f"[RESTRICT] Raw blocked_countries: {phone.blocked_countries}", flush=True)
+        print(f"[RESTRICT] Raw blocked_numbers: {phone.blocked_numbers}", flush=True)
         
         if restriction_mode == 'none':
             logger.info(f"[RESTRICT] No restrictions, allowing call")
@@ -490,8 +573,13 @@ class AudioSocketSession:
     
     async def _setup_call(self) -> bool:
         """Setup call record and AI"""
+        print(f"[SETUP] _setup_call() STARTED", flush=True)
+        logger.info(f"[SETUP] _setup_call() STARTED")
+        
         self.db = SessionLocal()
         try:
+            print(f"[SETUP] Querying phone numbers...", flush=True)
+            
             # Find phone number with Zadarma/SIP config (the one receiving calls)
             phone = self.db.query(PhoneNumber).filter(
                 PhoneNumber.agent_id.isnot(None),
@@ -499,6 +587,7 @@ class AudioSocketSession:
             ).first()
             
             if not phone:
+                print(f"[SETUP] ERROR: No phone number with SIP config found!", flush=True)
                 logger.error("No phone number with SIP config found")
                 return False
             
@@ -506,6 +595,9 @@ class AudioSocketSession:
             self.db.refresh(phone)
             
             print(f"[SETUP] Found phone: {phone.phone_number}, agent_id: {phone.agent_id}", flush=True)
+            print(f"[SETUP] Phone restriction_mode from DB: '{phone.restriction_mode}'", flush=True)
+            print(f"[SETUP] Phone blocked_countries from DB: '{phone.blocked_countries}'", flush=True)
+            print(f"[SETUP] Phone blocked_numbers from DB: '{phone.blocked_numbers}'", flush=True)
             logger.info(f"[SETUP] Phone ID: {phone.id}, Number: {phone.phone_number}")
             logger.info(f"[SETUP] Restriction config: mode={phone.restriction_mode}, blocked_countries={phone.blocked_countries}, blocked_numbers={phone.blocked_numbers}")
             self.phone_number_id = phone.id
@@ -549,23 +641,36 @@ class AudioSocketSession:
             
             # Extract caller ID from UUID if available (format: callerid_uuid or just uuid)
             caller_phone = "Unknown"
+            print(f"[SETUP] Checking self.caller_id: hasattr={hasattr(self, 'caller_id')}, value='{getattr(self, 'caller_id', 'N/A')}'", flush=True)
             if hasattr(self, 'caller_id') and self.caller_id:
                 caller_phone = self.caller_id
+                print(f"[SETUP] Using caller_id: {caller_phone}", flush=True)
+            else:
+                print(f"[SETUP] WARNING: No caller_id available, using 'Unknown'", flush=True)
             
             logger.info(f"[SETUP] Incoming call from: {caller_phone}")
             logger.info(f"[SETUP] Phone number config - restriction_mode: {phone.restriction_mode}")
             logger.info(f"[SETUP] Phone number config - blocked_countries: {phone.blocked_countries}")
             logger.info(f"[SETUP] Phone number config - blocked_numbers: {phone.blocked_numbers}")
-            print(f"[SETUP] Caller: {caller_phone}, restriction_mode: {phone.restriction_mode}", flush=True)
+            print(f"[SETUP] === RESTRICTION CHECK START ===", flush=True)
+            print(f"[SETUP] Caller: {caller_phone}", flush=True)
+            print(f"[SETUP] restriction_mode: '{phone.restriction_mode}'", flush=True)
+            print(f"[SETUP] blocked_countries: '{phone.blocked_countries}'", flush=True)
+            print(f"[SETUP] blocked_numbers: '{phone.blocked_numbers}'", flush=True)
             
             # Check call restrictions
-            if self._is_caller_blocked(phone, caller_phone):
-                print(f"[SETUP] BLOCKED: Caller {caller_phone} is restricted", flush=True)
+            print(f"[SETUP] Calling _is_caller_blocked({caller_phone})...", flush=True)
+            is_blocked = self._is_caller_blocked(phone, caller_phone)
+            print(f"[SETUP] _is_caller_blocked returned: {is_blocked}", flush=True)
+            
+            if is_blocked:
+                print(f"[SETUP] >>> CALL BLOCKED! Caller {caller_phone} is restricted <<<", flush=True)
                 logger.warning(f"[SETUP] Call BLOCKED from {caller_phone} due to restrictions")
                 self.is_busy_response = True
                 self.busy_config = {'action': 'busy_tone', 'audio_file_url': None}
                 return False
             
+            print(f"[SETUP] >>> CALL ALLOWED <<<", flush=True)
             logger.info(f"[SETUP] Call ALLOWED from {caller_phone}")
             
             self.call = Call(
@@ -623,7 +728,7 @@ class AudioSocketSession:
             # Check audio level (for debugging)
             if not hasattr(self, '_audio_level_count'):
                 self._audio_level_count = 0
-                self._caller_resample_state = None
+                self._caller_resample_state = ResampleState()
             self._audio_level_count += 1
             
             try:
@@ -693,7 +798,9 @@ class AudioSocketSession:
     async def _ai_receive_loop(self):
         """Receive audio from AI and queue for sending"""
         ai_packets = 0
-        resample_state = None  # Maintain state for better resampling
+        resample_state = ResampleState()  # Maintain state for better resampling
+        total_bytes_in = 0
+        total_bytes_out = 0
         print(f"[AI→AUDIO] Receive loop STARTED", flush=True)
         try:
             async for audio_24k in self.agent_service.receive_audio():
@@ -705,19 +812,24 @@ class AudioSocketSession:
                 if len(audio_24k) % 2:
                     audio_24k = audio_24k[:-1]
                 
+                total_bytes_in += len(audio_24k)
+                
                 # Use high quality resampling (24kHz → 8kHz in two steps)
                 audio_8k, resample_state = high_quality_resample(audio_24k, 24000, 8000, resample_state)
+                total_bytes_out += len(audio_8k)
+                
                 await self.ai_audio_queue.put(audio_8k)
                 
                 ai_packets += 1
                 if ai_packets <= 5 or ai_packets % 50 == 0:
-                    print(f"[AI→AUDIO] #{ai_packets}, {len(audio_8k)} bytes from Gemini", flush=True)
+                    ratio = total_bytes_out / total_bytes_in if total_bytes_in > 0 else 0
+                    print(f"[AI→AUDIO] #{ai_packets}, in={len(audio_24k)}, out={len(audio_8k)}, ratio={ratio:.2f}", flush=True)
                 
         except asyncio.CancelledError:
             print(f"[AI→AUDIO] Cancelled after {ai_packets} packets", flush=True)
         except Exception as e:
             print(f"[AI→AUDIO] ERROR: {e}", flush=True)
-        print(f"[AI→AUDIO] ENDED, total {ai_packets} packets", flush=True)
+        print(f"[AI→AUDIO] ENDED, total {ai_packets} packets, {total_bytes_in}→{total_bytes_out} bytes", flush=True)
     
     async def _play_busy_message(self):
         """Play a busy message (tone or voicemail audio) and hangup"""
