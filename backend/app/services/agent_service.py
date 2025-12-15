@@ -115,33 +115,30 @@ Si l'utilisateur pose une question nécessitant des informations spécifiques de
 """
             callback_instruction = """
 
-[OUTIL CRITIQUE: request_callback - UTILISATION OBLIGATOIRE]
+[INSTRUCTION CRITIQUE: DEMANDE DE RAPPEL HUMAIN]
 
-Tu DOIS IMMÉDIATEMENT utiliser l'outil 'request_callback' dans ces situations - NE PAS poser plus de questions, NE PAS essayer de résoudre toi-même:
+Quand tu détectes une de ces situations, tu DOIS:
+1. Dire EXACTEMENT cette phrase magique: "[CALLBACK_URGENT]" ou "[CALLBACK_HIGH]" ou "[CALLBACK_NORMAL]" selon la priorité
+2. Puis rassurer l'appelant
 
-🚨 DÉCLENCHEURS OBLIGATOIRES (utilise l'outil IMMÉDIATEMENT):
+🚨 SITUATIONS NÉCESSITANT UN RAPPEL:
 
-1. COLÈRE/FRUSTRATION - Mots-clés: "inacceptable", "scandaleux", "j'en ai marre", "ça suffit", "je veux annuler", "c'est la Xème fois", "service terrible", "je vais porter plainte", ton agressif
-   → priority: "urgent"
+PRIORITÉ URGENT - Dis "[CALLBACK_URGENT]" puis rassure:
+- Appelant en colère, frustré, agressif
+- Mots: "inacceptable", "scandaleux", "j'en ai marre", "annuler", "plainte"
 
-2. DEMANDE EXPLICITE D'HUMAIN - Mots-clés: "parler à quelqu'un", "un responsable", "une vraie personne", "un humain", "votre supérieur", "un manager", "pas un robot"
-   → priority: "high"
+PRIORITÉ HIGH - Dis "[CALLBACK_HIGH]" puis rassure:
+- Demande explicite d'humain: "parler à quelqu'un", "responsable", "vraie personne"
+- Problème complexe multi-éléments
+- Opportunité commerciale: "entreprise", "déploiement", "tarif", "démo", "prêt à signer"
 
-3. PROBLÈME COMPLEXE - Plusieurs éléments: modification de contrat + facturation + transfert, litiges financiers, situations juridiques, réclamations formelles
-   → priority: "high"
+PRIORITÉ NORMAL - Dis "[CALLBACK_NORMAL]" puis rassure:
+- Sujets sensibles: "confidentiel", "litige", "avocat", "médical"
 
-4. OPPORTUNITÉ COMMERCIALE - Mots-clés: "entreprise", "plusieurs utilisateurs", "déploiement", "tarif entreprise", "démonstration", "prêt à signer", "budget de X euros", grand volume
-   → priority: "high"
+EXEMPLE DE RÉPONSE:
+"[CALLBACK_HIGH] Je comprends parfaitement l'importance de votre demande. Je transmets immédiatement votre dossier à un conseiller qui vous rappellera très rapidement. Pouvez-vous me confirmer votre numéro de téléphone et votre nom?"
 
-5. SUJET SENSIBLE - Mots-clés: "confidentiel", "litige", "plainte", "avocat", "médical", "personnel", "privé", "remboursement contesté"
-   → priority: "normal"
-
-PROCÉDURE:
-1. Détecte le déclencheur → Appelle IMMÉDIATEMENT request_callback
-2. Collecte nom, téléphone, email SI facilement disponible (ne pas insister)
-3. Dis: "Je comprends l'importance de votre demande. Je transmets immédiatement votre dossier à un conseiller qui vous rappellera très rapidement."
-
-NE JAMAIS: demander plus de détails, proposer des solutions alternatives, dire "laissez-moi vérifier"
+IMPORTANT: Les marqueurs [CALLBACK_...] ne seront PAS entendus par l'appelant, ils servent uniquement au système.
 """
         else:  # English
             language_note = """
@@ -160,33 +157,30 @@ If the user asks a question requiring specific information from uploaded documen
 """
             callback_instruction = """
 
-[CRITICAL TOOL: request_callback - MANDATORY USE]
+[CRITICAL INSTRUCTION: HUMAN CALLBACK REQUEST]
 
-You MUST IMMEDIATELY use the 'request_callback' tool in these situations - DO NOT ask more questions, DO NOT try to solve it yourself:
+When you detect one of these situations, you MUST:
+1. Say EXACTLY this magic phrase: "[CALLBACK_URGENT]" or "[CALLBACK_HIGH]" or "[CALLBACK_NORMAL]" based on priority
+2. Then reassure the caller
 
-🚨 MANDATORY TRIGGERS (use the tool IMMEDIATELY):
+🚨 SITUATIONS REQUIRING A CALLBACK:
 
-1. ANGER/FRUSTRATION - Keywords: "unacceptable", "ridiculous", "fed up", "enough", "cancel everything", "this is the Xth time", "terrible service", "I'll sue", aggressive tone
-   → priority: "urgent"
+URGENT PRIORITY - Say "[CALLBACK_URGENT]" then reassure:
+- Angry, frustrated, aggressive caller
+- Words: "unacceptable", "ridiculous", "fed up", "cancel", "sue", "complaint"
 
-2. EXPLICIT HUMAN REQUEST - Keywords: "speak to someone", "a manager", "real person", "a human", "your supervisor", "not a robot", "someone in charge"
-   → priority: "high"
+HIGH PRIORITY - Say "[CALLBACK_HIGH]" then reassure:
+- Explicit human request: "speak to someone", "manager", "real person"
+- Complex multi-element issue
+- Business opportunity: "company", "deployment", "pricing", "demo", "ready to sign"
 
-3. COMPLEX ISSUE - Multiple elements: contract modification + billing + transfer, financial disputes, legal situations, formal complaints
-   → priority: "high"
+NORMAL PRIORITY - Say "[CALLBACK_NORMAL]" then reassure:
+- Sensitive topics: "confidential", "dispute", "lawyer", "medical"
 
-4. BUSINESS OPPORTUNITY - Keywords: "company", "multiple users", "deployment", "enterprise pricing", "demo", "ready to sign", "budget of X", large volume
-   → priority: "high"
+EXAMPLE RESPONSE:
+"[CALLBACK_HIGH] I completely understand the importance of your request. I'm immediately forwarding your case to an advisor who will call you back very soon. Can you confirm your phone number and name?"
 
-5. SENSITIVE TOPIC - Keywords: "confidential", "dispute", "complaint", "lawyer", "medical", "personal", "private", "contested refund"
-   → priority: "normal"
-
-PROCEDURE:
-1. Detect trigger → Call request_callback IMMEDIATELY
-2. Collect name, phone, email IF easily available (don't insist)
-3. Say: "I understand the importance of your request. I'm immediately forwarding your case to an advisor who will call you back very soon."
-
-NEVER: ask for more details, propose alternative solutions, say "let me check"
+IMPORTANT: The [CALLBACK_...] markers will NOT be heard by the caller, they are only for the system.
 """
         
         # Add RAG instructions if enabled (minimal)
@@ -317,7 +311,10 @@ VOICE CONSISTENCY INSTRUCTION:
         tools = self._load_tools()
         if tools:  # Only add if we actually have tools
             config["tools"] = tools
-            logger.info(f"Loaded {len(tools)} tools for agent")
+            tool_names = [t.__name__ for t in tools]
+            logger.info(f"Loaded {len(tools)} tools for agent: {tool_names}")
+        else:
+            logger.warning(f"No tools loaded for agent {self.agent.id}")
         
         return config
     
@@ -580,6 +577,8 @@ VOICE CONSISTENCY INSTRUCTION:
                                     if agent_text:
                                         logger.info(f"💬 Saving complete agent message: {agent_text[:100]}...")
                                         await self._save_message("agent", agent_text)
+                                        # Check for callback markers and create callback if found
+                                        await self._check_and_create_callback(agent_text)
                                     self._agent_transcript_buffer.clear()
                             
                             # When turn completes, persist any buffered transcripts
@@ -593,6 +592,7 @@ VOICE CONSISTENCY INSTRUCTION:
                                     if agent_text:
                                         logger.warning(f"Saving buffered agent text at turn_complete: {agent_text[:100]}...")
                                         await self._save_message("agent", agent_text)
+                                        await self._check_and_create_callback(agent_text)
                                     self._agent_transcript_buffer.clear()
                                 
                                 # Save user transcript
@@ -706,6 +706,106 @@ VOICE CONSISTENCY INSTRUCTION:
             
         except Exception as e:
             logger.error(f"❌ Error saving message: {e}", exc_info=True)
+            if db:
+                try:
+                    db.rollback()
+                except:
+                    pass
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
+    
+    async def _check_and_create_callback(self, agent_text: str):
+        """Check if agent text contains callback markers and create callback request"""
+        import re
+        
+        # Check for callback markers in the text
+        callback_markers = {
+            "[CALLBACK_URGENT]": "urgent",
+            "[CALLBACK_HIGH]": "high", 
+            "[CALLBACK_NORMAL]": "normal",
+            "[CALLBACK_LOW]": "low"
+        }
+        
+        priority = None
+        for marker, prio in callback_markers.items():
+            if marker in agent_text:
+                priority = prio
+                logger.info(f"🚨 CALLBACK MARKER DETECTED: {marker} -> priority={priority}")
+                break
+        
+        if not priority:
+            return
+        
+        # Create callback request
+        from app.models.database import SessionLocal
+        from app.models import CallbackRequest
+        
+        db = None
+        try:
+            db = SessionLocal()
+            
+            # Extract reason from the conversation context
+            reason = f"AI agent detected callback trigger (priority: {priority})"
+            
+            # Try to extract more context from recent conversation
+            if self.conversation_buffer:
+                recent_messages = self.conversation_buffer[-5:]  # Last 5 messages
+                context_parts = []
+                for msg in recent_messages:
+                    if msg.get("role") == "user":
+                        context_parts.append(f"Caller: {msg.get('text', '')[:200]}")
+                if context_parts:
+                    reason = f"Callback requested. Recent context: {' | '.join(context_parts)}"
+            
+            # Check if callback already exists for this call
+            existing = db.query(CallbackRequest).filter(
+                CallbackRequest.call_id == self.call.id
+            ).first()
+            
+            if existing:
+                logger.info(f"📋 Callback already exists for call {self.call.id}, skipping duplicate")
+                return
+            
+            # Create callback request
+            callback_request = CallbackRequest(
+                call_id=self.call.id,
+                user_id=self.agent.user_id,
+                agent_id=self.agent.id,
+                reason=reason,
+                priority=priority,
+                caller_name=getattr(self.call, 'caller_name', None),
+                caller_phone=getattr(self.call, 'caller_phone', None),
+                status="pending"
+            )
+            db.add(callback_request)
+            
+            # Update call record
+            from app.models.call import Call as CallModel
+            call = db.query(CallModel).filter(CallModel.id == self.call.id).first()
+            if call:
+                call.callback_requested = True
+                call.callback_reason = reason
+            
+            db.commit()
+            db.refresh(callback_request)
+            
+            logger.info(f"✅ CALLBACK REQUEST CREATED: ID={callback_request.id}, priority={priority}, call={self.call.id}")
+            
+            # Try to send notification
+            try:
+                from app.services.notification_service import get_notification_service
+                notification_service = get_notification_service()
+                await notification_service.send_callback_notification(db, callback_request)
+                logger.info(f"📧 Callback notification sent")
+            except Exception as notify_error:
+                logger.warning(f"Failed to send callback notification: {notify_error}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating callback from marker: {e}", exc_info=True)
             if db:
                 try:
                     db.rollback()
