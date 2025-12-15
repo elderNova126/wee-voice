@@ -1113,16 +1113,23 @@ async def respond_to_invite(
     if found_idx is None:
         raise HTTPException(status_code=404, detail="Invite not found")
     
-    if collaborators[found_idx].get("status") != "pending":
-        raise HTTPException(status_code=400, detail="Invite has already been responded to")
+    # Check current status - use "pending" as default for backward compatibility
+    current_status = collaborators[found_idx].get("status", "pending")
+    if current_status not in ["pending", None, ""]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invite has already been responded to (current status: {current_status})"
+        )
     
     # Update the status
     if action.action == "accept":
         collaborators[found_idx]["status"] = "accepted"
+        collaborators[found_idx]["is_active"] = True
         collaborators[found_idx]["accepted_at"] = datetime.utcnow().isoformat()
         message = "Invite accepted successfully"
     else:
         collaborators[found_idx]["status"] = "rejected"
+        collaborators[found_idx]["is_active"] = False
         collaborators[found_idx]["rejected_at"] = datetime.utcnow().isoformat()
         message = "Invite rejected"
     
