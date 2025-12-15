@@ -30,38 +30,17 @@ FRAME_SIZE = 320  # 160 samples * 2 bytes = 20ms at 8kHz
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 
-class ResampleState:
-    """Maintains resampling state for continuous audio streams"""
-    def __init__(self):
-        self.state_24_12 = None
-        self.state_12_8 = None
-        self.state_8_16 = None
-
-
 def high_quality_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    Higher quality resampling using audioop with proper state management.
-    For downsampling, we do it in steps to preserve quality.
+    Resample audio using audioop with state management for continuity.
+    Uses direct conversion for all rates (simpler and often better).
     """
     if from_rate == to_rate:
         return audio_bytes, state
     
-    if state is None:
-        state = ResampleState()
-    
-    # For large rate changes, do in steps for better quality
-    if from_rate == 24000 and to_rate == 8000:
-        # 24k -> 12k -> 8k (two steps with maintained state)
-        audio_12k, state.state_24_12 = audioop.ratecv(audio_bytes, 2, 1, 24000, 12000, state.state_24_12)
-        audio_8k, state.state_12_8 = audioop.ratecv(audio_12k, 2, 1, 12000, 8000, state.state_12_8)
-        return audio_8k, state
-    elif from_rate == 8000 and to_rate == 16000:
-        # Direct 2x upsampling is fine
-        audio_16k, state.state_8_16 = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state.state_8_16)
-        return audio_16k, state
-    else:
-        # Default single-step conversion
-        return audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, None)
+    # Direct conversion with state management
+    result, new_state = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state)
+    return result, new_state
 
 # Track active calls per phone number
 _active_calls: dict[int, str] = {}  # phone_number_id -> call_uuid
@@ -180,34 +159,19 @@ class AudioSocketSession:
             print(f"[HANDLE] Cleanup done", flush=True)
     
     async def _send_loop(self):
-        """Continuously send audio frames to Asterisk using jitter buffer approach"""
+        """Continuously send audio frames to Asterisk at precise 20ms intervals"""
         import time
         t0 = time.time()
         print(f"[SEND] Loop STARTED", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
-        audio_buffer = b''  # Jitter buffer to accumulate AI audio
+        audio_buffer = b''  # Buffer to accumulate AI audio
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
         # Timing: maintain precise 20ms frame rate
         frame_duration = 0.02  # 20ms
         next_frame_time = time.time()
-        
-        # Jitter buffer settings
-        MIN_BUFFER_MS = 200  # Minimum buffer before starting playback (200ms)
-        TARGET_BUFFER_MS = 300  # Target buffer level (300ms)
-        MAX_BUFFER_MS = 500  # Maximum buffer (500ms) - discard old audio if exceeded
-        
-        MIN_BUFFER_SIZE = int(MIN_BUFFER_MS / 20) * FRAME_SIZE  # 200ms = 10 frames
-        TARGET_BUFFER_SIZE = int(TARGET_BUFFER_MS / 20) * FRAME_SIZE
-        MAX_BUFFER_SIZE = int(MAX_BUFFER_MS / 20) * FRAME_SIZE
-        
-        # State
-        playback_started = False
-        last_audio_frame = SILENCE_FRAME  # Keep last frame for smooth transitions
-        consecutive_silence = 0
-        MAX_CONSECUTIVE_SILENCE = 25  # 500ms of silence = end of speech
         
         try:
             while self.is_running:
@@ -219,61 +183,13 @@ class AudioSocketSession:
                     except asyncio.QueueEmpty:
                         break
                 
-                # Limit buffer size (discard oldest if too much)
-                if len(audio_buffer) > MAX_BUFFER_SIZE:
-                    excess = len(audio_buffer) - TARGET_BUFFER_SIZE
-                    audio_buffer = audio_buffer[excess:]
-                    if frames_sent % 50 == 0:
-                        print(f"[SEND] Buffer overflow, discarded {excess} bytes", flush=True)
-                
-                # Pre-buffering phase: wait until we have enough audio
-                if not playback_started:
-                    if len(audio_buffer) >= MIN_BUFFER_SIZE:
-                        playback_started = True
-                        print(f"[SEND] Playback started with {len(audio_buffer)} bytes ({len(audio_buffer)//FRAME_SIZE} frames)", flush=True)
-                    else:
-                        # Send silence while buffering
-                        try:
-                            transport.write(header + SILENCE_FRAME)
-                        except Exception as e:
-                            print(f"[SEND] Transport write FAILED: {e}", flush=True)
-                            break
-                        
-                        frames_sent += 1
-                        if frames_sent <= 5 or frames_sent % 50 == 0:
-                            print(f"[SEND] Buffering frame #{frames_sent}, buffer={len(audio_buffer)}/{MIN_BUFFER_SIZE}", flush=True)
-                        
-                        next_frame_time += frame_duration
-                        sleep_time = next_frame_time - time.time()
-                        if sleep_time > 0:
-                            await asyncio.sleep(sleep_time)
-                        continue
-                
-                # Playback phase: send audio or handle underrun
+                # Get one frame's worth of data
                 if len(audio_buffer) >= FRAME_SIZE:
-                    # Normal playback
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
-                    last_audio_frame = audio_data  # Save for potential repeat
-                    consecutive_silence = 0
                 else:
-                    # Buffer underrun during playback
-                    consecutive_silence += 1
-                    
-                    if consecutive_silence <= 5:
-                        # Short gap: repeat last frame with fade (smoother than silence)
-                        # Fade the last frame slightly to avoid clicks
-                        audio_data = bytes(int(b * 0.9) if b < 128 else int(b + (255-b) * 0.1) for b in last_audio_frame)
-                    elif consecutive_silence <= MAX_CONSECUTIVE_SILENCE:
-                        # Medium gap: use silence
-                        audio_data = SILENCE_FRAME
-                    else:
-                        # Long silence: AI stopped speaking, go back to buffering
-                        audio_data = SILENCE_FRAME
-                        playback_started = False
-                        consecutive_silence = 0
-                        if frames_sent % 50 == 0:
-                            print(f"[SEND] Speech ended, returning to buffer mode", flush=True)
+                    # Not enough audio, send silence
+                    audio_data = SILENCE_FRAME
                 
                 # Send frame
                 try:
@@ -286,10 +202,9 @@ class AudioSocketSession:
                 if frames_sent <= 5:
                     print(f"[SEND] Frame #{frames_sent} at {(time.time()-t0)*1000:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    status = "playing" if playback_started else "buffering"
-                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}, status={status}", flush=True)
+                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}", flush=True)
                 
-                # Precise timing: wait until next frame time (never block on queue)
+                # Precise timing: wait until next frame time
                 next_frame_time += frame_duration
                 sleep_time = next_frame_time - time.time()
                 if sleep_time > 0:
@@ -418,6 +333,8 @@ class AudioSocketSession:
             
             # Always try to read caller ID file using Asterisk's UUID
             if asterisk_uuid:
+                # Small delay to ensure Asterisk's System() command has written the file
+                await asyncio.sleep(0.1)  # 100ms delay
                 self._read_caller_id_file(asterisk_uuid)
             else:
                 print(f"[UUID] No Asterisk UUID available, can't read caller ID file")
@@ -448,11 +365,21 @@ class AudioSocketSession:
                     raw_caller_id = f.read().strip()
                 os.unlink(callerid_file)  # Delete after reading
                 
+                print(f"[UUID] Raw file content: '{raw_caller_id}'", flush=True)
+                
                 # Clean up caller ID (remove quotes, extra chars)
-                self.caller_id = raw_caller_id.strip('"\'').strip()
+                cleaned = raw_caller_id.strip('"\'').strip()
+                
+                # Check for empty or invalid values
+                if not cleaned or cleaned.lower() in ('none', 'null', 'unknown', ''):
+                    print(f"[UUID] Invalid caller ID in file: '{raw_caller_id}', setting to None", flush=True)
+                    self.caller_id = None
+                    return
+                
+                self.caller_id = cleaned
                 
                 # Normalize: ensure it starts with + for international
-                if self.caller_id and not self.caller_id.startswith('+') and self.caller_id[0].isdigit():
+                if self.caller_id and self.caller_id[0].isdigit():
                     # If starts with country code like 84xxx, add +
                     if len(self.caller_id) > 9:
                         self.caller_id = '+' + self.caller_id
@@ -675,12 +602,16 @@ class AudioSocketSession:
             
             # Extract caller ID from UUID if available (format: callerid_uuid or just uuid)
             caller_phone = "Unknown"
-            print(f"[SETUP] Checking self.caller_id: hasattr={hasattr(self, 'caller_id')}, value='{getattr(self, 'caller_id', 'N/A')}'", flush=True)
-            if hasattr(self, 'caller_id') and self.caller_id:
+            has_attr = hasattr(self, 'caller_id')
+            attr_value = getattr(self, 'caller_id', 'N/A')
+            attr_type = type(attr_value).__name__
+            print(f"[SETUP] Checking self.caller_id: hasattr={has_attr}, value='{attr_value}', type={attr_type}", flush=True)
+            
+            if has_attr and self.caller_id and self.caller_id != 'None':
                 caller_phone = self.caller_id
                 print(f"[SETUP] Using caller_id: {caller_phone}", flush=True)
             else:
-                print(f"[SETUP] WARNING: No caller_id available, using 'Unknown'", flush=True)
+                print(f"[SETUP] WARNING: No valid caller_id (hasattr={has_attr}, value={repr(attr_value)}), using 'Unknown'", flush=True)
             
             logger.info(f"[SETUP] Incoming call from: {caller_phone}")
             logger.info(f"[SETUP] Phone number config - restriction_mode: {phone.restriction_mode}")
@@ -762,7 +693,7 @@ class AudioSocketSession:
             # Check audio level (for debugging)
             if not hasattr(self, '_audio_level_count'):
                 self._audio_level_count = 0
-                self._caller_resample_state = ResampleState()
+                self._caller_resample_state = None
             self._audio_level_count += 1
             
             try:
@@ -832,7 +763,7 @@ class AudioSocketSession:
     async def _ai_receive_loop(self):
         """Receive audio from AI and queue for sending"""
         ai_packets = 0
-        resample_state = ResampleState()  # Maintain state for better resampling
+        resample_state = None  # Maintain state for continuity between chunks
         total_bytes_in = 0
         total_bytes_out = 0
         print(f"[AI→AUDIO] Receive loop STARTED", flush=True)
