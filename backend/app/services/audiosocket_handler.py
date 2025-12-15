@@ -19,7 +19,15 @@ try:
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
-    print("[AUDIO] WARNING: scipy not available, using audioop for resampling", flush=True)
+    print("[AUDIO] WARNING: scipy not available", flush=True)
+
+try:
+    import soxr
+    SOXR_AVAILABLE = True
+    print("[AUDIO] Using soxr for high-quality resampling", flush=True)
+except ImportError:
+    SOXR_AVAILABLE = False
+    print("[AUDIO] WARNING: soxr not available, using audioop", flush=True)
 
 from sqlalchemy.orm import Session
 
@@ -44,61 +52,43 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    Telephony-optimized resampling following Twilio best practices.
+    High-quality resampling using soxr (SoX Resampler).
     
-    EQ for telephony (per Twilio):
-    - High-pass 200Hz: removes room noise/rumble
-    - Low-pass 3.8kHz: anti-aliasing for 8kHz
-    - Boost 2-3kHz: improves speech intelligibility
+    soxr is the gold standard for audio resampling - same as used by
+    professional audio software. Much better than audioop or scipy.
+    
+    Based on working Twilio + OpenAI implementation.
     """
     if from_rate == to_rate:
         return audio_bytes, state
     
     if state is None:
-        state = {'audioop': None}
+        state = {}
     
-    # For downsampling (24k→8k), apply telephony EQ
-    if SCIPY_AVAILABLE and from_rate > to_rate:
+    # Use soxr for high-quality resampling (like the Twilio example)
+    if SOXR_AVAILABLE:
         try:
-            samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float64)
+            # Convert to numpy array
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
             
-            if len(samples) == 0:
+            if len(audio_np) == 0:
                 return audio_bytes, state
             
-            nyquist = from_rate / 2
+            # For 24k→8k: convert to float, resample, convert back
+            # This is exactly what the working Twilio code does
+            audio_float = audio_np.astype(np.float32) / 32768.0
             
-            # Initialize filters once
-            if state.get('hp_b') is None:
-                # High-pass at 200Hz (remove low rumble - Twilio recommendation)
-                hp_cutoff = 200 / nyquist
-                state['hp_b'], state['hp_a'] = signal.butter(2, hp_cutoff, btype='high')
-                
-                # Low-pass at 3.8kHz (anti-aliasing for 8kHz output)
-                lp_cutoff = 3800 / nyquist
-                state['lp_b'], state['lp_a'] = signal.butter(3, lp_cutoff, btype='low')
-            
-            # Apply high-pass (remove low noise)
-            hp_zi = state.get('hp_zi')
-            if hp_zi is None:
-                hp_zi = signal.lfilter_zi(state['hp_b'], state['hp_a']) * samples[0]
-            samples, state['hp_zi'] = signal.lfilter(
-                state['hp_b'], state['hp_a'], samples, zi=hp_zi
-            )
-            
-            # Apply low-pass (anti-aliasing)
-            lp_zi = state.get('lp_zi')
-            if lp_zi is None:
-                lp_zi = signal.lfilter_zi(state['lp_b'], state['lp_a']) * samples[0]
-            samples, state['lp_zi'] = signal.lfilter(
-                state['lp_b'], state['lp_a'], samples, zi=lp_zi
-            )
+            # soxr.resample - high quality resampling
+            resampled = soxr.resample(audio_float, from_rate, to_rate)
             
             # Convert back to int16
-            audio_bytes = np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+            resampled_int16 = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+            
+            return resampled_int16.tobytes(), state
         except Exception as e:
-            print(f"[RESAMPLE] Filter error: {e}", flush=True)
+            print(f"[RESAMPLE] soxr error: {e}", flush=True)
     
-    # Use audioop for resampling (maintains state for smooth audio)
+    # Fallback to audioop if soxr not available
     s = state.get('audioop')
     result, s = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, s)
     state['audioop'] = s

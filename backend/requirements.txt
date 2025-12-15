@@ -59,6 +59,7 @@ numpy==1.24.3
 
 # Audio Processing (high-quality resampling for phone calls)
 scipy==1.11.4
+soxr==0.3.7  # High-quality audio resampler (better than scipy/audioop)
 
 # Text Processing (optional)
 
