@@ -180,101 +180,100 @@ class AudioSocketSession:
             print(f"[HANDLE] Cleanup done", flush=True)
     
     async def _send_loop(self):
-        """Continuously send audio frames to Asterisk at precise 20ms intervals"""
+        """Continuously send audio frames to Asterisk using jitter buffer approach"""
         import time
         t0 = time.time()
         print(f"[SEND] Loop STARTED", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
-        audio_buffer = b''  # Buffer to accumulate AI audio
+        audio_buffer = b''  # Jitter buffer to accumulate AI audio
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
         # Timing: maintain precise 20ms frame rate
         frame_duration = 0.02  # 20ms
         next_frame_time = time.time()
         
-        # Track if we're in the middle of playing AI speech
-        ai_speaking = False
-        silence_frames_sent = 0
-        MAX_SILENCE_DURING_SPEECH = 3  # Only allow 3 silence frames (60ms) during speech
+        # Jitter buffer settings
+        MIN_BUFFER_MS = 200  # Minimum buffer before starting playback (200ms)
+        TARGET_BUFFER_MS = 300  # Target buffer level (300ms)
+        MAX_BUFFER_MS = 500  # Maximum buffer (500ms) - discard old audio if exceeded
         
-        # Pre-buffer threshold: wait for this much audio before starting to play
-        PRE_BUFFER_SIZE = FRAME_SIZE * 5  # 100ms of pre-buffering
-        pre_buffering = True
+        MIN_BUFFER_SIZE = int(MIN_BUFFER_MS / 20) * FRAME_SIZE  # 200ms = 10 frames
+        TARGET_BUFFER_SIZE = int(TARGET_BUFFER_MS / 20) * FRAME_SIZE
+        MAX_BUFFER_SIZE = int(MAX_BUFFER_MS / 20) * FRAME_SIZE
+        
+        # State
+        playback_started = False
+        last_audio_frame = SILENCE_FRAME  # Keep last frame for smooth transitions
+        consecutive_silence = 0
+        MAX_CONSECUTIVE_SILENCE = 25  # 500ms of silence = end of speech
         
         try:
             while self.is_running:
-                # Collect all available AI audio into buffer
-                collected = 0
+                # Collect all available AI audio into buffer (non-blocking)
                 while True:
                     try:
                         chunk = self.ai_audio_queue.get_nowait()
                         audio_buffer += chunk
-                        collected += len(chunk)
                     except asyncio.QueueEmpty:
                         break
                 
+                # Limit buffer size (discard oldest if too much)
+                if len(audio_buffer) > MAX_BUFFER_SIZE:
+                    excess = len(audio_buffer) - TARGET_BUFFER_SIZE
+                    audio_buffer = audio_buffer[excess:]
+                    if frames_sent % 50 == 0:
+                        print(f"[SEND] Buffer overflow, discarded {excess} bytes", flush=True)
+                
                 # Pre-buffering phase: wait until we have enough audio
-                if pre_buffering and len(audio_buffer) < PRE_BUFFER_SIZE:
-                    # Send silence while pre-buffering
-                    try:
-                        transport.write(header + SILENCE_FRAME)
-                    except Exception as e:
-                        print(f"[SEND] Transport write FAILED: {e}", flush=True)
-                        break
-                    
-                    frames_sent += 1
-                    if frames_sent <= 5:
-                        print(f"[SEND] Pre-buffer frame #{frames_sent}, buffer={len(audio_buffer)}", flush=True)
-                    
-                    next_frame_time += frame_duration
-                    sleep_time = next_frame_time - time.time()
-                    if sleep_time > 0:
-                        await asyncio.sleep(sleep_time)
-                    continue
+                if not playback_started:
+                    if len(audio_buffer) >= MIN_BUFFER_SIZE:
+                        playback_started = True
+                        print(f"[SEND] Playback started with {len(audio_buffer)} bytes ({len(audio_buffer)//FRAME_SIZE} frames)", flush=True)
+                    else:
+                        # Send silence while buffering
+                        try:
+                            transport.write(header + SILENCE_FRAME)
+                        except Exception as e:
+                            print(f"[SEND] Transport write FAILED: {e}", flush=True)
+                            break
+                        
+                        frames_sent += 1
+                        if frames_sent <= 5 or frames_sent % 50 == 0:
+                            print(f"[SEND] Buffering frame #{frames_sent}, buffer={len(audio_buffer)}/{MIN_BUFFER_SIZE}", flush=True)
+                        
+                        next_frame_time += frame_duration
+                        sleep_time = next_frame_time - time.time()
+                        if sleep_time > 0:
+                            await asyncio.sleep(sleep_time)
+                        continue
                 
-                if pre_buffering:
-                    print(f"[SEND] Pre-buffer complete, starting playback with {len(audio_buffer)} bytes", flush=True)
-                    pre_buffering = False
-                
-                # Get one frame's worth of data
+                # Playback phase: send audio or handle underrun
                 if len(audio_buffer) >= FRAME_SIZE:
+                    # Normal playback
                     audio_data = audio_buffer[:FRAME_SIZE]
                     audio_buffer = audio_buffer[FRAME_SIZE:]
-                    ai_speaking = True
-                    silence_frames_sent = 0
-                elif ai_speaking and silence_frames_sent < MAX_SILENCE_DURING_SPEECH:
-                    # During AI speech, if buffer is temporarily empty, wait a bit for more audio
-                    # instead of immediately sending silence
-                    try:
-                        # Wait up to 40ms for more audio
-                        chunk = await asyncio.wait_for(self.ai_audio_queue.get(), timeout=0.04)
-                        audio_buffer += chunk
-                        # Try to get more if available
-                        while True:
-                            try:
-                                chunk = self.ai_audio_queue.get_nowait()
-                                audio_buffer += chunk
-                            except asyncio.QueueEmpty:
-                                break
-                        
-                        if len(audio_buffer) >= FRAME_SIZE:
-                            audio_data = audio_buffer[:FRAME_SIZE]
-                            audio_buffer = audio_buffer[FRAME_SIZE:]
-                            silence_frames_sent = 0
-                        else:
-                            audio_data = SILENCE_FRAME
-                            silence_frames_sent += 1
-                    except asyncio.TimeoutError:
-                        audio_data = SILENCE_FRAME
-                        silence_frames_sent += 1
+                    last_audio_frame = audio_data  # Save for potential repeat
+                    consecutive_silence = 0
                 else:
-                    # Not in AI speech or exceeded silence limit
-                    audio_data = SILENCE_FRAME
-                    if silence_frames_sent >= MAX_SILENCE_DURING_SPEECH:
-                        ai_speaking = False  # AI stopped speaking
-                        pre_buffering = True  # Re-enable pre-buffering for next speech
+                    # Buffer underrun during playback
+                    consecutive_silence += 1
+                    
+                    if consecutive_silence <= 5:
+                        # Short gap: repeat last frame with fade (smoother than silence)
+                        # Fade the last frame slightly to avoid clicks
+                        audio_data = bytes(int(b * 0.9) if b < 128 else int(b + (255-b) * 0.1) for b in last_audio_frame)
+                    elif consecutive_silence <= MAX_CONSECUTIVE_SILENCE:
+                        # Medium gap: use silence
+                        audio_data = SILENCE_FRAME
+                    else:
+                        # Long silence: AI stopped speaking, go back to buffering
+                        audio_data = SILENCE_FRAME
+                        playback_started = False
+                        consecutive_silence = 0
+                        if frames_sent % 50 == 0:
+                            print(f"[SEND] Speech ended, returning to buffer mode", flush=True)
                 
                 # Send frame
                 try:
@@ -287,9 +286,10 @@ class AudioSocketSession:
                 if frames_sent <= 5:
                     print(f"[SEND] Frame #{frames_sent} at {(time.time()-t0)*1000:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}, speaking={ai_speaking}", flush=True)
+                    status = "playing" if playback_started else "buffering"
+                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)}, status={status}", flush=True)
                 
-                # Precise timing: wait until next frame time
+                # Precise timing: wait until next frame time (never block on queue)
                 next_frame_time += frame_duration
                 sleep_time = next_frame_time - time.time()
                 if sleep_time > 0:
@@ -364,6 +364,8 @@ class AudioSocketSession:
         import time
         import os
         t0 = time.time()
+        asterisk_uuid = None  # The UUID Asterisk used (for caller ID file)
+        
         try:
             print(f"[UUID] Waiting for header...")
             header = await asyncio.wait_for(
@@ -383,32 +385,64 @@ class AudioSocketSession:
                     self.reader.readexactly(payload_len),
                     timeout=5.0
                 )
-                print(f"[UUID] Payload received: {uuid_bytes[:50]}...")
+                print(f"[UUID] Payload received ({len(uuid_bytes)} bytes): {uuid_bytes[:50]}...")
+                
+                # Try to parse as string UUID (36 chars)
                 try:
-                    self.call_uuid = uuid_bytes.decode('ascii').strip()
-                    if len(self.call_uuid) == 36:
-                        print(f"[UUID] Valid: {self.call_uuid}")
-                        # Try to read caller ID from temp file (written by Asterisk)
-                        self._read_caller_id_file()
-                        return
-                except:
-                    pass
+                    decoded = uuid_bytes.decode('ascii').strip()
+                    # Remove null bytes
+                    decoded = decoded.replace('\x00', '')
+                    print(f"[UUID] Decoded as string: '{decoded}' (len={len(decoded)})")
+                    
+                    if len(decoded) == 36 and '-' in decoded:
+                        self.call_uuid = decoded
+                        asterisk_uuid = decoded
+                        print(f"[UUID] Valid string UUID: {self.call_uuid}")
+                except Exception as e:
+                    print(f"[UUID] String decode failed: {e}")
+                
+                # Try to parse as 16-byte binary UUID
+                if not asterisk_uuid and len(uuid_bytes) == 16:
+                    try:
+                        parsed_uuid = uuid_lib.UUID(bytes=uuid_bytes)
+                        self.call_uuid = str(parsed_uuid)
+                        asterisk_uuid = self.call_uuid
+                        print(f"[UUID] Parsed binary UUID: {self.call_uuid}")
+                    except Exception as e:
+                        print(f"[UUID] Binary UUID parse failed: {e}")
             
-            self.call_uuid = str(uuid_lib.uuid4())
-            print(f"[UUID] Generated: {self.call_uuid}")
+            # If we couldn't parse, generate one
+            if not self.call_uuid:
+                self.call_uuid = str(uuid_lib.uuid4())
+                print(f"[UUID] Generated new UUID: {self.call_uuid}")
+            
+            # Always try to read caller ID file using Asterisk's UUID
+            if asterisk_uuid:
+                self._read_caller_id_file(asterisk_uuid)
+            else:
+                print(f"[UUID] No Asterisk UUID available, can't read caller ID file")
+                self.caller_id = None
             
         except asyncio.TimeoutError:
             print(f"[UUID] TIMEOUT waiting for header!")
             self.call_uuid = str(uuid_lib.uuid4())
+            self.caller_id = None
         except Exception as e:
             print(f"[UUID] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             self.call_uuid = str(uuid_lib.uuid4())
+            self.caller_id = None
     
-    def _read_caller_id_file(self):
+    def _read_caller_id_file(self, asterisk_uuid: str = None):
         """Read caller ID from temp file created by Asterisk dialplan"""
         import os
         try:
-            callerid_file = f"/tmp/callerid_{self.call_uuid}"
+            # Use provided UUID or fall back to self.call_uuid
+            uuid_to_use = asterisk_uuid or self.call_uuid
+            callerid_file = f"/tmp/callerid_{uuid_to_use}"
+            print(f"[UUID] Looking for caller ID file: {callerid_file}", flush=True)
+            
             if os.path.exists(callerid_file):
                 with open(callerid_file, 'r') as f:
                     raw_caller_id = f.read().strip()
