@@ -840,8 +840,9 @@ class AudioSocketSession:
                 pass
     
     async def _play_busy_tone(self):
-        """Play standard busy signal tone"""
+        """Play standard busy signal tone with proper 20ms frame timing"""
         import math
+        import time
         
         sample_rate = 8000
         duration_on = 0.5  # 500ms tone
@@ -851,31 +852,54 @@ class AudioSocketSession:
         samples_on = int(sample_rate * duration_on)
         samples_off = int(sample_rate * duration_off)
         
-        # Create tone (480Hz)
+        # Create tone (480Hz + 620Hz = standard busy signal)
         tone_data = b''
         for i in range(samples_on):
-            value = int(16000 * math.sin(2 * math.pi * 480 * i / sample_rate))
+            # Mix 480Hz and 620Hz for authentic busy tone
+            value = int(12000 * (math.sin(2 * math.pi * 480 * i / sample_rate) + 
+                                  math.sin(2 * math.pi * 620 * i / sample_rate)))
             tone_data += struct.pack('<h', max(-32768, min(32767, value)))
         
         silence_data = b'\x00' * (samples_off * 2)
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
+        print(f"[BUSY] Starting busy tone playback ({num_cycles} cycles)", flush=True)
+        
+        frame_duration = 0.02  # 20ms per frame
+        next_frame_time = time.time()
+        frames_sent = 0
+        
         for cycle in range(num_cycles):
-            # Send tone in chunks
+            # Send tone in chunks with proper timing
             for i in range(0, len(tone_data), FRAME_SIZE):
                 chunk = tone_data[i:i + FRAME_SIZE]
                 if len(chunk) < FRAME_SIZE:
                     chunk += b'\x00' * (FRAME_SIZE - len(chunk))
                 self.writer.write(header + chunk)
-            await self.writer.drain()
+                frames_sent += 1
+                
+                # Wait for next frame time
+                next_frame_time += frame_duration
+                sleep_time = next_frame_time - time.time()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
             
-            # Send silence
+            # Send silence with proper timing
             for i in range(0, len(silence_data), FRAME_SIZE):
                 chunk = silence_data[i:i + FRAME_SIZE]
                 if len(chunk) < FRAME_SIZE:
                     chunk += b'\x00' * (FRAME_SIZE - len(chunk))
                 self.writer.write(header + chunk)
-            await self.writer.drain()
+                frames_sent += 1
+                
+                # Wait for next frame time
+                next_frame_time += frame_duration
+                sleep_time = next_frame_time - time.time()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+        
+        await self.writer.drain()
+        print(f"[BUSY] Busy tone complete ({frames_sent} frames sent)", flush=True)
     
     async def _play_audio_file(self, audio_url: str):
         """Download and play an audio file"""
@@ -928,18 +952,28 @@ class AudioSocketSession:
             
             print(f"[BUSY] Converted to {len(audio_data)} bytes of 8kHz PCM", flush=True)
             
-            # Send audio to Asterisk
+            # Send audio to Asterisk with proper 20ms timing
+            import time
             header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+            frame_duration = 0.02  # 20ms per frame
+            next_frame_time = time.time()
+            frames_sent = 0
+            
             for i in range(0, len(audio_data), FRAME_SIZE):
                 chunk = audio_data[i:i + FRAME_SIZE]
                 if len(chunk) < FRAME_SIZE:
                     chunk += b'\x00' * (FRAME_SIZE - len(chunk))
                 self.writer.write(header + chunk)
-                if i % (FRAME_SIZE * 10) == 0:  # Drain every 10 frames
-                    await self.writer.drain()
-            await self.writer.drain()
+                frames_sent += 1
+                
+                # Wait for next frame time
+                next_frame_time += frame_duration
+                sleep_time = next_frame_time - time.time()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
             
-            print(f"[BUSY] Finished playing audio file", flush=True)
+            await self.writer.drain()
+            print(f"[BUSY] Finished playing audio file ({frames_sent} frames)", flush=True)
             
         except Exception as e:
             print(f"[BUSY] Audio file error, falling back to tone: {e}", flush=True)
