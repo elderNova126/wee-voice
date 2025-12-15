@@ -32,15 +32,49 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 def high_quality_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    Resample audio using audioop with state management for continuity.
-    Uses direct conversion for all rates (simpler and often better).
+    Resample audio using multi-step conversion for better quality.
+    
+    The problem: audioop.ratecv uses linear interpolation which causes
+    aliasing artifacts at high ratios (like 24kHz → 8kHz = 3:1).
+    
+    Solution: Use intermediate steps for smoother conversion.
     """
     if from_rate == to_rate:
         return audio_bytes, state
     
-    # Direct conversion with state management
-    result, new_state = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state)
-    return result, new_state
+    # Initialize state dict if needed
+    if state is None:
+        state = {}
+    
+    # For 24kHz → 8kHz (common case for Gemini output to phone)
+    # Use two-step: 24k → 12k → 8k (2:1 then 1.5:1 ratios)
+    if from_rate == 24000 and to_rate == 8000:
+        # Step 1: 24kHz → 12kHz (2:1 - clean division)
+        state1 = state.get('step1')
+        intermediate, state1 = audioop.ratecv(audio_bytes, 2, 1, 24000, 12000, state1)
+        state['step1'] = state1
+        
+        # Step 2: 12kHz → 8kHz (1.5:1)
+        state2 = state.get('step2')
+        result, state2 = audioop.ratecv(intermediate, 2, 1, 12000, 8000, state2)
+        state['step2'] = state2
+        
+        return result, state
+    
+    # For 8kHz → 16kHz (caller audio to Gemini)
+    # Use two-step: 8k → 16k (2:1 - clean doubling)
+    if from_rate == 8000 and to_rate == 16000:
+        state1 = state.get('up1')
+        result, state1 = audioop.ratecv(audio_bytes, 2, 1, 8000, 16000, state1)
+        state['up1'] = state1
+        return result, state
+    
+    # Default: direct conversion for other rates
+    state_key = f'{from_rate}_{to_rate}'
+    s = state.get(state_key)
+    result, s = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, s)
+    state[state_key] = s
+    return result, state
 
 # Track active calls per phone number
 _active_calls: dict[int, str] = {}  # phone_number_id -> call_uuid
@@ -170,28 +204,20 @@ class AudioSocketSession:
             print(f"[HANDLE] Cleanup done", flush=True)
     
     async def _send_loop(self):
-        """Continuously send audio frames to Asterisk at precise 20ms intervals with jitter buffering"""
+        """
+        Send audio frames to Asterisk at precise 20ms intervals.
+        
+        Simple approach: send audio immediately when available, silence when not.
+        The key to quality is the resampling, not complex buffering.
+        """
         import time
         t0 = time.time()
-        print(f"[SEND] Loop STARTED with jitter buffer", flush=True)
+        print(f"[SEND] Loop STARTED (simple mode)", flush=True)
         
         frames_sent = 0
         transport = self.writer.transport
         audio_buffer = b''  # Buffer to accumulate AI audio
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
-        
-        # Jitter buffer configuration
-        # Wait for minimum buffer before starting playback to avoid stuttering
-        # Higher values = more stable but more latency
-        MIN_BUFFER_MS = 200  # Wait for 200ms of audio before starting (was 100)
-        MIN_BUFFER_BYTES = int(8000 * 2 * MIN_BUFFER_MS / 1000)  # 8kHz * 2 bytes * seconds
-        IDEAL_BUFFER_MS = 300  # Try to maintain 300ms buffer (was 150)
-        IDEAL_BUFFER_BYTES = int(8000 * 2 * IDEAL_BUFFER_MS / 1000)
-        
-        # State tracking
-        playback_started = False
-        silence_frames_sent = 0
-        last_had_audio = False
         
         # Timing: maintain precise 20ms frame rate
         frame_duration = 0.02  # 20ms
@@ -207,51 +233,18 @@ class AudioSocketSession:
                     except asyncio.QueueEmpty:
                         break
                 
-                # Jitter buffer logic
-                buffer_len = len(audio_buffer)
-                
-                # If we haven't started playback yet, wait for minimum buffer
-                if not playback_started:
-                    if buffer_len >= MIN_BUFFER_BYTES:
-                        playback_started = True
-                        print(f"[SEND] Playback starting with {buffer_len} bytes buffered ({buffer_len/16:.0f}ms)", flush=True)
-                    else:
-                        # Not enough buffer yet, send silence
-                        audio_data = SILENCE_FRAME
-                        silence_frames_sent += 1
+                # Get one frame's worth of data
+                if len(audio_buffer) >= FRAME_SIZE:
+                    audio_data = audio_buffer[:FRAME_SIZE]
+                    audio_buffer = audio_buffer[FRAME_SIZE:]
                 else:
-                    # Playback has started
-                    if buffer_len >= FRAME_SIZE:
-                        # We have audio to send
-                        audio_data = audio_buffer[:FRAME_SIZE]
-                        audio_buffer = audio_buffer[FRAME_SIZE:]
-                        
-                        # Smooth transition from silence to audio (fade in first frame)
-                        if not last_had_audio:
-                            audio_data = self._fade_in(audio_data)
-                        
-                        last_had_audio = True
-                        silence_frames_sent = 0
+                    # Not enough audio - send what we have padded with silence
+                    # This is better than pure silence (preserves partial audio)
+                    if len(audio_buffer) > 0:
+                        audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
+                        audio_buffer = b''
                     else:
-                        # Buffer underrun - but don't immediately send silence
-                        # Wait a bit to see if more audio arrives (Gemini generates in bursts)
-                        if silence_frames_sent < 8:  # Allow 160ms grace period (was 60ms)
-                            # Stretch the last audio if we have any
-                            if buffer_len > 0:
-                                # Pad with zeros to make a full frame
-                                audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - buffer_len)
-                                audio_buffer = b''
-                            else:
-                                audio_data = SILENCE_FRAME
-                        else:
-                            # Real underrun - fade out then silence
-                            if last_had_audio:
-                                audio_data = self._fade_out(SILENCE_FRAME)
-                                last_had_audio = False
-                            else:
-                                audio_data = SILENCE_FRAME
-                        
-                        silence_frames_sent += 1
+                        audio_data = SILENCE_FRAME
                 
                 # Send frame
                 try:
@@ -264,8 +257,7 @@ class AudioSocketSession:
                 if frames_sent <= 5:
                     print(f"[SEND] Frame #{frames_sent} at {(time.time()-t0)*1000:.1f}ms", flush=True)
                 if frames_sent % 100 == 0:
-                    status = "playing" if playback_started else "buffering"
-                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)} bytes, {status}", flush=True)
+                    print(f"[SEND] {frames_sent} frames, buffer={len(audio_buffer)} bytes", flush=True)
                 
                 # Precise timing: wait until next frame time
                 next_frame_time += frame_duration
@@ -281,43 +273,6 @@ class AudioSocketSession:
             print(f"[SEND] ERROR: {e}", flush=True)
         
         print(f"[SEND] ENDED: {frames_sent} total", flush=True)
-    
-    def _fade_in(self, audio_data: bytes, duration_samples: int = 40) -> bytes:
-        """Apply fade-in to audio frame to avoid clicks"""
-        if len(audio_data) < 4:
-            return audio_data
-        
-        samples = []
-        for i in range(0, len(audio_data), 2):
-            sample = struct.unpack('<h', audio_data[i:i+2])[0]
-            samples.append(sample)
-        
-        # Apply linear fade-in to first N samples
-        for i in range(min(duration_samples, len(samples))):
-            factor = i / duration_samples
-            samples[i] = int(samples[i] * factor)
-        
-        # Pack back to bytes
-        return b''.join(struct.pack('<h', s) for s in samples)
-    
-    def _fade_out(self, audio_data: bytes, duration_samples: int = 40) -> bytes:
-        """Apply fade-out to audio frame to avoid clicks"""
-        if len(audio_data) < 4:
-            return audio_data
-        
-        samples = []
-        for i in range(0, len(audio_data), 2):
-            sample = struct.unpack('<h', audio_data[i:i+2])[0]
-            samples.append(sample)
-        
-        # Apply linear fade-out to last N samples
-        fade_start = max(0, len(samples) - duration_samples)
-        for i in range(fade_start, len(samples)):
-            factor = (len(samples) - i) / duration_samples
-            samples[i] = int(samples[i] * factor)
-        
-        # Pack back to bytes
-        return b''.join(struct.pack('<h', s) for s in samples)
     
     async def _receive_loop(self):
         """Receive audio from Asterisk"""
