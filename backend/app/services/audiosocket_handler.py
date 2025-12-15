@@ -121,7 +121,16 @@ class AudioSocketSession:
             if not await self._setup_call():
                 print(f"[HANDLE] _setup_call FAILED", flush=True)
                 
-                # Check if this was due to busy line
+                # Cancel the send task before playing busy tone
+                if self.send_task:
+                    self.send_task.cancel()
+                    try:
+                        await self.send_task
+                    except asyncio.CancelledError:
+                        pass
+                    print(f"[HANDLE] Send task cancelled", flush=True)
+                
+                # Check if this was due to busy line or blocked call
                 if self.is_busy_response:
                     print(f"[HANDLE] Playing BUSY message...", flush=True)
                     await self._play_busy_message()
@@ -638,6 +647,7 @@ class AudioSocketSession:
                 logger.warning(f"[SETUP] Call BLOCKED from {caller_phone} due to restrictions")
                 self.is_busy_response = True
                 self.busy_config = {'action': 'busy_tone', 'audio_file_url': None}
+                await self._release_line()  # Release the line since we blocked the call
                 return False
             
             print(f"[SETUP] >>> CALL ALLOWED <<<", flush=True)
