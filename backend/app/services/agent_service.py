@@ -115,17 +115,33 @@ Si l'utilisateur pose une question nécessitant des informations spécifiques de
 """
             callback_instruction = """
 
-[OUTIL DISPONIBLE: request_callback]
-Utilise cet outil pour demander un rappel humain quand:
-- L'appelant est frustré ou en colère et a besoin d'une assistance humaine
-- Le problème est trop complexe pour être résolu par l'IA
-- L'appelant demande explicitement de parler à un humain
-- Des opportunités commerciales importantes (prospects chauds) nécessitent un suivi humain
-- Des questions sensibles nécessitent un jugement humain
+[OUTIL CRITIQUE: request_callback - UTILISATION OBLIGATOIRE]
 
-Paramètres: reason (raison détaillée), priority ("urgent"/"high"/"normal"/"low"), caller_name, caller_phone, caller_email, preferred_callback_time
+Tu DOIS IMMÉDIATEMENT utiliser l'outil 'request_callback' dans ces situations - NE PAS poser plus de questions, NE PAS essayer de résoudre toi-même:
 
-Après avoir utilisé cet outil, informe l'appelant qu'un membre de l'équipe le rappellera bientôt.
+🚨 DÉCLENCHEURS OBLIGATOIRES (utilise l'outil IMMÉDIATEMENT):
+
+1. COLÈRE/FRUSTRATION - Mots-clés: "inacceptable", "scandaleux", "j'en ai marre", "ça suffit", "je veux annuler", "c'est la Xème fois", "service terrible", "je vais porter plainte", ton agressif
+   → priority: "urgent"
+
+2. DEMANDE EXPLICITE D'HUMAIN - Mots-clés: "parler à quelqu'un", "un responsable", "une vraie personne", "un humain", "votre supérieur", "un manager", "pas un robot"
+   → priority: "high"
+
+3. PROBLÈME COMPLEXE - Plusieurs éléments: modification de contrat + facturation + transfert, litiges financiers, situations juridiques, réclamations formelles
+   → priority: "high"
+
+4. OPPORTUNITÉ COMMERCIALE - Mots-clés: "entreprise", "plusieurs utilisateurs", "déploiement", "tarif entreprise", "démonstration", "prêt à signer", "budget de X euros", grand volume
+   → priority: "high"
+
+5. SUJET SENSIBLE - Mots-clés: "confidentiel", "litige", "plainte", "avocat", "médical", "personnel", "privé", "remboursement contesté"
+   → priority: "normal"
+
+PROCÉDURE:
+1. Détecte le déclencheur → Appelle IMMÉDIATEMENT request_callback
+2. Collecte nom, téléphone, email SI facilement disponible (ne pas insister)
+3. Dis: "Je comprends l'importance de votre demande. Je transmets immédiatement votre dossier à un conseiller qui vous rappellera très rapidement."
+
+NE JAMAIS: demander plus de détails, proposer des solutions alternatives, dire "laissez-moi vérifier"
 """
         else:  # English
             language_note = """
@@ -144,17 +160,33 @@ If the user asks a question requiring specific information from uploaded documen
 """
             callback_instruction = """
 
-[AVAILABLE TOOL: request_callback]
-Use this tool to request a human callback when:
-- The caller is frustrated or angry and needs human assistance
-- The issue is too complex for AI to handle
-- The caller explicitly asks to speak with a human
-- Important business opportunities (hot leads) need human follow-up
-- Sensitive matters require human judgment
+[CRITICAL TOOL: request_callback - MANDATORY USE]
 
-Parameters: reason (detailed reason), priority ("urgent"/"high"/"normal"/"low"), caller_name, caller_phone, caller_email, preferred_callback_time
+You MUST IMMEDIATELY use the 'request_callback' tool in these situations - DO NOT ask more questions, DO NOT try to solve it yourself:
 
-After using this tool, inform the caller that a team member will call them back soon.
+🚨 MANDATORY TRIGGERS (use the tool IMMEDIATELY):
+
+1. ANGER/FRUSTRATION - Keywords: "unacceptable", "ridiculous", "fed up", "enough", "cancel everything", "this is the Xth time", "terrible service", "I'll sue", aggressive tone
+   → priority: "urgent"
+
+2. EXPLICIT HUMAN REQUEST - Keywords: "speak to someone", "a manager", "real person", "a human", "your supervisor", "not a robot", "someone in charge"
+   → priority: "high"
+
+3. COMPLEX ISSUE - Multiple elements: contract modification + billing + transfer, financial disputes, legal situations, formal complaints
+   → priority: "high"
+
+4. BUSINESS OPPORTUNITY - Keywords: "company", "multiple users", "deployment", "enterprise pricing", "demo", "ready to sign", "budget of X", large volume
+   → priority: "high"
+
+5. SENSITIVE TOPIC - Keywords: "confidential", "dispute", "complaint", "lawyer", "medical", "personal", "private", "contested refund"
+   → priority: "normal"
+
+PROCEDURE:
+1. Detect trigger → Call request_callback IMMEDIATELY
+2. Collect name, phone, email IF easily available (don't insist)
+3. Say: "I understand the importance of your request. I'm immediately forwarding your case to an advisor who will call you back very soon."
+
+NEVER: ask for more details, propose alternative solutions, say "let me check"
 """
         
         # Add RAG instructions if enabled (minimal)
