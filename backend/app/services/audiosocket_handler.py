@@ -26,28 +26,48 @@ MSG_AUDIO = 0x10
 MSG_HANGUP = 0x00
 MSG_ERROR = 0xFF
 
-# Audio configuration - use 16kHz for better quality (G.722 codec)
-# AudioSocket sample rate matches the channel's codec:
-# - ulaw/alaw: 8kHz (FRAME_SIZE=320)
-# - g722: 16kHz (FRAME_SIZE=640)
-SAMPLE_RATE = 16000  # Use 16kHz for G.722 wideband
-FRAME_SAMPLES = 160  # 160 samples = 20ms (standard frame duration)
-FRAME_SIZE = FRAME_SAMPLES * 2 * (SAMPLE_RATE // 8000)  # 640 bytes for 16kHz, 320 for 8kHz
+# Audio: 8kHz mono PCM (standard phone audio)
+# 160 samples * 2 bytes = 320 bytes = 20ms frame
+SAMPLE_RATE = 8000
+FRAME_SIZE = 320
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 
 def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    Simple resampling - minimal processing, just rate conversion.
+    Resample audio with state continuity.
     
-    Like web agent: pass audio through with minimal changes.
+    For 24k→8k: use two steps (24k→16k→8k) for cleaner conversion.
+    Single 3:1 ratio causes aliasing artifacts.
     """
     if from_rate == to_rate:
         return audio_bytes, state
     
-    # Single step conversion - keep it simple
-    result, new_state = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, state)
-    return result, new_state
+    # Initialize state dict
+    if state is None:
+        state = {}
+    
+    # Special case: 24kHz → 8kHz (Gemini output to phone)
+    # Use two steps: 24k→16k (1.5:1) then 16k→8k (2:1)
+    # This produces cleaner audio than single 3:1 step
+    if from_rate == 24000 and to_rate == 8000:
+        # Step 1: 24k → 16k
+        s1 = state.get('s1')
+        temp, s1 = audioop.ratecv(audio_bytes, 2, 1, 24000, 16000, s1)
+        state['s1'] = s1
+        
+        # Step 2: 16k → 8k  
+        s2 = state.get('s2')
+        result, s2 = audioop.ratecv(temp, 2, 1, 16000, 8000, s2)
+        state['s2'] = s2
+        
+        return result, state
+    
+    # All other conversions: single step
+    s = state.get('s')
+    result, s = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, s)
+    state['s'] = s
+    return result, state
 
 # Track active calls per phone number
 _active_calls: dict[int, str] = {}  # phone_number_id -> call_uuid
@@ -713,46 +733,31 @@ class AudioSocketSession:
                     del _active_calls[self.phone_number_id]
                     print(f"[SETUP] Released line for phone_id {self.phone_number_id}", flush=True)
     
-    async def _process_audio(self, audio_in: bytes):
-        """Process audio from Asterisk, queue for sending to AI"""
+    async def _process_audio(self, audio_8k: bytes):
+        """Process audio from Asterisk (8kHz), send to Gemini (16kHz)"""
         if not self.ai_ready.is_set():
             return
-        if len(audio_in) < 2:
+        if len(audio_8k) < 2:
             return
         
         try:
-            if len(audio_in) % 2:
-                audio_in = audio_in[:-1]
+            if len(audio_8k) % 2:
+                audio_8k = audio_8k[:-1]
             
-            # Check audio level (for debugging)
-            if not hasattr(self, '_audio_level_count'):
-                self._audio_level_count = 0
+            # Initialize state on first call
+            if not hasattr(self, '_caller_resample_state'):
                 self._caller_resample_state = None
-            self._audio_level_count += 1
             
-            try:
-                rms = audioop.rms(audio_in, 2)
-                max_val = audioop.max(audio_in, 2)
-                if self._audio_level_count <= 20 or self._audio_level_count % 100 == 0:
-                    print(f"[AUDIO-LEVEL] #{self._audio_level_count} RMS={rms}, MAX={max_val}, rate={SAMPLE_RATE}", flush=True)
-            except:
-                pass
+            # Upsample 8kHz to 16kHz for Gemini
+            audio_16k, self._caller_resample_state = simple_resample(
+                audio_8k, 8000, 16000, self._caller_resample_state
+            )
             
-            # With G.722 (16kHz), audio is already at Gemini's expected rate!
-            # No resampling needed - direct passthrough like web agent
-            if SAMPLE_RATE == 16000:
-                audio_16k = audio_in  # Already 16kHz, no conversion!
-            else:
-                # Fallback for 8kHz: upsample to 16kHz for Gemini
-                audio_16k, self._caller_resample_state = simple_resample(
-                    audio_in, SAMPLE_RATE, 16000, self._caller_resample_state
-                )
-            
-            # Queue for sending (non-blocking, drop if queue full)
+            # Queue for sending
             try:
                 self.caller_audio_queue.put_nowait(audio_16k)
             except asyncio.QueueFull:
-                pass  # Drop audio if queue is full (backpressure)
+                pass
         except Exception as e:
             print(f"[AUDIO→AI] Queue ERROR: {e}", flush=True)
     
@@ -818,17 +823,16 @@ class AudioSocketSession:
                 
                 total_bytes_in += len(audio_24k)
                 
-                # Simple resampling - 24kHz to SAMPLE_RATE (16kHz for G.722)
-                # 24k→16k is 1.5:1 ratio (much better than 24k→8k at 3:1)
-                audio_out, resample_state = simple_resample(audio_24k, 24000, SAMPLE_RATE, resample_state)
-                total_bytes_out += len(audio_out)
+                # Resample 24kHz to 8kHz for phone
+                audio_8k, resample_state = simple_resample(audio_24k, 24000, 8000, resample_state)
+                total_bytes_out += len(audio_8k)
                 
-                await self.ai_audio_queue.put(audio_out)
+                await self.ai_audio_queue.put(audio_8k)
                 
                 ai_packets += 1
                 if ai_packets <= 5 or ai_packets % 50 == 0:
                     ratio = total_bytes_out / total_bytes_in if total_bytes_in > 0 else 0
-                    print(f"[AI→AUDIO] #{ai_packets}, in={len(audio_24k)}, out={len(audio_out)}, ratio={ratio:.2f}", flush=True)
+                    print(f"[AI→AUDIO] #{ai_packets}, in={len(audio_24k)}, out={len(audio_8k)}, ratio={ratio:.2f}", flush=True)
                 
         except asyncio.CancelledError:
             print(f"[AI→AUDIO] Cancelled after {ai_packets} packets", flush=True)
