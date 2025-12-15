@@ -44,45 +44,58 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
 def simple_resample(audio_bytes: bytes, from_rate: int, to_rate: int, state=None):
     """
-    High-quality audio resampling using scipy.signal.resample_poly.
+    High-quality streaming resampling.
     
-    resample_poly uses polyphase filtering which:
-    - Has proper anti-aliasing (preserves "assistant" clarity)
-    - Works well for streaming (no trembling between chunks)
-    - Lower latency than FFT-based resample
+    Uses scipy low-pass filter to remove frequencies above Nyquist,
+    then audioop.ratecv for stateful resampling (smooth between chunks).
     """
     if from_rate == to_rate:
         return audio_bytes, state
     
-    if SCIPY_AVAILABLE:
+    if state is None:
+        state = {'audioop': None, 'filter_zi': None}
+    
+    # For downsampling (24k→8k), apply anti-aliasing filter first
+    if SCIPY_AVAILABLE and from_rate > to_rate:
         try:
-            # Convert bytes to numpy array (16-bit signed PCM)
+            # Convert to float for filtering
             samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float64)
             
-            # Calculate up/down factors for rational resampling
-            # 24000 → 8000: ratio is 1/3, so up=1, down=3
-            # 8000 → 16000: ratio is 2/1, so up=2, down=1
-            from math import gcd
-            g = gcd(from_rate, to_rate)
-            up = to_rate // g
-            down = from_rate // g
+            # Design low-pass filter at target Nyquist frequency
+            # For 8kHz output, filter at 4kHz (with some margin)
+            nyquist = from_rate / 2
+            cutoff = (to_rate / 2) * 0.9  # 3.6kHz for 8kHz output
+            normalized_cutoff = cutoff / nyquist
             
-            # Use polyphase resampling (better for streaming)
-            resampled = signal.resample_poly(samples, up, down)
+            # Use 4th order Butterworth filter (smooth, no ringing)
+            if state.get('filter_b') is None:
+                b, a = signal.butter(4, normalized_cutoff, btype='low')
+                state['filter_b'] = b
+                state['filter_a'] = a
+            else:
+                b = state['filter_b']
+                a = state['filter_a']
+            
+            # Apply filter with state for continuity
+            zi = state.get('filter_zi')
+            if zi is None:
+                zi = signal.lfilter_zi(b, a) * samples[0] if len(samples) > 0 else None
+            
+            if zi is not None and len(samples) > 0:
+                filtered, state['filter_zi'] = signal.lfilter(b, a, samples, zi=zi)
+            else:
+                filtered = samples
             
             # Convert back to int16
-            resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
-            
-            return resampled.tobytes(), state
+            audio_bytes = np.clip(filtered, -32768, 32767).astype(np.int16).tobytes()
         except Exception as e:
-            print(f"[RESAMPLE] scipy failed: {e}, falling back to audioop", flush=True)
+            pass  # Fall through to audioop
     
-    # Fallback: use audioop
-    if state is None:
-        state = {}
-    s = state.get('s')
+    # Use audioop for actual resampling (maintains state between chunks)
+    s = state.get('audioop')
     result, s = audioop.ratecv(audio_bytes, 2, 1, from_rate, to_rate, s)
-    state['s'] = s
+    state['audioop'] = s
+    
     return result, state
 
 # Track active calls per phone number
@@ -811,18 +824,13 @@ class AudioSocketSession:
         print(f"[AUDIO→AI] Queue loop ENDED, {packets_sent} packets", flush=True)
     
     async def _ai_receive_loop(self):
-        """Receive audio from AI and queue for sending"""
+        """Receive audio from AI and queue for sending - immediate processing"""
         ai_packets = 0
-        resample_state = None
+        resample_state = None  # Stateful resampling for smooth audio
         total_bytes_in = 0
         total_bytes_out = 0
         
-        # Accumulate audio before resampling to reduce edge effects
-        # 40ms at 24kHz = 960 samples * 2 bytes = 1920 bytes minimum
-        MIN_RESAMPLE_BYTES = 1920
-        pending_audio = b''
-        
-        print(f"[AI→AUDIO] Receive loop STARTED", flush=True)
+        print(f"[AI→AUDIO] Receive loop STARTED (streaming mode)", flush=True)
         try:
             async for audio_24k in self.agent_service.receive_audio():
                 if not self.is_running:
@@ -833,17 +841,10 @@ class AudioSocketSession:
                 if len(audio_24k) % 2:
                     audio_24k = audio_24k[:-1]
                 
-                # Accumulate audio
-                pending_audio += audio_24k
                 total_bytes_in += len(audio_24k)
                 
-                # Only resample when we have enough data (reduces edge effects)
-                if len(pending_audio) < MIN_RESAMPLE_BYTES:
-                    continue
-                
-                # Resample the accumulated audio
-                audio_8k, resample_state = simple_resample(pending_audio, 24000, 8000, resample_state)
-                pending_audio = b''
+                # Resample immediately - state maintains continuity
+                audio_8k, resample_state = simple_resample(audio_24k, 24000, 8000, resample_state)
                 total_bytes_out += len(audio_8k)
                 
                 await self.ai_audio_queue.put(audio_8k)
@@ -852,12 +853,6 @@ class AudioSocketSession:
                 if ai_packets <= 5 or ai_packets % 50 == 0:
                     ratio = total_bytes_out / total_bytes_in if total_bytes_in > 0 else 0
                     print(f"[AI→AUDIO] #{ai_packets}, in={len(audio_24k)}, out={len(audio_8k)}, ratio={ratio:.2f}", flush=True)
-            
-            # Flush any remaining audio
-            if pending_audio and len(pending_audio) >= 4:
-                audio_8k, _ = simple_resample(pending_audio, 24000, 8000, resample_state)
-                await self.ai_audio_queue.put(audio_8k)
-                total_bytes_out += len(audio_8k)
                 
         except asyncio.CancelledError:
             print(f"[AI→AUDIO] Cancelled after {ai_packets} packets", flush=True)
