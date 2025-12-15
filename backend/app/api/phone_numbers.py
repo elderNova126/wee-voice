@@ -100,7 +100,8 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
                    sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
-                   business_name, business_type, business_address,
+                   business_name, business_type, business_address, busy_action, busy_audio_file_url,
+                   restriction_mode, blocked_countries, blocked_numbers, allowed_countries,
                    created_at, updated_at, activated_at
             FROM phone_numbers
             WHERE {filter_clause}
@@ -127,9 +128,15 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
             phone.business_name = row[15]
             phone.business_type = row[16]
             phone.business_address = row[17]
-            phone.created_at = row[18]
-            phone.updated_at = row[19]
-            phone.activated_at = row[20]
+            phone.busy_action = row[18]
+            phone.busy_audio_file_url = row[19]
+            phone.restriction_mode = row[20]
+            phone.blocked_countries = row[21]
+            phone.blocked_numbers = row[22]
+            phone.allowed_countries = row[23]
+            phone.created_at = row[24]
+            phone.updated_at = row[25]
+            phone.activated_at = row[26]
             phones.append(phone)
         return phones
     except Exception as e:
