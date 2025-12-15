@@ -867,7 +867,9 @@ class CollaboratorResponse(BaseModel):
     status: str = "pending"  # pending, accepted, rejected
     added_at: Optional[str] = None
     invited_by_email: Optional[str] = None
+    phone_number_id: Optional[int] = None  # For invites - which phone number this invite belongs to
     phone_number_display: Optional[str] = None  # For showing in invites list
+    business_name: Optional[str] = None  # For showing in invites list
     
     class Config:
         from_attributes = True
