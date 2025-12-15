@@ -244,114 +244,104 @@ class AudioSocketSession:
     
     async def _unified_audio_loop(self):
         """
-        Dedicated thread for precise audio timing.
+        Minimal latency approach - NO pre-buffering.
         
-        asyncio.sleep() is imprecise (can vary by 10-20ms).
-        Using a dedicated thread with time.sleep() and threading.Event
-        for more consistent 20ms timing.
+        Key insight: The web agent works because it sends audio immediately.
+        We should do the same - send as soon as we receive.
+        
+        Use soxr.ResampleStream for continuous seamless resampling.
         """
         import time
         import threading
         import queue
         
-        print(f"[UNIFIED] Starting with dedicated audio thread", flush=True)
+        print(f"[UNIFIED] Starting - minimal latency mode", flush=True)
         
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Thread-safe queue for audio data
-        audio_queue = queue.Queue(maxsize=500)
+        # Thread-safe queue
+        audio_queue = queue.Queue(maxsize=1000)
         stop_event = threading.Event()
-        frames_sent = [0]  # Use list for mutability in nested function
+        stats = {'sent': 0, 'recv': 0}
+        
+        # Use streaming resampler for seamless audio
+        if SOXR_AVAILABLE:
+            resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.float32)
+        else:
+            resampler = None
+        resample_state = None
         
         def audio_sender_thread():
-            """Dedicated thread for precise 20ms timing"""
+            """Send audio with minimal delay"""
             audio_buffer = b''
-            frame_interval = 0.02  # 20ms
-            next_frame_time = time.perf_counter()
-            started = False
-            PRE_BUFFER = FRAME_SIZE * 5  # 100ms pre-buffer
+            frame_time = 0.02
+            last_send = time.perf_counter()
+            silence_count = 0
             
             while not stop_event.is_set():
-                # Collect all available audio from queue
+                now = time.perf_counter()
+                
+                # Collect available audio
                 while True:
                     try:
                         chunk = audio_queue.get_nowait()
                         if chunk is None:
-                            # End signal - drain and exit
+                            # Drain buffer
                             while len(audio_buffer) >= FRAME_SIZE:
-                                try:
-                                    transport.write(header + audio_buffer[:FRAME_SIZE])
-                                    audio_buffer = audio_buffer[FRAME_SIZE:]
-                                    frames_sent[0] += 1
-                                except:
-                                    pass
-                                time.sleep(frame_interval)
+                                transport.write(header + audio_buffer[:FRAME_SIZE])
+                                audio_buffer = audio_buffer[FRAME_SIZE:]
+                                stats['sent'] += 1
+                                time.sleep(frame_time)
                             if audio_buffer:
-                                try:
-                                    transport.write(header + audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer)))
-                                    frames_sent[0] += 1
-                                except:
-                                    pass
+                                transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
+                                stats['sent'] += 1
                             return
                         audio_buffer += chunk
+                        silence_count = 0
                     except queue.Empty:
                         break
                 
-                # Pre-buffer check
-                if not started:
-                    if len(audio_buffer) >= PRE_BUFFER:
-                        started = True
-                        print(f"[THREAD] Started, buf={len(audio_buffer)}", flush=True)
-                    else:
+                # Time to send a frame?
+                if now - last_send >= frame_time:
+                    if len(audio_buffer) >= FRAME_SIZE:
+                        # Have enough audio - send it
+                        transport.write(header + audio_buffer[:FRAME_SIZE])
+                        audio_buffer = audio_buffer[FRAME_SIZE:]
+                        stats['sent'] += 1
+                        silence_count = 0
+                    elif audio_buffer:
+                        # Partial buffer - wait a bit for more
                         try:
-                            transport.write(header + SILENCE_FRAME)
-                            frames_sent[0] += 1
-                        except:
-                            return
-                        time.sleep(frame_interval)
-                        continue
-                
-                # Get frame to send
-                if len(audio_buffer) >= FRAME_SIZE:
-                    audio_data = audio_buffer[:FRAME_SIZE]
-                    audio_buffer = audio_buffer[FRAME_SIZE:]
-                elif len(audio_buffer) > 0:
-                    audio_data = audio_buffer + b'\x00' * (FRAME_SIZE - len(audio_buffer))
-                    audio_buffer = b''
+                            chunk = audio_queue.get(timeout=0.005)
+                            if chunk is None:
+                                transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
+                                stats['sent'] += 1
+                                return
+                            audio_buffer += chunk
+                            continue
+                        except queue.Empty:
+                            # Send what we have
+                            transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
+                            audio_buffer = b''
+                            stats['sent'] += 1
+                    else:
+                        # No audio - send silence
+                        transport.write(header + SILENCE_FRAME)
+                        stats['sent'] += 1
+                        silence_count += 1
+                    
+                    last_send = now
+                    
+                    if stats['sent'] % 100 == 0:
+                        print(f"[SEND] {stats['sent']} frames, buf={len(audio_buffer)}", flush=True)
                 else:
-                    # Buffer empty - wait briefly for more
-                    try:
-                        chunk = audio_queue.get(timeout=0.05)  # 50ms wait
-                        if chunk is None:
-                            return
-                        audio_buffer += chunk
-                        continue
-                    except queue.Empty:
-                        audio_data = SILENCE_FRAME
-                
-                # Send frame
-                try:
-                    transport.write(header + audio_data)
-                    frames_sent[0] += 1
-                except:
-                    return
-                
-                if frames_sent[0] % 100 == 0:
-                    print(f"[THREAD] {frames_sent[0]} frames, buf={len(audio_buffer)}", flush=True)
-                
-                # Precise timing - sleep until next frame time
-                next_frame_time += frame_interval
-                sleep_time = next_frame_time - time.perf_counter()
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                elif sleep_time < -0.1:
-                    # Fell too far behind, reset
-                    next_frame_time = time.perf_counter()
+                    # Not yet time - brief sleep
+                    time.sleep(0.001)
         
         async def receiver():
-            """Receive from Gemini, resample, put in thread-safe queue"""
-            chunks = 0
+            """Receive and resample with streaming resampler"""
+            nonlocal resample_state
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -363,47 +353,46 @@ class AudioSocketSession:
                         audio_24k = audio_24k[:-1]
                     
                     # Resample 24k -> 8k
-                    if SOXR_AVAILABLE:
+                    if SOXR_AVAILABLE and resampler:
+                        # Streaming resample for seamless audio
                         audio_np = np.frombuffer(audio_24k, dtype=np.int16)
                         audio_float = audio_np.astype(np.float32) / 32768.0
-                        resampled = soxr.resample(audio_float, 24000, 8000)
+                        resampled = resampler.resample_chunk(audio_float)
                         audio_8k = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16).tobytes()
                     else:
-                        audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, 24000, 8000, None)
+                        audio_8k, resample_state = audioop.ratecv(
+                            audio_24k, 2, 1, 24000, 8000, resample_state
+                        )
                     
                     try:
                         audio_queue.put_nowait(audio_8k)
-                        chunks += 1
+                        stats['recv'] += 1
                     except queue.Full:
-                        pass  # Drop if queue full
+                        pass
                         
             except asyncio.CancelledError:
                 pass
             except Exception as e:
-                print(f"[UNIFIED] Receiver error: {e}", flush=True)
+                print(f"[RECV] Error: {e}", flush=True)
             
-            # Signal end to thread
             try:
                 audio_queue.put(None, timeout=1)
             except:
                 pass
-            print(f"[UNIFIED] Receiver done: {chunks} chunks", flush=True)
+            print(f"[RECV] Done: {stats['recv']} chunks", flush=True)
         
         # Start sender thread
         sender_thread = threading.Thread(target=audio_sender_thread, daemon=True)
         sender_thread.start()
         
         try:
-            # Run receiver in asyncio
             await receiver()
-            
-            # Wait for sender thread to finish
             sender_thread.join(timeout=5)
         except asyncio.CancelledError:
             stop_event.set()
             sender_thread.join(timeout=2)
         
-        print(f"[UNIFIED] Ended: {frames_sent[0]} frames", flush=True)
+        print(f"[UNIFIED] Done: sent={stats['sent']}, recv={stats['recv']}", flush=True)
     
     async def _send_loop(self):
         """
