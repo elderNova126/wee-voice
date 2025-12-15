@@ -182,9 +182,10 @@ class AudioSocketSession:
         
         # Jitter buffer configuration
         # Wait for minimum buffer before starting playback to avoid stuttering
-        MIN_BUFFER_MS = 100  # Wait for 100ms of audio before starting
+        # Higher values = more stable but more latency
+        MIN_BUFFER_MS = 200  # Wait for 200ms of audio before starting (was 100)
         MIN_BUFFER_BYTES = int(8000 * 2 * MIN_BUFFER_MS / 1000)  # 8kHz * 2 bytes * seconds
-        IDEAL_BUFFER_MS = 150  # Try to maintain 150ms buffer
+        IDEAL_BUFFER_MS = 300  # Try to maintain 300ms buffer (was 150)
         IDEAL_BUFFER_BYTES = int(8000 * 2 * IDEAL_BUFFER_MS / 1000)
         
         # State tracking
@@ -233,8 +234,8 @@ class AudioSocketSession:
                         silence_frames_sent = 0
                     else:
                         # Buffer underrun - but don't immediately send silence
-                        # Wait a tiny bit to see if more audio arrives
-                        if silence_frames_sent < 3:  # Allow 60ms grace period
+                        # Wait a bit to see if more audio arrives (Gemini generates in bursts)
+                        if silence_frames_sent < 8:  # Allow 160ms grace period (was 60ms)
                             # Stretch the last audio if we have any
                             if buffer_len > 0:
                                 # Pad with zeros to make a full frame
