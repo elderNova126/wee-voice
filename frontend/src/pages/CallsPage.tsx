@@ -1,4 +1,5 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { PhoneIcon, ClockIcon, CurrencyDollarIcon, FunnelIcon, ExclamationTriangleIcon, TrashIcon, ArrowPathIcon, ChartBarIcon, ChevronLeftIcon, ChevronRightIcon, StarIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import DashboardLayout from '@/layouts/DashboardLayout'
@@ -87,6 +88,7 @@ const getTagColor = (tag: string) => {
 
 export default function CallsPage() {
   const t = useTranslation()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
@@ -106,6 +108,30 @@ export default function CallsPage() {
   const [searchInput, setSearchInput] = useState('')
   const wsRef = useRef<WebSocket | null>(null)
   const token = useAuthStore(state => state.token)
+  
+  // Handle callId query parameter to auto-open call details
+  const callIdParam = searchParams.get('callId')
+  
+  useEffect(() => {
+    if (callIdParam && !loading && calls.length > 0) {
+      const callId = parseInt(callIdParam)
+      // First, check if the call is in the current list
+      const existingCall = calls.find(c => c.id === callId)
+      if (existingCall) {
+        setSelectedCall(existingCall)
+      } else {
+        // Load the specific call directly
+        callsAPI.get(callId).then(response => {
+          setSelectedCall(response.data)
+        }).catch(err => {
+          console.error('Failed to load call:', err)
+          toast.error('Call not found')
+        })
+      }
+      // Clear the query param after opening
+      setSearchParams({}, { replace: true })
+    }
+  }, [callIdParam, loading, calls])
 
   useEffect(() => {
     loadCalls()

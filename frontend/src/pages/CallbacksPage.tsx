@@ -300,7 +300,7 @@ export const CallbacksPage: React.FC = () => {
                 </div>
 
                 <div className="flex flex-col gap-2 ml-4">
-                  <Link to={`/calls/${callback.call_id}`}>
+                  <Link to={`/dashboard/calls?callId=${callback.call_id}`}>
                     <Button variant="outline" size="sm">
                       {t.callbacks.viewCall}
                     </Button>
