@@ -77,7 +77,6 @@ class PaginatedCallResponse(BaseModel):
     per_page: int
     total_pages: int
 
-
 @router.get("/", response_model=PaginatedCallResponse)
 def list_calls(
     agent_id: Optional[int] = Query(None),
