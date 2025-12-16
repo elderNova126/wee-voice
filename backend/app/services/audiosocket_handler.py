@@ -261,11 +261,13 @@ class AudioSocketSession:
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Configuration - TUNED for low latency
-        PRE_BUFFER_MS = 80   # Reduced from 150ms for faster response
-        WAIT_FOR_AUDIO_MS = 40  # Wait for more audio when buffer low
+        # Configuration - Balance between latency and stability
+        # Gemini sends audio in bursts, not continuously. Need larger buffer to absorb gaps.
+        PRE_BUFFER_MS = 300   # 300ms pre-buffer to absorb Gemini's burst timing
+        MIN_BUFFER_MS = 100   # Try to maintain at least 100ms buffer
         
         PRE_BUFFER_BYTES = int(PRE_BUFFER_MS * 16)  # 16 bytes per ms at 8kHz 16-bit
+        MIN_BUFFER_BYTES = int(MIN_BUFFER_MS * 16)  # 1600 bytes
         
         # Thread-safe queue
         audio_queue = queue.Queue(maxsize=2000)
@@ -282,9 +284,12 @@ class AudioSocketSession:
             'first_audio_time': None,  # When first audio received from Gemini
             'playback_start_time': None,  # When playback started
             'last_buffer_log': 0,
-            'min_buffer': 999999,      # Track minimum buffer level
+            'min_buffer': 999999,      # Track minimum buffer level (after playback started)
             'max_queue_size': 0,
+            'low_buffer_count': 0,     # How many times buffer dropped below MIN_BUFFER
         }
+        
+        print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms, min_buffer={MIN_BUFFER_MS}ms", flush=True)
         
         # Streaming resampler for seamless audio
         if SOXR_AVAILABLE:
@@ -376,13 +381,30 @@ class AudioSocketSession:
                             next_frame_time = time.perf_counter()
                         continue
                 
-                # Track min buffer level
-                if len(audio_buffer) < stats['min_buffer'] and started:
-                    stats['min_buffer'] = len(audio_buffer)
+                # Track min buffer level and low buffer events
+                if started:
+                    if len(audio_buffer) < stats['min_buffer']:
+                        stats['min_buffer'] = len(audio_buffer)
+                    if len(audio_buffer) < MIN_BUFFER_BYTES:
+                        stats['low_buffer_count'] += 1
                 
                 # Playback phase - send a frame
                 if len(audio_buffer) >= FRAME_SIZE:
-                    # Normal case - have enough audio
+                    # Check if buffer is getting low - try to refill before it empties
+                    if len(audio_buffer) < MIN_BUFFER_BYTES:
+                        # Buffer is low - try to get more audio before sending
+                        refill_attempts = 0
+                        while len(audio_buffer) < MIN_BUFFER_BYTES and refill_attempts < 3:
+                            try:
+                                chunk = audio_queue.get(timeout=0.003)  # 3ms wait
+                                if chunk is None:
+                                    break
+                                audio_buffer += chunk
+                                last_audio_time = time.perf_counter()
+                            except queue.Empty:
+                                refill_attempts += 1
+                    
+                    # Normal case - send audio
                     try:
                         transport.write(header + audio_buffer[:FRAME_SIZE])
                         audio_buffer = audio_buffer[FRAME_SIZE:]
@@ -427,35 +449,43 @@ class AudioSocketSession:
                         except:
                             return
                 else:
-                    # Buffer empty - quick check for new audio, then send silence
-                    try:
-                        chunk = audio_queue.get(timeout=0.005)  # Only 5ms wait to avoid timing issues
-                        if chunk is None:
-                            return
-                        audio_buffer += chunk
-                        last_audio_time = time.perf_counter()
+                    # Buffer empty - try multiple times to get audio before giving up
+                    got_audio = False
+                    for attempt in range(5):  # Try 5 times, ~25ms total
+                        try:
+                            chunk = audio_queue.get(timeout=0.005)  # 5ms per attempt
+                            if chunk is None:
+                                return
+                            audio_buffer += chunk
+                            last_audio_time = time.perf_counter()
+                            got_audio = True
+                            break
+                        except queue.Empty:
+                            continue
+                    
+                    if got_audio:
                         continue  # Try again with new audio
-                    except queue.Empty:
-                        # No audio available - check if this is normal silence or underrun
-                        idle_time = time.perf_counter() - last_audio_time
-                        if idle_time > 0.2:
-                            # Probably between sentences - just send silence (normal)
-                            try:
-                                transport.write(header + SILENCE_FRAME)
-                                stats['sent'] += 1
-                            except:
-                                return
-                        else:
-                            # UNDERRUN - buffer empty during active speech
-                            stats['underruns'] += 1
-                            stats['underrun_empty'] += 1
-                            if stats['underrun_empty'] <= 10:  # Only log first 10
-                                print(f"[SEND] ⚠ UNDERRUN(empty): idle={idle_time*1000:.0f}ms, frame#{stats['sent']}", flush=True)
-                            try:
-                                transport.write(header + SILENCE_FRAME)
-                                stats['sent'] += 1
-                            except:
-                                return
+                    
+                    # Really no audio available
+                    idle_time = time.perf_counter() - last_audio_time
+                    if idle_time > 0.3:
+                        # Probably between sentences - just send silence (normal)
+                        try:
+                            transport.write(header + SILENCE_FRAME)
+                            stats['sent'] += 1
+                        except:
+                            return
+                    else:
+                        # UNDERRUN - buffer empty during active speech
+                        stats['underruns'] += 1
+                        stats['underrun_empty'] += 1
+                        if stats['underrun_empty'] <= 10:  # Only log first 10
+                            print(f"[SEND] ⚠ UNDERRUN(empty): idle={idle_time*1000:.0f}ms, frame#{stats['sent']}", flush=True)
+                        try:
+                            transport.write(header + SILENCE_FRAME)
+                            stats['sent'] += 1
+                        except:
+                            return
                 
                 # Periodic stats logging
                 if stats['sent'] % 100 == 0 and stats['sent'] > 0:
@@ -561,6 +591,7 @@ class AudioSocketSession:
         print(f"[UNIFIED] Frames sent: {stats['sent']}", flush=True)
         print(f"[UNIFIED] Chunks received: {stats['recv']}", flush=True)
         print(f"[UNIFIED] Underruns: {stats['underruns']} (empty={stats['underrun_empty']}, partial={stats['underrun_partial']})", flush=True)
+        print(f"[UNIFIED] Low buffer events: {stats['low_buffer_count']} (below {MIN_BUFFER_MS}ms)", flush=True)
         print(f"[UNIFIED] Min buffer: {stats['min_buffer']}b, Max queue: {stats['max_queue_size']}", flush=True)
         if stats['first_audio_time'] and stats['playback_start_time']:
             latency = (stats['playback_start_time'] - stats['first_audio_time']) * 1000
