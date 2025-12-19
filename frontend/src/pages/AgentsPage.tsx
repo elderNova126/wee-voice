@@ -9,6 +9,11 @@ import {
   CodeBracketIcon,
   UserGroupIcon,
   UserIcon,
+  ChatBubbleLeftRightIcon,
+  SparklesIcon,
+  ClockIcon,
+  GlobeAltIcon,
+  EyeIcon,
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, VoiceWebSocket } from '@/lib/api'
@@ -39,6 +44,7 @@ export default function AgentsPage() {
   const [loading, setLoading] = useState(true)
   const [testingAgent, setTestingAgent] = useState<Agent | null>(null)
   const [filter, setFilter] = useState<FilterType>('all')
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     loadAgents()
@@ -72,53 +78,126 @@ export default function AgentsPage() {
     setTestingAgent(agent)
   }
 
-  // Filter agents based on selected filter
+  // Filter and search agents
   const filteredAgents = agents.filter((agent) => {
-    if (filter === 'my') return agent.is_owner
-    if (filter === 'team') return agent.role === 'collaborator'
-    return true // 'all'
+    // Filter by type
+    if (filter === 'my' && !agent.is_owner) return false
+    if (filter === 'team' && agent.role !== 'collaborator') return false
+    
+    // Search filter
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase()
+      return (
+        agent.name.toLowerCase().includes(query) ||
+        agent.description?.toLowerCase().includes(query) ||
+        agent.language.toLowerCase().includes(query)
+      )
+    }
+    
+    return true
   })
 
   const myAgents = agents.filter((a) => a.is_owner)
   const teamAgents = agents.filter((a) => a.role === 'collaborator')
 
+  const getInteractionIcon = (mode?: string) => {
+    switch (mode) {
+      case 'text':
+        return <ChatBubbleLeftRightIcon className="h-6 w-6" />
+      case 'both':
+        return (
+          <div className="flex items-center gap-1">
+            <MicrophoneIcon className="h-5 w-5" />
+            <ChatBubbleLeftRightIcon className="h-5 w-5" />
+          </div>
+        )
+      default:
+        return <MicrophoneIcon className="h-6 w-6" />
+    }
+  }
+
+  const getInteractionColor = (mode?: string) => {
+    switch (mode) {
+      case 'text':
+        return 'from-purple-500 to-pink-500'
+      case 'both':
+        return 'from-blue-500 to-purple-500'
+      default:
+        return 'from-blue-500 to-cyan-500'
+    }
+  }
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diff = now.getTime() - date.getTime()
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+    
+    if (days === 0) return 'Today'
+    if (days === 1) return 'Yesterday'
+    if (days < 7) return `${days} days ago`
+    if (days < 30) return `${Math.floor(days / 7)} weeks ago`
+    return date.toLocaleDateString()
+  }
+
   return (
     <DashboardLayout>
-      <div className="mb-8 flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t.agentsPage.title}</h1>
-          <p className="mt-2 text-gray-600 dark:text-gray-400">
-            {t.agentsPage.subtitle}
-          </p>
+      {/* Enhanced Header */}
+      <div className="mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              {t.agentsPage.title}
+            </h1>
+            <p className="mt-2 text-gray-600 dark:text-gray-400 text-lg">
+              {t.agentsPage.subtitle}
+            </p>
+          </div>
+          <Link
+            to="/dashboard/agents/new"
+            className="inline-flex items-center px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
+          >
+            <PlusIcon className="h-5 w-5 mr-2" />
+            {t.agentsPage.newAgent}
+          </Link>
         </div>
-        <Link
-          to="/dashboard/agents/new"
-          className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition"
-        >
-          <PlusIcon className="h-5 w-5 mr-2" />
-          {t.agentsPage.newAgent}
-        </Link>
+
+        {/* Search Bar */}
+        {agents.length > 0 && (
+          <div className="mt-6">
+            <div className="relative">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search agents by name, description, or language..."
+                className="w-full px-4 py-3 pl-12 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+              />
+              <SparklesIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Filter Tabs */}
+      {/* Enhanced Filter Tabs */}
       {agents.length > 0 && (
-        <div className="mb-6 flex gap-2 border-b border-gray-200 dark:border-gray-700">
+        <div className="mb-6 flex flex-wrap gap-2">
           <button
             onClick={() => setFilter('all')}
-            className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 ${
+            className={`px-5 py-2.5 font-semibold text-sm rounded-xl transition-all ${
               filter === 'all'
-                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg'
+                : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:border-blue-500'
             }`}
           >
             All ({agents.length})
           </button>
           <button
             onClick={() => setFilter('my')}
-            className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 flex items-center gap-2 ${
+            className={`px-5 py-2.5 font-semibold text-sm rounded-xl transition-all flex items-center gap-2 ${
               filter === 'my'
-                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg'
+                : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:border-blue-500'
             }`}
           >
             <UserIcon className="h-4 w-4" />
@@ -127,50 +206,61 @@ export default function AgentsPage() {
           {teamAgents.length > 0 && (
             <button
               onClick={() => setFilter('team')}
-              className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 flex items-center gap-2 ${
+              className={`px-5 py-2.5 font-semibold text-sm rounded-xl transition-all flex items-center gap-2 ${
                 filter === 'team'
-                  ? 'border-purple-600 text-purple-600 dark:text-purple-400'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:border-purple-500'
               }`}
             >
               <UserGroupIcon className="h-4 w-4" />
-              Team Agents ({teamAgents.length})
+              Team ({teamAgents.length})
             </button>
           )}
         </div>
       )}
 
-      {/* Loading Skeleton */}
+      {/* Enhanced Loading Skeleton */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3].map((i) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5 lg:gap-6">
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
             <div
               key={i}
-              className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow animate-pulse"
+              className="bg-white dark:bg-gray-800 p-4 sm:p-5 lg:p-6 rounded-2xl sm:rounded-3xl shadow-lg border border-gray-200 dark:border-gray-700 animate-pulse"
             >
-              <div className="h-32 bg-gray-200 dark:bg-gray-700 rounded-xl" />
+              <div className="h-2 bg-gradient-to-r from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-600 rounded-t-2xl mb-4" />
+              <div className="h-32 sm:h-40 lg:h-48 bg-gradient-to-br from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-600 rounded-xl mb-3 sm:mb-4" />
+              <div className="h-3 sm:h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-2" />
+              <div className="h-3 sm:h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/2" />
             </div>
           ))}
         </div>
       ) : filteredAgents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 px-6 text-center bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-sm">
-          <div className="bg-blue-100 dark:bg-blue-900 p-4 rounded-full mb-4">
-            <MicrophoneIcon className="h-10 w-10 text-blue-600 dark:text-blue-300" />
+        <div className="flex flex-col items-center justify-center py-20 px-6 text-center bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-3xl">
+          <div className="bg-gradient-to-br from-blue-100 to-purple-100 dark:from-blue-900 dark:to-purple-900 p-6 rounded-full mb-6">
+            <MicrophoneIcon className="h-16 w-16 text-blue-600 dark:text-blue-300" />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            {filter === 'team' ? 'No Team Agents' : filter === 'my' ? 'No Agents Yet' : t.agentsPage.noAgentsYet}
+          <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+            {searchQuery 
+              ? 'No agents found' 
+              : filter === 'team' 
+              ? 'No Team Agents' 
+              : filter === 'my' 
+              ? 'No Agents Yet' 
+              : t.agentsPage.noAgentsYet}
           </h3>
-          <p className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-w-sm">
-            {filter === 'team' 
+          <p className="mt-2 text-gray-600 dark:text-gray-400 max-w-md">
+            {searchQuery
+              ? 'Try adjusting your search terms'
+              : filter === 'team' 
               ? 'You are not a collaborator on any agents yet.' 
               : filter === 'my'
-              ? 'Create your first agent to get started.'
+              ? 'Create your first agent to get started with AI-powered conversations.'
               : t.agentsPage.noAgentsDescription}
           </p>
-          {filter !== 'team' && (
+          {filter !== 'team' && !searchQuery && (
             <Link
               to="/dashboard/agents/new"
-              className="mt-6 inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition"
+              className="mt-6 inline-flex items-center px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
             >
               <PlusIcon className="h-5 w-5 mr-2" />
               {t.agentsPage.createAgent}
@@ -178,126 +268,169 @@ export default function AgentsPage() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredAgents.map((agent) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5 lg:gap-6">
+          {filteredAgents.map((agent, index) => {
+            // Generate harmonious color scheme based on agent index
+            const colorSchemes = [
+              { gradient: 'from-blue-500 via-cyan-500 to-teal-500', icon: 'from-blue-400 to-cyan-400', badge: 'from-blue-500 to-cyan-500', hover: 'hover:from-blue-600 hover:to-cyan-600' },
+              { gradient: 'from-purple-500 via-pink-500 to-rose-500', icon: 'from-purple-400 to-pink-400', badge: 'from-purple-500 to-pink-500', hover: 'hover:from-purple-600 hover:to-pink-600' },
+              { gradient: 'from-indigo-500 via-blue-500 to-purple-500', icon: 'from-indigo-400 to-purple-400', badge: 'from-indigo-500 to-purple-500', hover: 'hover:from-indigo-600 hover:to-purple-600' },
+              { gradient: 'from-emerald-500 via-teal-500 to-cyan-500', icon: 'from-emerald-400 to-teal-400', badge: 'from-emerald-500 to-teal-500', hover: 'hover:from-emerald-600 hover:to-teal-600' },
+              { gradient: 'from-orange-500 via-amber-500 to-yellow-500', icon: 'from-orange-400 to-amber-400', badge: 'from-orange-500 to-amber-500', hover: 'hover:from-orange-600 hover:to-amber-600' },
+              { gradient: 'from-violet-500 via-purple-500 to-fuchsia-500', icon: 'from-violet-400 to-fuchsia-400', badge: 'from-violet-500 to-fuchsia-500', hover: 'hover:from-violet-600 hover:to-fuchsia-600' },
+            ]
+            const colorScheme = colorSchemes[index % colorSchemes.length]
+            
+            return (
             <div
               key={agent.id}
-              className={`relative bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm hover:shadow-lg transition-all ${
+              className={`group relative bg-white dark:bg-gray-800 rounded-2xl sm:rounded-3xl shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1 ${
                 agent.role === 'collaborator'
                   ? 'border-2 border-purple-200 dark:border-purple-800'
                   : 'border border-gray-200 dark:border-gray-700'
               }`}
             >
+              {/* Gradient Header */}
+              <div className={`h-2 sm:h-2.5 bg-gradient-to-r ${colorScheme.gradient}`} />
+
               {/* Status and Role Badges */}
-              <div className="absolute top-4 right-4 flex gap-2 flex-wrap justify-end max-w-[50%]">
+              <div className="absolute top-3 right-3 sm:top-4 sm:right-4 flex gap-1.5 sm:gap-2 flex-wrap justify-end max-w-[55%] sm:max-w-[50%] z-10">
                 {agent.role === 'collaborator' && (
-                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 flex items-center gap-1">
-                    <UserGroupIcon className="h-3 w-3" />
-                    {t.common.status === 'Statut' ? 'Équipe' : 'Team'}
-                  </span>
-                )}
-                {agent.is_owner && (
-                  <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 flex items-center gap-1">
-                    <UserIcon className="h-3 w-3" />
-                    Owner
+                  <span className="px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-md flex items-center gap-0.5 sm:gap-1">
+                    <UserGroupIcon className="h-2.5 w-2.5 sm:h-3 sm:w-3 flex-shrink-0" />
+                    <span className="hidden sm:inline">Team</span>
                   </span>
                 )}
                 <span
-                  className={`px-2.5 py-1 text-xs font-medium rounded-full ${
-                    agent.is_active
-                      ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
-                      : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                  className={`px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-full shadow-md flex items-center gap-0.5 sm:gap-1 ${
+                    agent.is_public
+                      ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white'
+                      : 'bg-gradient-to-r from-gray-500 to-gray-600 text-white'
                   }`}
                 >
-                  {agent.is_active ? t.agentsPage.active : t.agentsPage.inactive}
+                  {agent.is_public ? (
+                    <>
+                      <GlobeAltIcon className="h-2.5 w-2.5 sm:h-3 sm:w-3 flex-shrink-0" />
+                      <span className="hidden sm:inline">{t.agentsPage.public}</span>
+                    </>
+                  ) : (
+                    <>
+                      <EyeIcon className="h-2.5 w-2.5 sm:h-3 sm:w-3 flex-shrink-0" />
+                      <span className="hidden sm:inline">{t.agentsPage.private}</span>
+                    </>
+                  )}
                 </span>
               </div>
 
-              <div className="flex items-center mb-4">
-                <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-xl">
-                  {agent.interaction_mode === 'text' ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-6 w-6 text-blue-600 dark:text-blue-300">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                  ) : agent.interaction_mode === 'both' ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-6 w-6 text-blue-600 dark:text-blue-300">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-                    </svg>
-                  ) : (
-                    <MicrophoneIcon className="h-6 w-6 text-blue-600 dark:text-blue-300" />
-                  )}
+              {/* Agent Header */}
+              <div className="p-4 sm:p-5 lg:p-6 pb-3 sm:pb-4">
+                <div className="flex items-start gap-3 sm:gap-4 mb-3 sm:mb-4">
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-gradient-to-br ${colorScheme.icon} shadow-lg flex-shrink-0`}>
+                    <div className="text-white">
+                      {getInteractionIcon(agent.interaction_mode)}
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white truncate mb-1">
+                      {agent.name}
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs text-gray-500 dark:text-gray-400">
+                      <span className="flex items-center gap-0.5 sm:gap-1">
+                        {agent.language === 'fr-FR' ? '🇫🇷' : '🇬🇧'}
+                        <span className="hidden sm:inline">{agent.language === 'fr-FR' ? 'French' : 'English'}</span>
+                      </span>
+                      <span className="hidden sm:inline">•</span>
+                      {agent.is_owner && (
+                        <>
+                          <span className="flex items-center gap-0.5 sm:gap-1">
+                            <UserIcon className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
+                            <span className="hidden sm:inline">Owner</span>
+                          </span>
+                          <span className="hidden sm:inline">•</span>
+                        </>
+                      )}
+                      <span className="text-[10px] sm:text-xs">
+                        {agent.interaction_mode === 'text' ? '💬' : agent.interaction_mode === 'both' ? '🎤💬' : '🎤'}
+                        <span className="hidden sm:inline ml-0.5">
+                          {agent.interaction_mode === 'text' ? 'Text' : agent.interaction_mode === 'both' ? 'Both' : 'Voice'}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="ml-3">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
-                    {agent.name}
-                  </h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}
-                    {agent.is_public ? t.agentsPage.public : t.agentsPage.private} •{' '}
-                    {agent.interaction_mode === 'text' ? '💬 Text' : agent.interaction_mode === 'both' ? '🎤💬 Both' : '🎤 Voice'}
-                  </p>
+
+                {/* Description */}
+                <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mb-3 sm:mb-4 line-clamp-2 min-h-[2rem] sm:min-h-[2.5rem]">
+                  {agent.description || t.agentsPage.noDescription}
+                </p>
+
+                {/* Permissions for team agents */}
+                {agent.role === 'collaborator' && agent.permissions && agent.permissions.length > 0 && (
+                  <div className="mb-3 sm:mb-4 flex flex-wrap gap-1 sm:gap-1.5">
+                    {agent.permissions.map((perm) => (
+                      <span
+                        key={perm}
+                        className="px-2 sm:px-2.5 py-0.5 sm:py-1 text-[10px] sm:text-xs font-semibold rounded-lg bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 border border-purple-200 dark:border-purple-800"
+                      >
+                        {perm}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Created Date */}
+                <div className="flex items-center gap-1 text-[10px] sm:text-xs text-gray-500 dark:text-gray-400 mb-3 sm:mb-4">
+                  <ClockIcon className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                  <span className="hidden sm:inline">Created </span>
+                  {formatDate(agent.created_at)}
                 </div>
               </div>
 
-              {/* Permissions for team agents */}
-              {agent.role === 'collaborator' && agent.permissions && agent.permissions.length > 0 && (
-                <div className="mb-3 flex flex-wrap gap-1">
-                  {agent.permissions.map((perm) => (
-                    <span
-                      key={perm}
-                      className="px-2 py-0.5 text-xs font-medium rounded bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400"
-                    >
-                      {perm}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 line-clamp-2">
-                {agent.description || t.agentsPage.noDescription}
-              </p>
-
-              <div className="flex gap-2">
+              {/* Action Buttons */}
+              <div className="px-4 sm:px-5 lg:px-6 pb-4 sm:pb-5 lg:pb-6 pt-0 flex gap-1.5 sm:gap-2">
                 <button
                   onClick={() => handleTest(agent)}
-                  className="flex-1 inline-flex justify-center items-center gap-2 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-950 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 font-medium text-sm py-2 transition"
+                  className={`flex-1 inline-flex justify-center items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl bg-gradient-to-r ${colorScheme.badge} ${colorScheme.hover} text-white font-semibold text-xs sm:text-sm py-2 sm:py-2.5 lg:py-3 transition-all shadow-md hover:shadow-lg transform hover:scale-105`}
                 >
-                  <PlayIcon className="h-4 w-4" />
-                  {t.agentsPage.test}
+                  <PlayIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
+                  <span className="hidden sm:inline">{t.agentsPage.test}</span>
+                  <span className="sm:hidden">Test</span>
                 </button>
                 {(agent.is_owner || agent.permissions?.includes('edit')) && (
-                  <Link
-                    to={`/dashboard/agents/${agent.id}/embed`}
-                    className="p-2.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition"
-                    title="Embed Widget"
-                  >
-                    <CodeBracketIcon className="h-4 w-4" />
-                  </Link>
-                )}
-                {(agent.is_owner || agent.permissions?.includes('edit')) && (
-                  <Link
-                    to={`/dashboard/agents/${agent.id}/edit`}
-                    className="p-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition"
-                    title={t.agentsPage.edit}
-                  >
-                    <PencilIcon className="h-4 w-4" />
-                  </Link>
+                  <>
+                    <Link
+                      to={`/dashboard/agents/${agent.id}/embed`}
+                      className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition-all shadow-md hover:shadow-lg"
+                      title="Embed Widget"
+                    >
+                      <CodeBracketIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    </Link>
+                    <Link
+                      to={`/dashboard/agents/${agent.id}/edit`}
+                      className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition-all shadow-md hover:shadow-lg"
+                      title={t.agentsPage.edit}
+                    >
+                      <PencilIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    </Link>
+                  </>
                 )}
                 {(agent.is_owner || agent.permissions?.includes('delete')) && (
                   <button
                     onClick={() => handleDelete(agent.id)}
-                    className="p-2.5 rounded-lg bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 transition"
+                    className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 dark:text-red-400 transition-all shadow-md hover:shadow-lg"
                     title={t.agentsPage.delete}
                   >
-                    <TrashIcon className="h-4 w-4" />
+                    <TrashIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </button>
                 )}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
+      {/* Test Modals */}
       {testingAgent && testingAgent.interaction_mode === 'text' ? (
         <TextChatTest
           agentId={testingAgent.id}
@@ -312,7 +445,7 @@ export default function AgentsPage() {
 }
 
 // ======================
-// Test Agent Modal
+// Enhanced Test Agent Modal
 // ======================
 
 interface TestAgentModalProps {
@@ -445,7 +578,6 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop())
     processorRef.current?.disconnect()
     
-    // Close audio contexts only if they're not already closed
     if (audioContextRef.current?.state !== 'closed') {
       audioContextRef.current?.close()
     }
@@ -462,91 +594,112 @@ function TestAgentModal({ agent, onClose }: TestAgentModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="fixed inset-0 bg-black bg-opacity-50" />
-      <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full p-8 z-10">
-        <div className="mb-6 text-center">
-          <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Agent: {agent.name}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md">
+      <div className="fixed inset-0 bg-black/60" onClick={handleClose} />
+      <div className="relative bg-white dark:bg-gray-800 rounded-3xl shadow-2xl max-w-2xl w-full p-8 z-10 border border-gray-200 dark:border-gray-700">
+        {/* Enhanced Header */}
+        <div className="mb-8 text-center">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 mb-4 shadow-lg">
+            <MicrophoneIcon className="h-10 w-10 text-white" />
+          </div>
+          <h3 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            {agent.name}
           </h3>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}
-            {agent.is_public ? 'Public Agent' : 'Private Agent'}
+          <p className="text-sm text-gray-600 dark:text-gray-400 mt-2 flex items-center justify-center gap-2">
+            <span>{agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'}</span>
+            <span>•</span>
+            <span>{agent.is_public ? 'Public Agent' : 'Private Agent'}</span>
           </p>
         </div>
 
-        {/* Connection States */}
-        <div className="flex flex-col items-center justify-center py-6">
+        {/* Enhanced Connection States */}
+        <div className="flex flex-col items-center justify-center py-8">
           {isConnecting ? (
             <>
-              <div className="relative mb-4">
-                <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center animate-pulse">
-                  <MicrophoneIcon className="h-10 w-10 text-white" />
+              <div className="relative mb-6">
+                <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-purple-500 rounded-full flex items-center justify-center animate-pulse shadow-xl">
+                  <MicrophoneIcon className="h-12 w-12 text-white" />
                 </div>
-                <div className="absolute inset-0 border-4 border-blue-600 rounded-full animate-spin border-t-transparent" />
+                <div className="absolute inset-0 border-4 border-blue-500 rounded-full animate-spin border-t-transparent" />
+                <div className="absolute inset-0 border-4 border-purple-500 rounded-full animate-spin border-b-transparent" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }} />
               </div>
-              <p className="text-gray-700 dark:text-gray-300 font-medium">Connecting...</p>
+              <p className="text-gray-700 dark:text-gray-300 font-semibold text-lg">Connecting to agent...</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Please allow microphone access</p>
             </>
           ) : !isConnected ? (
             <button
               onClick={connect}
-              className="inline-flex items-center px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-medium text-lg transition"
+              className="inline-flex items-center px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-bold text-lg shadow-xl hover:shadow-2xl transition-all transform hover:scale-105"
             >
-              <PlayIcon className="h-5 w-5 mr-2" />
-              Start
+              <PlayIcon className="h-6 w-6 mr-3" />
+              Start Voice Call
             </button>
           ) : (
             <>
-              <div className="relative mb-4">
+              <div className="relative mb-6">
                 <div
-                  className={`w-20 h-20 rounded-full bg-blue-600 flex items-center justify-center ${
+                  className={`w-24 h-24 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center shadow-xl ${
                     isRecording ? 'animate-pulse' : ''
                   }`}
                 >
-                  <MicrophoneIcon className="h-10 w-10 text-white" />
+                  <MicrophoneIcon className="h-12 w-12 text-white" />
                 </div>
                 {isRecording && (
-                  <div className="absolute inset-0 rounded-full border-4 border-blue-600 animate-ping" />
+                  <>
+                    <div className="absolute inset-0 rounded-full border-4 border-green-500 animate-ping" />
+                    <div className="absolute inset-0 rounded-full border-4 border-emerald-500 animate-ping" style={{ animationDelay: '0.5s' }} />
+                  </>
                 )}
               </div>
-              <p className="text-gray-900 dark:text-white font-semibold mb-4">
-                Listening... Speak now
+              <p className="text-gray-900 dark:text-white font-bold text-xl mb-2">
+                {isRecording ? '🎤 Listening... Speak now' : 'Connected'}
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                The agent is ready to hear you
               </p>
               <button
                 onClick={disconnect}
-                className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition"
+                className="px-8 py-3 bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
               >
-                Stop
+                End Call
               </button>
             </>
           )}
         </div>
 
-        {/* Transcript */}
+        {/* Enhanced Transcript */}
         {transcript.length > 0 && (
-          <div className="mt-6 bg-gray-50 dark:bg-gray-900 rounded-xl p-4 max-h-60 overflow-y-auto">
-            <h4 className="font-semibold text-gray-800 dark:text-white mb-3">Transcript</h4>
-            <div className="space-y-2">
+          <div className="mt-8 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 rounded-2xl p-6 max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-700">
+            <h4 className="font-bold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+              <ChatBubbleLeftRightIcon className="h-5 w-5" />
+              Conversation Transcript
+            </h4>
+            <div className="space-y-3">
               {transcript.map((t, i) => (
                 <div
                   key={i}
-                  className={`text-sm ${
+                  className={`p-3 rounded-xl ${
                     t.role === 'user'
-                      ? 'text-blue-700 dark:text-blue-400'
-                      : 'text-gray-800 dark:text-gray-200'
+                      ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-900 dark:text-blue-200 border border-blue-200 dark:border-blue-800'
+                      : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700'
                   }`}
                 >
-                  <strong>{t.role === 'user' ? 'You' : 'Agent'}:</strong> {t.text}
+                  <div className="flex items-start gap-2">
+                    <span className={`font-bold text-xs ${t.role === 'user' ? 'text-blue-600 dark:text-blue-400' : 'text-purple-600 dark:text-purple-400'}`}>
+                      {t.role === 'user' ? 'YOU' : 'AGENT'}
+                    </span>
+                    <span className="flex-1 text-sm">{t.text}</span>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        <div className="flex justify-end mt-8">
+        <div className="flex justify-end mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
           <button
             onClick={handleClose}
-            className="px-4 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-medium transition"
+            className="px-6 py-3 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-semibold transition-all"
           >
             Close
           </button>

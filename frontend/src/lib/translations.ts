@@ -365,6 +365,8 @@ export interface Translations {
     processing: string
     completed: string
     failed: string
+    footerEditHint: string
+    footerCreateHint: string
   }
 
 
@@ -1186,7 +1188,7 @@ const translations: Record<Language, Translations> = {
     agentForm: {
       backToAgents: 'Retour aux agents',
       createNewAgent: 'Créer un nouvel agent',
-      editAgent: 'Modifier l\'agent',
+      editAgent: 'Sauvegarder l\'agent',
       configureDetails: 'Configurez les détails, le comportement et la langue de votre agent IA.',
       agentName: 'Nom de l\'agent *',
       agentNamePlaceholder: 'Bot de support client',
@@ -1216,6 +1218,8 @@ const translations: Record<Language, Translations> = {
       processing: 'Traitement en cours',
       completed: 'Terminé',
       failed: 'Échec',
+      footerEditHint: 'Apportez des modifications et enregistrez pour mettre à jour votre agent',
+      footerCreateHint: 'Remplissez tous les champs requis pour créer votre agent',
     },
     dashboard: {
       title: 'Tableau de bord',
@@ -2024,7 +2028,7 @@ const translations: Record<Language, Translations> = {
     agentForm: {
       backToAgents: 'Back to Agents',
       createNewAgent: 'Create New Agent',
-      editAgent: 'Edit Agent',
+      editAgent: 'Save Agent',
       configureDetails: 'Configure details, behavior, and language for your AI agent.',
       agentName: 'Agent Name *',
       agentNamePlaceholder: 'Customer Support Bot',
@@ -2054,6 +2058,8 @@ const translations: Record<Language, Translations> = {
       processing: 'Processing',
       completed: 'Completed',
       failed: 'Failed',
+      footerEditHint: 'Make changes and save to update your agent',
+      footerCreateHint: 'Fill in all required fields to create your agent',
     },
     dashboard: {
       title: 'Dashboard',

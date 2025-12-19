@@ -8,7 +8,10 @@ import {
   TrashIcon,
   CheckCircleIcon,
   UserPlusIcon,
-  XMarkIcon
+  XMarkIcon,
+  ChatBubbleLeftRightIcon,
+  MicrophoneIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, api, librariesAPI } from '@/lib/api'
@@ -366,9 +369,26 @@ export default function AgentFormPage() {
   if (loadingAgent) {
     return (
       <DashboardLayout>
-        <div className="animate-pulse max-w-3xl space-y-6">
-          <div className="h-8 w-1/3 rounded bg-gray-200 dark:bg-gray-700"></div>
-          <div className="h-64 rounded bg-gray-200 dark:bg-gray-700"></div>
+        <div className="flex flex-col items-center justify-center min-h-[60vh]">
+          {/* Loader2 Style Spinner - Multi-layered rotating circles */}
+          <div className="relative w-20 h-20">
+            {/* Outer rotating circle */}
+            <div className="absolute inset-0 border-4 border-transparent border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin" style={{ animationDuration: '1s' }}></div>
+            {/* Middle rotating circle (reverse) */}
+            <div className="absolute inset-2 border-4 border-transparent border-r-purple-600 dark:border-r-purple-400 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
+            {/* Inner rotating circle */}
+            <div className="absolute inset-4 border-4 border-transparent border-b-pink-600 dark:border-b-pink-400 rounded-full animate-spin" style={{ animationDuration: '2s' }}></div>
+            {/* Center icon */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <ArrowPathIcon className="w-8 h-8 text-blue-600 dark:text-blue-400 animate-spin" style={{ animationDuration: '0.8s' }} />
+            </div>
+          </div>
+          <p className="mt-8 text-lg font-semibold text-gray-700 dark:text-gray-300 animate-pulse">
+            {t.common.status === 'Statut' ? 'Chargement des détails de l\'agent...' : 'Loading agent details...'}
+          </p>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+            {t.common.status === 'Statut' ? 'Veuillez patienter' : 'Please wait'}
+          </p>
         </div>
       </DashboardLayout>
     )
@@ -376,32 +396,46 @@ export default function AgentFormPage() {
 
   return (
     <DashboardLayout>
-      {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <Link
-            to="/dashboard/agents"
-            className="inline-flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition"
-          >
-            <ArrowLeftIcon className="mr-1 h-4 w-4" />
-            {t.agentForm.backToAgents}
-          </Link>
-          <h1 className="mt-2 text-3xl font-semibold text-gray-900 dark:text-white tracking-tight">
-            {isEdit ? t.agentForm.editAgent : t.agentForm.createNewAgent}
-          </h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {t.agentForm.configureDetails}
-          </p>
+      {/* Enhanced Header */}
+      <div className="mb-8">
+        <Link
+          to="/dashboard/agents"
+          className="inline-flex items-center text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 transition mb-4 group"
+        >
+          <ArrowLeftIcon className="mr-2 h-4 w-4 group-hover:-translate-x-1 transition-transform" />
+          {t.agentForm.backToAgents}
+        </Link>
+        <div className="flex items-center gap-4">
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-500 shadow-lg">
+            {formData.interaction_mode === 'text' ? (
+              <ChatBubbleLeftRightIcon className="h-8 w-8 text-white" />
+            ) : formData.interaction_mode === 'both' ? (
+              <div className="flex items-center gap-1">
+                <MicrophoneIcon className="h-6 w-6 text-white" />
+                <ChatBubbleLeftRightIcon className="h-6 w-6 text-white" />
+              </div>
+            ) : (
+              <MicrophoneIcon className="h-8 w-8 text-white" />
+            )}
+          </div>
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              {isEdit ? t.agentForm.editAgent : t.agentForm.createNewAgent}
+            </h1>
+            <p className="mt-2 text-lg text-gray-600 dark:text-gray-400">
+              {t.agentForm.configureDetails}
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* Form Card */}
+      {/* Enhanced Form Card */}
       <form
         onSubmit={handleSubmit}
-        className="relative mx-auto max-w-5xl rounded-2xl border border-gray-200 dark:border-gray-700/80 bg-gradient-to-b from-white to-gray-50 dark:from-gray-800 dark:to-gray-850 p-8 shadow-[0_2px_20px_-5px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all"
+        className="relative mx-auto max-w-5xl rounded-3xl border-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-8 lg:p-10 shadow-2xl transition-all"
       >
-        {/* Gradient border accent */}
-        <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-gray-200 dark:ring-gray-700"></div>
+        {/* Gradient top border */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-t-3xl"></div>
 
         <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
           {/* LEFT COLUMN */}
@@ -833,21 +867,36 @@ export default function AgentFormPage() {
           </div>
         )}
 
-        {/* Footer */}
-        <div className="mt-10 flex justify-end gap-3 border-t border-gray-200 dark:border-gray-700/60 pt-6">
-          <Link
-            to="/dashboard/agents"
-            className="inline-flex items-center justify-center rounded-lg border border-gray-300 dark:border-gray-600 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
-          >
-            {t.common.cancel}
-          </Link>
-          <button
-            type="submit"
-            disabled={loading}
-            className="inline-flex items-center justify-center rounded-lg bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-700 hover:to-primary-600 text-white px-5 py-2 text-sm font-medium shadow-md transition disabled:opacity-70"
-          >
-            {loading ? (t.common.status === 'Statut' ? 'Enregistrement...' : 'Saving...') : isEdit ? t.agentForm.editAgent : t.agentForm.createNewAgent}
-          </button>
+        {/* Enhanced Footer */}
+        <div className="mt-10 flex flex-col sm:flex-row justify-between items-center gap-4 pt-8 border-t-2 border-gray-200 dark:border-gray-700">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {isEdit ? t.agentForm.footerEditHint : t.agentForm.footerCreateHint}
+          </p>
+          <div className="flex gap-3">
+            <Link
+              to="/dashboard/agents"
+              className="inline-flex items-center justify-center rounded-xl border-2 border-gray-300 dark:border-gray-600 px-6 py-3 text-sm font-semibold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-all"
+            >
+              {t.common.cancel}
+            </Link>
+            <button
+              type="submit"
+              disabled={loading}
+              className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-3 text-sm font-bold shadow-xl hover:shadow-2xl transition-all transform hover:scale-105 disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none"
+            >
+              {loading ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  {t.common.status === 'Statut' ? 'Enregistrement...' : 'Saving...'}
+                </>
+              ) : (
+                <>
+                  <CheckCircleIcon className="h-5 w-5 mr-2" />
+                  {isEdit ? t.agentForm.editAgent : t.agentForm.createNewAgent}
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </form>
     </DashboardLayout>
