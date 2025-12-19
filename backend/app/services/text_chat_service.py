@@ -40,19 +40,71 @@ class TextChatService:
             logger.warning("ANTHROPIC_API_KEY not set, will use OpenAI fallback")
         
         # Initialize OpenAI as fallback
+        openai_init_success = False
         if settings.OPENAI_API_KEY:
             try:
                 from openai import AsyncOpenAI
-                # Simple initialization without extra parameters for compatibility
-                self.openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-                logger.info("✓ OpenAI client initialized for text chat (fallback)")
+                
+                # Try simple initialization first (most compatible)
+                try:
+                    self.openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                    logger.info("✓ OpenAI client initialized for text chat (fallback)")
+                    openai_init_success = True
+                except TypeError as e:
+                    # If proxies error, try with explicit http_client
+                    if 'proxies' in str(e):
+                        logger.warning("OpenAI proxies parameter issue detected, trying alternative initialization...")
+                        import httpx
+                        # Create httpx client with minimal config
+                        http_client = httpx.AsyncClient(timeout=30.0)
+                        self.openai_client = AsyncOpenAI(
+                            api_key=settings.OPENAI_API_KEY,
+                            http_client=http_client
+                        )
+                        logger.info("✓ OpenAI client initialized (with custom http_client)")
+                        openai_init_success = True
+                    else:
+                        raise
+                        
             except Exception as e:
-                logger.warning(f"Could not initialize OpenAI client: {e}")
+                logger.error(f"❌ Could not initialize OpenAI client: {e}")
+                logger.error(f"OpenAI initialization error type: {type(e).__name__}")
+                import traceback
+                logger.error(f"OpenAI initialization traceback: {traceback.format_exc()}")
                 self.openai_client = None
+                openai_init_success = False
+        else:
+            logger.warning("⚠ OPENAI_API_KEY not set in settings")
+            logger.debug(f"Settings OPENAI_API_KEY value: '{settings.OPENAI_API_KEY}' (empty: {not settings.OPENAI_API_KEY})")
+            self.openai_client = None
+            openai_init_success = False
         
         # Check if we have at least one working client
         if not self.anthropic_client and not self.openai_client:
-            raise ValueError("Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is configured. At least one is required for text chat.")
+            error_details = []
+            diagnostics = []
+            
+            if not settings.ANTHROPIC_API_KEY:
+                error_details.append("ANTHROPIC_API_KEY not set")
+                diagnostics.append("  - Set ANTHROPIC_API_KEY in backend/.env file")
+            elif not self.anthropic_client:
+                error_details.append("ANTHROPIC_API_KEY set but client initialization failed")
+                diagnostics.append("  - Check Anthropic API key validity")
+            
+            if not settings.OPENAI_API_KEY:
+                error_details.append("OPENAI_API_KEY not set")
+                diagnostics.append("  - Set OPENAI_API_KEY in backend/.env file")
+            elif not openai_init_success:
+                error_details.append("OPENAI_API_KEY set but client initialization failed")
+                diagnostics.append("  - Check OpenAI API key validity")
+                diagnostics.append("  - Check backend startup logs for initialization errors")
+            
+            error_msg = f"Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is configured properly. At least one is required for text chat.\n"
+            error_msg += f"Issues: {', '.join(error_details)}\n"
+            error_msg += "\nTo fix:\n"
+            error_msg += "\n".join(diagnostics) if diagnostics else "  - Configure at least one API key"
+            error_msg += "\n  - Restart backend server after updating .env"
+            raise ValueError(error_msg)
         
         # RAG service (lazy load)
         self._rag_service = None
@@ -174,6 +226,8 @@ Example: "[CALLBACK_HIGH] I understand your concern. Let me connect you with a t
     async def _get_ai_response(self, message: str) -> str:
         """Get AI response using Anthropic (primary) or OpenAI (fallback)"""
         
+        anthropic_error = None
+        
         # Try Anthropic first
         if self.anthropic_client:
             try:
@@ -195,8 +249,19 @@ Example: "[CALLBACK_HIGH] I understand your concern. Let me connect you with a t
                 return response_text
                 
             except Exception as e:
-                logger.error(f"Anthropic API error: {e}")
-                logger.info("Falling back to OpenAI...")
+                anthropic_error = str(e)
+                error_lower = anthropic_error.lower()
+                
+                # Check for specific error types
+                if '403' in anthropic_error or 'forbidden' in error_lower or 'not allowed' in error_lower:
+                    logger.error(f"Anthropic API error (403 Forbidden): {anthropic_error}")
+                    logger.warning("Anthropic API key may be invalid, expired, or restricted. Falling back to OpenAI...")
+                elif '401' in anthropic_error or 'unauthorized' in error_lower:
+                    logger.error(f"Anthropic API error (401 Unauthorized): {anthropic_error}")
+                    logger.warning("Anthropic API key is invalid. Falling back to OpenAI...")
+                else:
+                    logger.error(f"Anthropic API error: {anthropic_error}")
+                    logger.info("Falling back to OpenAI...")
         
         # Fallback to OpenAI
         if self.openai_client:
@@ -218,10 +283,50 @@ Example: "[CALLBACK_HIGH] I understand your concern. Let me connect you with a t
                 return response_text
                 
             except Exception as e:
-                logger.error(f"OpenAI API error: {e}")
-                raise Exception("Both Anthropic and OpenAI failed to respond")
+                openai_error = str(e)
+                logger.error(f"OpenAI API error: {openai_error}")
+                
+                # Build comprehensive error message
+                error_parts = []
+                if anthropic_error:
+                    error_parts.append(f"Anthropic: {anthropic_error}")
+                error_parts.append(f"OpenAI: {openai_error}")
+                
+                raise Exception(f"Both AI providers failed. {' | '.join(error_parts)}")
         
-        raise Exception("No AI provider available")
+        # No providers available - provide detailed diagnostics
+        error_details = []
+        diagnostics = []
+        
+        # Check Anthropic
+        if not self.anthropic_client:
+            if not settings.ANTHROPIC_API_KEY:
+                error_details.append("ANTHROPIC_API_KEY not set")
+                diagnostics.append("  - Set ANTHROPIC_API_KEY in backend/.env file")
+            else:
+                error_details.append("Anthropic client failed to initialize")
+                diagnostics.append("  - Check Anthropic API key validity")
+                if anthropic_error:
+                    diagnostics.append(f"  - Last error: {anthropic_error}")
+        
+        # Check OpenAI
+        if not self.openai_client:
+            if not settings.OPENAI_API_KEY:
+                error_details.append("OPENAI_API_KEY not set")
+                diagnostics.append("  - Set OPENAI_API_KEY in backend/.env file")
+            else:
+                error_details.append("OpenAI client failed to initialize")
+                diagnostics.append("  - Check OpenAI API key validity")
+                diagnostics.append("  - Check backend startup logs for initialization errors")
+                diagnostics.append(f"  - OPENAI_API_KEY length: {len(settings.OPENAI_API_KEY)} chars")
+        
+        error_msg = f"No AI provider available. {', '.join(error_details)}.\n"
+        error_msg += "\nTo fix this:\n"
+        error_msg += "\n".join(diagnostics) if diagnostics else "  - Configure at least one API key"
+        error_msg += "\n  - Restart the backend server after updating .env file"
+        error_msg += "\n  - Verify API keys are valid and have proper permissions"
+        
+        raise Exception(error_msg)
     
     def _format_history_for_anthropic(self) -> List[Dict[str, str]]:
         """Format conversation history for Anthropic API (no system messages in history)"""
