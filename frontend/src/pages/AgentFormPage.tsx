@@ -26,6 +26,7 @@ interface AgentFormData {
   is_public: boolean
   is_active: boolean
   rag_enabled?: boolean
+  interaction_mode?: string
 }
 
 interface KnowledgeDocument {
@@ -56,7 +57,8 @@ export default function AgentFormPage() {
     email_request_message: 'Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?',
     is_public: false,
     is_active: true,
-    rag_enabled: false
+    rag_enabled: false,
+    interaction_mode: 'voice'
   })
 
   const [loading, setLoading] = useState(false)
@@ -100,7 +102,8 @@ export default function AgentFormPage() {
         email_request_message: agent.email_request_message || 'Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?',
         is_public: agent.is_public ?? false,
         is_active: agent.is_active ?? true,
-        rag_enabled: agent.rag_enabled ?? false
+        rag_enabled: agent.rag_enabled ?? false,
+        interaction_mode: agent.interaction_mode || 'voice'
       })
       
       // Load documents if agent exists
@@ -157,7 +160,8 @@ export default function AgentFormPage() {
         email_request_message: library.email_request_message || 'Pourriez-vous nous communiquer votre adresse électronique afin que nous puissions procéder aux prochaines étapes et prendre les mesures nécessaires ?',
         is_public: false,
         is_active: true,
-        rag_enabled: library.rag_enabled ?? false
+        rag_enabled: library.rag_enabled ?? false,
+        interaction_mode: library.interaction_mode || 'voice'
       })
       toast.success(`Loaded template: ${library.name}`)
     } catch (error) {
@@ -526,6 +530,30 @@ export default function AgentFormPage() {
               </select>
               <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                 Note: All voices have a slight English accent. This is a limitation of Gemini 2.5 Flash.
+              </p>
+            </div>
+
+            {/* Interaction Mode */}
+            <div>
+              <label htmlFor="interaction_mode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                {t.common.status === 'Statut' ? 'Mode d\'interaction' : 'Interaction Mode'} *
+              </label>
+              <select
+                id="interaction_mode"
+                name="interaction_mode"
+                required
+                value={formData.interaction_mode}
+                onChange={handleChange}
+                className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all"
+              >
+                <option value="voice">🎤 {t.common.status === 'Statut' ? 'Voix uniquement' : 'Voice Only'}</option>
+                <option value="text">💬 {t.common.status === 'Statut' ? 'Texte uniquement (Chat)' : 'Text Only (Chat)'}</option>
+                <option value="both">🎤💬 {t.common.status === 'Statut' ? 'Voix et Texte' : 'Voice & Text'}</option>
+              </select>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {t.common.status === 'Statut' 
+                  ? 'Choisissez comment les utilisateurs peuvent interagir avec votre agent. Texte utilise Anthropic/OpenAI.' 
+                  : 'Choose how users can interact with your agent. Text mode uses Anthropic/OpenAI.'}
               </p>
             </div>
 

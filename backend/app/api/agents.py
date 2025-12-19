@@ -24,6 +24,7 @@ class AgentCreate(BaseModel):
     crm_webhook_url: Optional[str] = None
     crm_enabled: bool = False
     is_public: bool = False
+    interaction_mode: str = "voice"  # "voice", "text", or "both"
 
 
 class AgentUpdate(BaseModel):
@@ -41,6 +42,7 @@ class AgentUpdate(BaseModel):
     crm_enabled: Optional[bool] = None
     is_active: Optional[bool] = None
     is_public: Optional[bool] = None
+    interaction_mode: Optional[str] = None
 
 
 class AgentResponse(BaseModel):
@@ -58,6 +60,7 @@ class AgentResponse(BaseModel):
     is_active: bool
     is_public: bool
     rag_enabled: bool = False  # RAG/Knowledge Base enabled status
+    interaction_mode: str = "voice"  # "voice", "text", or "both"
     created_at: Any
     phone_number: Optional[str] = None
     phone_number_status: Optional[str] = None
@@ -122,6 +125,7 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
         is_active=agent.is_active,
         is_public=agent.is_public,
         rag_enabled=agent.rag_enabled,
+        interaction_mode=getattr(agent, 'interaction_mode', 'voice'),
         created_at=agent.created_at,
         phone_number=phone_number,
         phone_number_status=phone_status,

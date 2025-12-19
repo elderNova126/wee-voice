@@ -49,8 +49,11 @@ stripe==10.11.0
 pymupdf==1.23.26
 Pillow==10.2.0
 
-# OpenAI (for OCR on scanned PDFs)
+# OpenAI (for OCR on scanned PDFs and text chat fallback)
 openai==1.12.0
+
+# Anthropic (for text chat - primary)
+anthropic==0.74.0
 
 # Vector Store & Embeddings
 sentence-transformers==2.7.0

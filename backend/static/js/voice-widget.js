@@ -10,19 +10,27 @@
   const translations = {
     en: {
       startCall: 'Start Voice Call',
+      startChat: 'Start Chat',
       connecting: 'Connecting to agent...',
       endCall: 'End Call',
+      endChat: 'End Chat',
       listening: 'Listening...',
       speaking: 'Agent is speaking...',
+      typePlaceholder: 'Type your message...',
+      send: 'Send',
       connectionError: 'Connection error. Please try again.',
       microphoneError: 'Could not access microphone. Please allow microphone access and try again.'
     },
     fr: {
       startCall: 'Démarrer l\'appel vocal',
+      startChat: 'Démarrer le chat',
       connecting: 'Connexion à l\'agent...',
       endCall: 'Terminer l\'appel',
+      endChat: 'Terminer le chat',
       listening: 'Écoute...',
       speaking: 'L\'agent parle...',
+      typePlaceholder: 'Tapez votre message...',
+      send: 'Envoyer',
       connectionError: 'Erreur de connexion. Veuillez réessayer.',
       microphoneError: 'Impossible d\'accéder au microphone. Veuillez autoriser l\'accès au microphone et réessayer.'
     },
@@ -98,11 +106,15 @@
     audioQueue: [],  // Queue for smooth audio playback
     nextPlayTime: 0,  // Track next scheduled play time for seamless playback
     t: null,  // Translations object
+    mode: 'voice',  // 'voice' or 'text'
+    messages: [],  // Chat message history
     
     init: function(config) {
       this.config = config;
+      this.mode = config.mode || 'voice';  // Default to voice mode
       this.audioQueue = [];
       this.nextPlayTime = 0;
+      this.messages = [];
       // Set translations based on language (default to 'en')
       const lang = (config.language || 'en').toLowerCase();
       this.t = translations[lang] || translations.en;
@@ -116,51 +128,95 @@
       container.id = 'weevoice-widget';
       container.className = `weevoice-widget ${this.config.position}`;
       
-      // Create widget button
+      // Create widget button with appropriate icon
       const button = document.createElement('button');
       button.id = 'weevoice-button';
       button.className = 'weevoice-button';
       button.style.backgroundColor = this.config.color;
-      button.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" width="24" height="24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-        </svg>
-      `;
       
-      // Create widget panel
+      if (this.mode === 'text') {
+        // Chat icon for text mode
+        button.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" width="24" height="24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+          </svg>
+        `;
+      } else {
+        // Microphone icon for voice mode
+        button.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" width="24" height="24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+          </svg>
+        `;
+      }
+      
+      // Create widget panel based on mode
       const panel = document.createElement('div');
       panel.id = 'weevoice-panel';
       panel.className = 'weevoice-panel hidden';
-      panel.innerHTML = `
-        <div class="weevoice-header" style="background-color: ${this.config.color}">
-          <h3>${this.config.agentName}</h3>
-          <button id="weevoice-close" class="weevoice-close">×</button>
-        </div>
-        <div class="weevoice-body">
-          <div id="weevoice-status" class="weevoice-status">
-            <p>${this.config.greeting}</p>
-            <button id="weevoice-start" class="weevoice-start-btn" style="background-color: ${this.config.color}">
-              ${this.t.startCall}
-            </button>
+      
+      if (this.mode === 'text') {
+        // Text chat UI
+        panel.innerHTML = `
+          <div class="weevoice-header" style="background-color: ${this.config.color}">
+            <h3>${this.config.agentName}</h3>
+            <button id="weevoice-close" class="weevoice-close">×</button>
           </div>
-          <div id="weevoice-loading" class="weevoice-loading hidden">
-            <div class="weevoice-spinner"></div>
-            <p>${this.t.connecting}</p>
-          </div>
-          <div id="weevoice-call" class="weevoice-call hidden">
-            <div class="weevoice-waveform">
-              <div class="weevoice-wave"></div>
-              <div class="weevoice-wave"></div>
-              <div class="weevoice-wave"></div>
-              <div class="weevoice-wave"></div>
+          <div class="weevoice-body weevoice-chat-body">
+            <div id="weevoice-chat-messages" class="weevoice-chat-messages">
+              <div class="weevoice-message weevoice-message-assistant">
+                <div class="weevoice-message-content">${this.config.greeting || 'Hello! How can I help you today?'}</div>
+              </div>
             </div>
-            <p id="weevoice-transcript" class="weevoice-transcript"></p>
-            <button id="weevoice-end" class="weevoice-end-btn">
-              ${this.t.endCall}
-            </button>
+            <div class="weevoice-chat-input-container">
+              <input 
+                type="text" 
+                id="weevoice-chat-input" 
+                class="weevoice-chat-input" 
+                placeholder="${this.t.typePlaceholder}"
+                autocomplete="off"
+              />
+              <button id="weevoice-send" class="weevoice-send-btn" style="background-color: ${this.config.color}">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" width="20" height="20">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
+              </button>
+            </div>
           </div>
-        </div>
-      `;
+        `;
+      } else {
+        // Voice call UI (original)
+        panel.innerHTML = `
+          <div class="weevoice-header" style="background-color: ${this.config.color}">
+            <h3>${this.config.agentName}</h3>
+            <button id="weevoice-close" class="weevoice-close">×</button>
+          </div>
+          <div class="weevoice-body">
+            <div id="weevoice-status" class="weevoice-status">
+              <p>${this.config.greeting}</p>
+              <button id="weevoice-start" class="weevoice-start-btn" style="background-color: ${this.config.color}">
+                ${this.t.startCall}
+              </button>
+            </div>
+            <div id="weevoice-loading" class="weevoice-loading hidden">
+              <div class="weevoice-spinner"></div>
+              <p>${this.t.connecting}</p>
+            </div>
+            <div id="weevoice-call" class="weevoice-call hidden">
+              <div class="weevoice-waveform">
+                <div class="weevoice-wave"></div>
+                <div class="weevoice-wave"></div>
+                <div class="weevoice-wave"></div>
+                <div class="weevoice-wave"></div>
+              </div>
+              <p id="weevoice-transcript" class="weevoice-transcript"></p>
+              <button id="weevoice-end" class="weevoice-end-btn">
+                ${this.t.endCall}
+              </button>
+            </div>
+          </div>
+        `;
+      }
       
       container.appendChild(button);
       container.appendChild(panel);
@@ -169,10 +225,7 @@
     
     attachEventListeners: function() {
       const button = document.getElementById('weevoice-button');
-      const panel = document.getElementById('weevoice-panel');
       const closeBtn = document.getElementById('weevoice-close');
-      const startBtn = document.getElementById('weevoice-start');
-      const endBtn = document.getElementById('weevoice-end');
       
       button.addEventListener('click', () => {
         this.togglePanel();
@@ -182,13 +235,36 @@
         this.closePanel();
       });
       
-      startBtn.addEventListener('click', () => {
-        this.startCall();
-      });
-      
-      endBtn.addEventListener('click', () => {
-        this.endCall();
-      });
+      if (this.mode === 'text') {
+        // Text mode event listeners
+        const chatInput = document.getElementById('weevoice-chat-input');
+        const sendBtn = document.getElementById('weevoice-send');
+        
+        sendBtn.addEventListener('click', () => {
+          this.sendTextMessage();
+        });
+        
+        chatInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            this.sendTextMessage();
+          }
+        });
+        
+        // Connect to chat when panel opens
+        this.connectToTextChat();
+      } else {
+        // Voice mode event listeners
+        const startBtn = document.getElementById('weevoice-start');
+        const endBtn = document.getElementById('weevoice-end');
+        
+        startBtn.addEventListener('click', () => {
+          this.startCall();
+        });
+        
+        endBtn.addEventListener('click', () => {
+          this.endCall();
+        });
+      }
     },
     
     togglePanel: function() {
@@ -563,6 +639,93 @@
       document.getElementById('weevoice-transcript').textContent = '';
       
       this.isConnected = false;
+    },
+    
+    // ===== TEXT CHAT METHODS =====
+    
+    connectToTextChat: function() {
+      if (this.isConnected) return;
+      
+      // Connect to text chat WebSocket endpoint
+      const wsUrl = `${this.config.apiUrl.replace('http', 'ws')}/api/v1/ws/text/${this.config.agentId}`;
+      
+      this.ws = new WebSocket(wsUrl);
+      
+      this.ws.onopen = () => {
+        this.isConnected = true;
+        console.log('✓ Text chat connected');
+      };
+      
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'session_started') {
+            console.log('✓ Text chat session started');
+          } else if (data.type === 'message' && data.role === 'assistant') {
+            // Add assistant message to chat
+            this.addChatMessage('assistant', data.content);
+          } else if (data.type === 'error') {
+            console.error('Chat error:', data.message);
+            this.addChatMessage('system', '❌ ' + data.message);
+          }
+        } catch (error) {
+          console.error('Error parsing message:', error);
+        }
+      };
+      
+      this.ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        this.addChatMessage('system', '❌ ' + this.t.connectionError);
+      };
+      
+      this.ws.onclose = () => {
+        this.isConnected = false;
+        console.log('Text chat disconnected');
+      };
+    },
+    
+    sendTextMessage: function() {
+      const input = document.getElementById('weevoice-chat-input');
+      const message = input.value.trim();
+      
+      if (!message) return;
+      
+      // Add user message to chat
+      this.addChatMessage('user', message);
+      
+      // Clear input
+      input.value = '';
+      
+      // Send to server
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          type: 'message',
+          content: message
+        }));
+      } else {
+        this.addChatMessage('system', '❌ Not connected to chat');
+      }
+    },
+    
+    addChatMessage: function(role, content) {
+      const messagesContainer = document.getElementById('weevoice-chat-messages');
+      
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `weevoice-message weevoice-message-${role}`;
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'weevoice-message-content';
+      contentDiv.textContent = content;
+      
+      messageDiv.appendChild(contentDiv);
+      messagesContainer.appendChild(messageDiv);
+      
+      // Scroll to bottom
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      
+      // Store in history
+      this.messages.push({ role, content, timestamp: new Date() });
     }
   };
 })();

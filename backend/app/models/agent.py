@@ -36,6 +36,9 @@ class VoiceAgent(Base):
     crm_enabled = Column(Boolean, default=False)
     crm_config = Column(JSON, nullable=True)
     
+    # Interaction Mode
+    interaction_mode = Column(String, default="voice")  # "voice", "text", or "both"
+    
     # Status
     is_active = Column(Boolean, default=True)
     is_public = Column(Boolean, default=False)  # For demo agents

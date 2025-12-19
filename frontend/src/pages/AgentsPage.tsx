@@ -15,6 +15,7 @@ import { agentsAPI, VoiceWebSocket } from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
 import { useTranslation } from '@/lib/translations'
+import TextChatTest from '@/components/TextChatTest'
 
 interface Agent {
   id: number
@@ -27,6 +28,7 @@ interface Agent {
   is_owner?: boolean
   role?: string
   permissions?: string[]
+  interaction_mode?: string
 }
 
 type FilterType = 'all' | 'my' | 'team'
@@ -213,7 +215,17 @@ export default function AgentsPage() {
 
               <div className="flex items-center mb-4">
                 <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-xl">
-                  <MicrophoneIcon className="h-6 w-6 text-blue-600 dark:text-blue-300" />
+                  {agent.interaction_mode === 'text' ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-6 w-6 text-blue-600 dark:text-blue-300">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  ) : agent.interaction_mode === 'both' ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-6 w-6 text-blue-600 dark:text-blue-300">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+                    </svg>
+                  ) : (
+                    <MicrophoneIcon className="h-6 w-6 text-blue-600 dark:text-blue-300" />
+                  )}
                 </div>
                 <div className="ml-3">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
@@ -221,7 +233,8 @@ export default function AgentsPage() {
                   </h3>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
                     {agent.language === 'fr-FR' ? '🇫🇷 French' : '🇬🇧 English'} •{' '}
-                    {agent.is_public ? t.agentsPage.public : t.agentsPage.private}
+                    {agent.is_public ? t.agentsPage.public : t.agentsPage.private} •{' '}
+                    {agent.interaction_mode === 'text' ? '💬 Text' : agent.interaction_mode === 'both' ? '🎤💬 Both' : '🎤 Voice'}
                   </p>
                 </div>
               </div>
@@ -285,9 +298,15 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {testingAgent && (
+      {testingAgent && testingAgent.interaction_mode === 'text' ? (
+        <TextChatTest
+          agentId={testingAgent.id}
+          agentName={testingAgent.name}
+          onClose={() => setTestingAgent(null)}
+        />
+      ) : testingAgent ? (
         <TestAgentModal agent={testingAgent} onClose={() => setTestingAgent(null)} />
-      )}
+      ) : null}
     </DashboardLayout>
   )
 }

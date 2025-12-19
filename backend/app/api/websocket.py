@@ -776,3 +776,263 @@ async def get_session_status(session_id: str):
         "is_active": is_active
     }
 
+
+@router.websocket("/text/{agent_id}")
+async def text_chat_websocket(
+    websocket: WebSocket,
+    agent_id: int,
+    api_key: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """WebSocket endpoint for text-only chat conversations"""
+    session_id = str(uuid.uuid4())
+    user: Optional[User] = None
+    call: Optional[Call] = None
+    chat_service: Optional['TextChatService'] = None
+    
+    logger.info(f"💬 New text chat WebSocket connection for agent_id={agent_id}, session_id={session_id}")
+    
+    try:
+        # Verify authentication (API key or JWT token)
+        if api_key:
+            user = await verify_api_key(api_key, db)
+            if not user:
+                await websocket.close(code=4001, reason="Invalid API key")
+                return
+            logger.info(f"User authenticated via API key: {user.email}")
+        elif token:
+            payload = decode_token(token)
+            if not payload:
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+            user_id = payload.get("sub")
+            if not user_id:
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+            user = db.query(User).filter(User.id == int(user_id)).first()
+            if not user:
+                await websocket.close(code=4001, reason="User not found")
+                return
+            logger.info(f"User authenticated via JWT: {user.email}")
+        else:
+            # For demo purposes, allow public agents without auth
+            logger.info("No authentication provided - accessing public agent")
+        
+        # Get agent
+        agent = db.query(VoiceAgent).filter(VoiceAgent.id == agent_id).first()
+        if not agent:
+            logger.error(f"Agent {agent_id} not found")
+            await websocket.close(code=4004, reason="Agent not found")
+            return
+        
+        # Check if agent supports text mode
+        if agent.interaction_mode not in ["text", "both"]:
+            logger.warning(f"Agent {agent_id} does not support text mode")
+            await websocket.close(code=4003, reason="Agent does not support text mode")
+            return
+        
+        # Check permissions
+        if not agent.is_public and (not user or agent.user_id != user.id):
+            logger.warning(f"Access denied for agent {agent_id}")
+            await websocket.close(code=4003, reason="Access denied")
+            return
+        
+        # Accept connection
+        await websocket.accept()
+        logger.info(f"✅ Text chat WebSocket connection accepted")
+        
+        # Create call record
+        call = Call(
+            user_id=user.id if user else agent.user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            status=CallStatus.IN_PROGRESS,
+            started_at=datetime.utcnow()
+        )
+        db.add(call)
+        db.commit()
+        db.refresh(call)
+        logger.info(f"✅ Call record created: ID={call.id}")
+        
+        # Broadcast new call to monitoring connections
+        try:
+            call_data = {
+                "id": call.id,
+                "status": call.status.value,
+                "agent_id": call.agent_id,
+                "session_id": call.session_id,
+                "started_at": call.started_at.isoformat() if call.started_at else None
+            }
+            await call_monitor_manager.broadcast_call_update(call.user_id, call_data)
+        except Exception as e:
+            logger.error(f"Error broadcasting new call: {e}")
+        
+        # Initialize text chat service
+        from app.services.text_chat_service import TextChatService
+        try:
+            chat_service = TextChatService(agent, call)
+        except Exception as e:
+            logger.error(f"Failed to initialize TextChatService: {e}")
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Failed to initialize chat service: {str(e)}"
+            })
+            await websocket.close()
+            return
+        
+        # Send session started message
+        try:
+            await websocket.send_json({
+                "type": "session_started",
+                "session_id": session_id,
+                "call_id": call.id,
+                "agent_name": agent.name,
+                "language": agent.language,
+                "mode": "text"
+            })
+            logger.info(f"✅ Session started message sent")
+        except Exception as e:
+            logger.error(f"Failed to send session_started: {e}")
+            return
+        
+        # Send greeting if configured
+        if agent.greeting:
+            try:
+                greeting_response = {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": agent.greeting,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                await websocket.send_json(greeting_response)
+                
+                # Save greeting to DB
+                await chat_service.save_message_to_db("assistant", agent.greeting, db)
+            except Exception as e:
+                logger.error(f"Failed to send greeting: {e}")
+        
+        # Main message loop
+        while True:
+            try:
+                # Receive message from client
+                data = await websocket.receive_json()
+                
+                if data.get("type") == "message":
+                    user_message = data.get("content", "").strip()
+                    
+                    if not user_message:
+                        continue
+                    
+                    logger.info(f"📩 Received user message: {user_message[:100]}")
+                    
+                    # Save user message to DB
+                    await chat_service.save_message_to_db("user", user_message, db)
+                    
+                    # Get AI response
+                    response = await chat_service.send_message(user_message)
+                    
+                    # Send response to client
+                    await websocket.send_json({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": response["text"],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "needs_callback": response.get("needs_callback", False),
+                        "callback_priority": response.get("callback_priority")
+                    })
+                    
+                    # Save assistant message to DB
+                    await chat_service.save_message_to_db("assistant", response["text"], db)
+                    
+                    logger.info(f"📤 Sent AI response: {response['text'][:100]}")
+                
+                elif data.get("type") == "end_session":
+                    logger.info(f"End session requested for {session_id}")
+                    break
+            
+            except WebSocketDisconnect:
+                logger.info(f"Client disconnected: {session_id}")
+                break
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON received: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid message format"
+                })
+            except Exception as e:
+                logger.error(f"Error processing message: {e}", exc_info=True)
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "An error occurred processing your message"
+                })
+    
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}", exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": str(e)
+            })
+        except Exception:
+            pass
+    
+    finally:
+        # Cleanup - update call record
+        if call:
+            from app.models.database import SessionLocal
+            cleanup_db = SessionLocal()
+            
+            try:
+                fresh_call = cleanup_db.query(Call).filter(Call.id == call.id).first()
+                
+                if fresh_call:
+                    # Set end time
+                    if not fresh_call.ended_at:
+                        fresh_call.ended_at = datetime.utcnow()
+                    
+                    # Build transcript from conversation history
+                    if chat_service:
+                        history = chat_service.get_conversation_history()
+                        transcript_lines = []
+                        for msg in history:
+                            role = msg["role"].upper()
+                            content = msg["content"]
+                            transcript_lines.append(f"{role}: {content}")
+                        fresh_call.transcript = "\n\n".join(transcript_lines)
+                    
+                    # Calculate duration
+                    fresh_call.calculate_duration_and_cost()
+                    
+                    # Set status to summarizing
+                    if fresh_call.status == CallStatus.IN_PROGRESS:
+                        fresh_call.status = CallStatus.SUMMARIZING
+                    
+                    cleanup_db.commit()
+                    
+                    # Broadcast status update
+                    try:
+                        call_data = {
+                            "id": fresh_call.id,
+                            "status": fresh_call.status.value,
+                            "ended_at": fresh_call.ended_at.isoformat() if fresh_call.ended_at else None
+                        }
+                        await call_monitor_manager.broadcast_call_update(fresh_call.user_id, call_data)
+                    except Exception as e:
+                        logger.error(f"Error broadcasting call update: {e}")
+                    
+                    # Start background summarization
+                    asyncio.create_task(auto_summarize_call(fresh_call.id))
+                    
+            except Exception as e:
+                logger.error(f"Error during call cleanup: {e}", exc_info=True)
+                cleanup_db.rollback()
+            finally:
+                cleanup_db.close()
+        
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        
+        logger.info(f"💬 Text chat session ended: {session_id}")

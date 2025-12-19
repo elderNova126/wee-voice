@@ -1,6 +1,11 @@
 import os
 from typing import List
+from pathlib import Path
 from pydantic_settings import BaseSettings
+
+# Get the absolute path to the backend directory
+BASE_DIR = Path(__file__).resolve().parent.parent.parent  # Go up to backend/
+ENV_FILE = BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -30,7 +35,12 @@ class Settings(BaseSettings):
     
     # OpenAI
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_SUMMARY_MODEL: str = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-4o")
+    OPENAI_SUMMARY_MODEL: str = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-3.5-turbo")
+    OPENAI_CHAT_MODEL: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-3.5-turbo")
+    
+    # Anthropic (for text chat - primary)
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
     
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
@@ -104,9 +114,34 @@ class Settings(BaseSettings):
     PORT: int = int(os.getenv("PORT", "8000"))
     
     class Config:
-        env_file = ".env"
+        env_file = str(ENV_FILE)
+        env_file_encoding = 'utf-8'
         case_sensitive = True
         extra = "ignore"  # Ignore extra fields from .env to prevent validation errors
 
 
+# Explicitly load .env file with absolute path before creating settings instance
+from dotenv import load_dotenv
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Load .env file
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE)
+    logger.info(f"✓ Loaded .env file from: {ENV_FILE}")
+else:
+    logger.warning(f"⚠ .env file not found at: {ENV_FILE}")
+
 settings = Settings()
+
+# Debug: Log if critical keys are loaded
+if settings.ANTHROPIC_API_KEY:
+    logger.info(f"✓ ANTHROPIC_API_KEY loaded: {settings.ANTHROPIC_API_KEY[:20]}...")
+else:
+    logger.warning("⚠ ANTHROPIC_API_KEY is NOT loaded")
+
+if settings.OPENAI_API_KEY:
+    logger.info(f"✓ OPENAI_API_KEY loaded: {settings.OPENAI_API_KEY[:20]}...")
+else:
+    logger.warning("⚠ OPENAI_API_KEY is NOT loaded")

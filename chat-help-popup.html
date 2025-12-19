@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Use Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .help-card {
+            background: white;
+            border-radius: 16px;
+            max-width: 600px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.95;
+            font-size: 1.1em;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            transition: transform 0.3s ease;
+        }
+        
+        .step:hover {
+            transform: translateX(5px);
+            background: #e9ecef;
+        }
+        
+        .step-number {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2em;
+            flex-shrink: 0;
+            margin-right: 20px;
+        }
+        
+        .step-content h3 {
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 1.2em;
+        }
+        
+        .step-content p {
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .tips {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+        
+        .tips h3 {
+            color: #856404;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .tips ul {
+            list-style: none;
+            color: #856404;
+        }
+        
+        .tips li {
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+        
+        .tips li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            font-weight: bold;
+        }
+        
+        .examples {
+            background: #d1ecf1;
+            border-left: 4px solid #17a2b8;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .examples h3 {
+            color: #0c5460;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .examples p {
+            color: #0c5460;
+            margin: 8px 0;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            font-style: italic;
+        }
+        
+        .cta {
+            text-align: center;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+        
+        .cta-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 40px;
+            border-radius: 30px;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1.1em;
+            display: inline-block;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        @media (max-width: 600px) {
+            .header h1 {
+                font-size: 1.5em;
+            }
+            
+            .step {
+                flex-direction: column;
+                align-items: center;
+                text-align: center;
+            }
+            
+            .step-number {
+                margin-right: 0;
+                margin-bottom: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="help-card">
+        <div class="header">
+            <h1>💬 How to Use Our Chat</h1>
+            <p>Get instant help in 3 easy steps</p>
+        </div>
+        
+        <div class="content">
+            <div class="step">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <h3>Find the Chat Button</h3>
+                    <p>Look for the blue chat icon in the bottom-right corner of your screen. It's always there when you need help!</p>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <h3>Type Your Question</h3>
+                    <p>Click the text box at the bottom, type your message, and press Enter or click Send. It's that simple!</p>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <h3>Get Your Answer</h3>
+                    <p>Our AI assistant responds within seconds. Ask follow-up questions anytime or request to speak with a real person!</p>
+                </div>
+            </div>
+            
+            <div class="tips">
+                <h3>💡 Quick Tips</h3>
+                <ul>
+                    <li>Be specific - include order numbers or product names</li>
+                    <li>Ask one question at a time for clearer answers</li>
+                    <li>Say "I need to speak with someone" to reach our team</li>
+                    <li>Type in any language - we support multiple languages!</li>
+                </ul>
+            </div>
+            
+            <div class="examples">
+                <h3>📝 Example Questions</h3>
+                <p>"What are your business hours?"</p>
+                <p>"I need help with order #12345"</p>
+                <p>"Can you tell me about your return policy?"</p>
+                <p>"Connect me to a real person"</p>
+            </div>
+        </div>
+        
+        <div class="cta">
+            <a href="#" class="cta-button" onclick="alert('Click the chat button on your page to start!'); return false;">
+                Start Chatting Now 🚀
+            </a>
+        </div>
+        
+        <div class="footer">
+            <p>💬 Available 24/7 • 🌍 Multi-language Support • 🔒 Secure & Private</p>
+        </div>
+    </div>
+</body>
+</html>
+
