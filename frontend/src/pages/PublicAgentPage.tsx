@@ -35,6 +35,7 @@ export default function PublicAgentPage() {
   const [textChatMessages, setTextChatMessages] = useState<Array<{ role: string; content: string; timestamp: string }>>([])
   const [textChatConnected, setTextChatConnected] = useState(false)
   const [textChatConnecting, setTextChatConnecting] = useState(false)
+  const [isWaitingForResponse, setIsWaitingForResponse] = useState(false)
   const textChatWsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   
@@ -355,12 +356,14 @@ export default function PublicAgentPage() {
               setCallId(data.call_id)
             }
           } else if (data.type === 'message' && data.role === 'assistant') {
+            setIsWaitingForResponse(false)
             setTextChatMessages(prev => [...prev, {
               role: 'assistant',
               content: data.content,
               timestamp: data.timestamp || new Date().toISOString()
             }])
           } else if (data.type === 'error') {
+            setIsWaitingForResponse(false)
             console.error('Text chat error:', data.message)
             toast.error(data.message || (t.common.status === 'Statut' ? 'Erreur de chat' : 'Chat error'))
           }
@@ -389,7 +392,7 @@ export default function PublicAgentPage() {
   }
 
   const sendTextMessage = () => {
-    if (!messageInput.trim() || !textChatWsRef.current || textChatWsRef.current.readyState !== WebSocket.OPEN) return
+    if (!messageInput.trim() || !textChatWsRef.current || textChatWsRef.current.readyState !== WebSocket.OPEN || isWaitingForResponse) return
 
     const message = messageInput.trim()
     
@@ -399,6 +402,9 @@ export default function PublicAgentPage() {
       content: message,
       timestamp: new Date().toISOString()
     }])
+    
+    // Set loading state
+    setIsWaitingForResponse(true)
     
     // Send to WebSocket
     textChatWsRef.current.send(JSON.stringify({
@@ -600,6 +606,25 @@ export default function PublicAgentPage() {
                           </div>
                         </div>
                       ))}
+                      
+                      {/* Loading indicator when waiting for response */}
+                      {isWaitingForResponse && (
+                        <div className="flex justify-start">
+                          <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-2 border-gray-200 dark:border-gray-700 rounded-bl-sm shadow-md">
+                            <div className="flex items-center gap-3">
+                              <div className="flex gap-1.5">
+                                <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                                <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                <div className="w-2 h-2 bg-pink-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                              </div>
+                              <span className="text-xs text-gray-500 dark:text-gray-400 italic font-medium">
+                                {t.common.status === 'Statut' ? 'Agent en train de répondre...' : 'Agent is typing...'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
                       <div ref={messagesEndRef} />
                     </>
                   )}
@@ -618,16 +643,28 @@ export default function PublicAgentPage() {
                           sendTextMessage()
                         }
                       }}
-                      placeholder={t.common.status === 'Statut' ? 'Tapez votre message...' : 'Type your message...'}
-                      className="flex-1 px-4 py-3 bg-gray-100 dark:bg-gray-700 border-0 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all"
+                      placeholder={isWaitingForResponse 
+                        ? (t.common.status === 'Statut' ? 'En attente de la réponse...' : 'Waiting for response...')
+                        : (t.common.status === 'Statut' ? 'Tapez votre message...' : 'Type your message...')}
+                      disabled={isWaitingForResponse}
+                      className="flex-1 px-4 py-3 bg-gray-100 dark:bg-gray-700 border-0 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     />
                     <button
                       onClick={sendTextMessage}
-                      disabled={!messageInput.trim()}
+                      disabled={!messageInput.trim() || isWaitingForResponse}
                       className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed text-white rounded-xl font-semibold transition-all duration-200 flex items-center gap-2 shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
                     >
-                      <PaperAirplaneIcon className="w-5 h-5" />
-                      <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Envoyer' : 'Send'}</span>
+                      {isWaitingForResponse ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Envoi...' : 'Sending...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <PaperAirplaneIcon className="w-5 h-5" />
+                          <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Envoyer' : 'Send'}</span>
+                        </>
+                      )}
                     </button>
                   </div>
                   <div className="flex items-center justify-between mt-3">

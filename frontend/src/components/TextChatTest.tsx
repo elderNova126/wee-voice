@@ -21,6 +21,7 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
   const [inputMessage, setInputMessage] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(true)
+  const [isWaitingForResponse, setIsWaitingForResponse] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -67,12 +68,14 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
         if (data.type === 'session_started') {
           console.log('✓ Session started:', data)
         } else if (data.type === 'message' && data.role === 'assistant') {
+          setIsWaitingForResponse(false)
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: data.content,
             timestamp: data.timestamp || new Date().toISOString()
           }])
         } else if (data.type === 'error') {
+          setIsWaitingForResponse(false)
           console.error('Server error:', data.message)
           toast.error(data.message || 'An error occurred')
           setMessages(prev => [...prev, {
@@ -122,7 +125,7 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
 
   const handleSendMessage = () => {
     const message = inputMessage.trim()
-    if (!message || !isConnected || !wsRef.current) return
+    if (!message || !isConnected || !wsRef.current || isWaitingForResponse) return
 
     // Add user message to UI
     setMessages(prev => [...prev, {
@@ -130,6 +133,9 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
       content: message,
       timestamp: new Date().toISOString()
     }])
+
+    // Set loading state
+    setIsWaitingForResponse(true)
 
     // Send to server
     wsRef.current.send(JSON.stringify({
@@ -234,17 +240,26 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder={isConnected ? "Type your message..." : "Connecting..."}
-              disabled={!isConnected}
+              placeholder={isConnected ? (isWaitingForResponse ? "Waiting for response..." : "Type your message...") : "Connecting..."}
+              disabled={!isConnected || isWaitingForResponse}
               className="flex-1 px-4 py-3 bg-gray-100 dark:bg-gray-700 border-0 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:opacity-50"
             />
             <button
               onClick={handleSendMessage}
-              disabled={!isConnected || !inputMessage.trim()}
+              disabled={!isConnected || !inputMessage.trim() || isWaitingForResponse}
               className="px-5 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-xl font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
-              <PaperAirplaneIcon className="h-5 w-5" />
-              Send
+              {isWaitingForResponse ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span>Sending...</span>
+                </>
+              ) : (
+                <>
+                  <PaperAirplaneIcon className="h-5 w-5" />
+                  <span>Send</span>
+                </>
+              )}
             </button>
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
