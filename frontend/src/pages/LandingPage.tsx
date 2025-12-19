@@ -17,7 +17,8 @@ import {
   ChevronDownIcon,
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
-  SparklesIcon
+  SparklesIcon,
+  ChatBubbleLeftRightIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
@@ -87,6 +88,7 @@ interface PublicAgent {
   language: string
   rag_enabled: boolean
   phone_number?: string | null
+  interaction_mode?: string
 }
 
   useEffect(() => {
@@ -399,62 +401,119 @@ interface PublicAgent {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {publicAgents.map((agent) => (
-                  <div
-                    key={agent.id}
-                    className="group relative bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 hover:border-indigo-500 dark:hover:border-indigo-400 hover:shadow-xl transition-all duration-200"
-                  >
-                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-600/5 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
-                    <div className="relative">
-                      {/* Agent Icon */}
-                      <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center mb-4 shadow-md">
-                        <MicrophoneIcon className="w-7 h-7 text-white" />
-                      </div>
+                {publicAgents.map((agent) => {
+                  // Get interaction mode icon and color
+                  const getInteractionIcon = () => {
+                    if (agent.interaction_mode === 'text') {
+                      return <ChatBubbleLeftRightIcon className="w-7 h-7 text-white" />
+                    } else if (agent.interaction_mode === 'both') {
+                      return (
+                        <div className="flex items-center gap-1">
+                          <MicrophoneIcon className="w-5 h-5 text-white" />
+                          <ChatBubbleLeftRightIcon className="w-5 h-5 text-white" />
+                        </div>
+                      )
+                    }
+                    return <MicrophoneIcon className="w-7 h-7 text-white" />
+                  }
 
-                      {/* Agent Info */}
-                      <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
-                        {agent.name}
-                      </h3>
-                      <p className="text-gray-600 dark:text-gray-300 text-sm mb-4 line-clamp-2">
-                        {agent.description || (t.common.status === 'Statut' ? 'Agent vocal intelligent prêt à vous aider' : 'Intelligent voice agent ready to help you')}
-                      </p>
+                  const getInteractionGradient = () => {
+                    if (agent.interaction_mode === 'text') {
+                      return 'from-purple-600 to-pink-600'
+                    } else if (agent.interaction_mode === 'both') {
+                      return 'from-blue-600 via-purple-600 to-pink-600'
+                    }
+                    return 'from-indigo-600 to-purple-600'
+                  }
 
-                      {/* Agent Features */}
-                      <div className="flex flex-wrap gap-2 mb-4">
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-medium rounded-full">
-                          <GlobeAltIcon className="w-3 h-3" />
-                          {agent.language === 'fr-FR' ? 'Français' : agent.language === 'en-US' ? 'English' : agent.language}
-                        </span>
-                        {agent.rag_enabled && (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-medium rounded-full">
-                            <SparklesIcon className="w-3 h-3" />
-                            {t.common.status === 'Statut' ? 'Base de connaissances' : 'Knowledge Base'}
+                  const getInteractionLabel = () => {
+                    if (agent.interaction_mode === 'text') {
+                      return t.common.status === 'Statut' ? 'Chat texte' : 'Text Chat'
+                    } else if (agent.interaction_mode === 'both') {
+                      return t.common.status === 'Statut' ? 'Voix & Texte' : 'Voice & Text'
+                    }
+                    return t.common.status === 'Statut' ? 'Voix' : 'Voice'
+                  }
+
+                  return (
+                    <div
+                      key={agent.id}
+                      className="group relative bg-white dark:bg-gray-800 rounded-2xl p-6 border-2 border-gray-200 dark:border-gray-700 hover:border-indigo-500 dark:hover:border-indigo-400 hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1"
+                    >
+                      {/* Gradient Top Border */}
+                      <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${getInteractionGradient()}`}></div>
+                      
+                      <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-600/5 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
+                      <div className="relative">
+                        {/* Agent Icon */}
+                        <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${getInteractionGradient()} flex items-center justify-center mb-4 shadow-lg`}>
+                          {getInteractionIcon()}
+                        </div>
+
+                        {/* Agent Info */}
+                        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                          {agent.name}
+                        </h3>
+                        <p className="text-gray-600 dark:text-gray-300 text-sm mb-4 line-clamp-2 min-h-[2.5rem]">
+                          {agent.description || (t.common.status === 'Statut' ? 'Agent intelligent prêt à vous aider' : 'Intelligent agent ready to help you')}
+                        </p>
+
+                        {/* Agent Features */}
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-semibold rounded-full border border-blue-200 dark:border-blue-800">
+                            <GlobeAltIcon className="w-3.5 h-3.5" />
+                            {agent.language === 'fr-FR' ? '🇫🇷 Français' : agent.language === 'en-US' ? '🇬🇧 English' : agent.language}
                           </span>
-                        )}
-                      </div>
+                          <span className={`inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-full border ${
+                            agent.interaction_mode === 'text'
+                              ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
+                              : agent.interaction_mode === 'both'
+                              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                              : 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                          }`}>
+                            {agent.interaction_mode === 'text' ? '💬' : agent.interaction_mode === 'both' ? '🎤💬' : '🎤'}
+                            {getInteractionLabel()}
+                          </span>
+                          {agent.rag_enabled && (
+                            <span className="inline-flex items-center gap-1 px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-semibold rounded-full border border-purple-200 dark:border-purple-800">
+                              <SparklesIcon className="w-3.5 h-3.5" />
+                              {t.common.status === 'Statut' ? 'Base de connaissances' : 'Knowledge Base'}
+                            </span>
+                          )}
+                        </div>
 
-                      {/* Try Button */}
-                      <div className="flex flex-col gap-2">
-                        <Link
-                          to={`/agent/${agent.id}`}
-                          className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
-                        >
-                          <MicrophoneIcon className="w-5 h-5" />
-                          {t.landing.essayerMaintenant}
-                        </Link>
-                        {agent.phone_number && (
-                          <a
-                            href={`tel:${agent.phone_number}`}
-                            className="inline-flex items-center justify-center gap-2 px-4 py-3 border border-indigo-200 dark:border-indigo-500/40 text-indigo-600 dark:text-indigo-300 font-semibold rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-all duration-200"
+                        {/* Try Button */}
+                        <div className="flex flex-col gap-2">
+                          <Link
+                            to={`/agent/${agent.id}`}
+                            className={`inline-flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r ${getInteractionGradient()} hover:opacity-90 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105`}
                           >
-                            <PhoneIcon className="w-5 h-5" />
-                            {t.landing.appeler} {agent.phone_number}
-                          </a>
-                        )}
+                            {agent.interaction_mode === 'text' ? (
+                              <ChatBubbleLeftRightIcon className="w-5 h-5" />
+                            ) : agent.interaction_mode === 'both' ? (
+                              <div className="flex items-center gap-1">
+                                <MicrophoneIcon className="w-4 h-4" />
+                                <ChatBubbleLeftRightIcon className="w-4 h-4" />
+                              </div>
+                            ) : (
+                              <MicrophoneIcon className="w-5 h-5" />
+                            )}
+                            {t.landing.essayerMaintenant}
+                          </Link>
+                          {agent.phone_number && (
+                            <a
+                              href={`tel:${agent.phone_number}`}
+                              className="inline-flex items-center justify-center gap-2 px-4 py-3 border-2 border-emerald-200 dark:border-emerald-500/40 text-emerald-600 dark:text-emerald-400 font-semibold rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/30 transition-all duration-200"
+                            >
+                              <PhoneIcon className="w-5 h-5" />
+                              {t.landing.appeler} {agent.phone_number}
+                            </a>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
 

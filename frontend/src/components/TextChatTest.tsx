@@ -2,8 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { XMarkIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { useAuthStore } from '@/store/authStore'
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { API_URL } from '@/lib/api'
 
 interface Message {
   role: 'user' | 'assistant' | 'system'

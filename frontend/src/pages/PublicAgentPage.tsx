@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon, PhoneIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline'
+import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon, PhoneIcon, PaperAirplaneIcon, ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
-import { VoiceWebSocket, api, callsAPI } from '@/lib/api'
+import { VoiceWebSocket, api, callsAPI, API_URL } from '@/lib/api'
 import { useTranslation } from '@/lib/translations'
 
 interface Agent {
@@ -15,6 +15,7 @@ interface Agent {
   is_active: boolean
   phone_number?: string | null
   phone_number_status?: string | null
+  interaction_mode?: string
 }
 
 export default function PublicAgentPage() {
@@ -31,6 +32,11 @@ export default function PublicAgentPage() {
   const [callId, setCallId] = useState<number | null>(null)
   const [messageInput, setMessageInput] = useState('')
   const [sendingMessage, setSendingMessage] = useState(false)
+  const [textChatMessages, setTextChatMessages] = useState<Array<{ role: string; content: string; timestamp: string }>>([])
+  const [textChatConnected, setTextChatConnected] = useState(false)
+  const [textChatConnecting, setTextChatConnecting] = useState(false)
+  const textChatWsRef = useRef<WebSocket | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   
   const wsRef = useRef<VoiceWebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -47,8 +53,14 @@ export default function PublicAgentPage() {
     loadAgent()
     return () => {
       cleanup()
+      cleanupTextChat()
     }
   }, [agentId])
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [textChatMessages])
 
   const loadAgent = async () => {
     try {
@@ -96,6 +108,16 @@ export default function PublicAgentPage() {
       mediaStreamRef.current.getTracks().forEach(track => track.stop())
       mediaStreamRef.current = null
     }
+  }
+
+  const cleanupTextChat = () => {
+    if (textChatWsRef.current) {
+      textChatWsRef.current.close()
+      textChatWsRef.current = null
+    }
+    setTextChatConnected(false)
+    setTextChatConnecting(false)
+    setTextChatMessages([])
   }
 
   const initializeAudio = async () => {
@@ -304,6 +326,94 @@ export default function PublicAgentPage() {
     }
   }
 
+  const startTextChat = async () => {
+    if (!agent) return
+
+    try {
+      setTextChatConnecting(true)
+      const wsUrl = API_URL.replace('http', 'ws')
+      const url = `${wsUrl}/api/v1/ws/text/${agent.id}`
+      
+      const ws = new WebSocket(url)
+      textChatWsRef.current = ws
+
+      ws.onopen = () => {
+        console.log('Text chat connected')
+        setTextChatConnected(true)
+        setTextChatConnecting(false)
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          if (data.type === 'session_started') {
+            console.log('Text chat session started:', data)
+            setTextChatConnected(true)
+            setTextChatConnecting(false)
+            if (data.call_id) {
+              setCallId(data.call_id)
+            }
+          } else if (data.type === 'message' && data.role === 'assistant') {
+            setTextChatMessages(prev => [...prev, {
+              role: 'assistant',
+              content: data.content,
+              timestamp: data.timestamp || new Date().toISOString()
+            }])
+          } else if (data.type === 'error') {
+            console.error('Text chat error:', data.message)
+            toast.error(data.message || (t.common.status === 'Statut' ? 'Erreur de chat' : 'Chat error'))
+          }
+        } catch (error) {
+          console.error('Error parsing text chat message:', error)
+        }
+      }
+
+      ws.onerror = (error) => {
+        console.error('Text chat WebSocket error:', error)
+        toast.error(t.common.status === 'Statut' ? 'Erreur de connexion au chat' : 'Chat connection error')
+        setTextChatConnecting(false)
+        setTextChatConnected(false)
+      }
+
+      ws.onclose = () => {
+        console.log('Text chat WebSocket closed')
+        setTextChatConnected(false)
+        setTextChatConnecting(false)
+      }
+    } catch (error) {
+      console.error('Error starting text chat:', error)
+      toast.error(t.common.status === 'Statut' ? 'Impossible de démarrer le chat' : 'Failed to start chat')
+      setTextChatConnecting(false)
+    }
+  }
+
+  const sendTextMessage = () => {
+    if (!messageInput.trim() || !textChatWsRef.current || textChatWsRef.current.readyState !== WebSocket.OPEN) return
+
+    const message = messageInput.trim()
+    
+    // Add user message to UI
+    setTextChatMessages(prev => [...prev, {
+      role: 'user',
+      content: message,
+      timestamp: new Date().toISOString()
+    }])
+    
+    // Send to WebSocket
+    textChatWsRef.current.send(JSON.stringify({
+      type: 'message',
+      content: message
+    }))
+    
+    setMessageInput('')
+  }
+
+  const stopTextChat = () => {
+    cleanupTextChat()
+    toast.success(t.common.status === 'Statut' ? 'Chat terminé' : 'Chat ended')
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
@@ -344,7 +454,16 @@ export default function PublicAgentPage() {
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 mb-8 border border-gray-200 dark:border-gray-700">
           <div className="flex items-start gap-6">
             <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-lg">
-              <MicrophoneIcon className="w-10 h-10 text-white" />
+              {agent.interaction_mode === 'text' ? (
+                <ChatBubbleLeftRightIcon className="w-10 h-10 text-white" />
+              ) : agent.interaction_mode === 'both' ? (
+                <div className="flex items-center gap-1">
+                  <MicrophoneIcon className="w-6 h-6 text-white" />
+                  <ChatBubbleLeftRightIcon className="w-6 h-6 text-white" />
+                </div>
+              ) : (
+                <MicrophoneIcon className="w-10 h-10 text-white" />
+              )}
             </div>
             
             <div className="flex-1">
@@ -386,28 +505,189 @@ export default function PublicAgentPage() {
           </div>
         </div>
 
-        {/* Voice Interface */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-200 dark:border-gray-700">
-          <div className="text-center">
-            {!isConnected && !isConnecting && (
-              <>
-                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-                  {t.common.status === 'Statut' ? 'Prêt à démarrer ?' : 'Ready to Start?'}
-                </h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-8">
-                  {t.common.status === 'Statut'
-                    ? `Cliquez sur le bouton ci-dessous pour parler avec ${agent.name}`
-                    : `Click the button below to start talking with ${agent.name}`}
+        {/* Text Chat Interface - for text or both mode */}
+        {(agent.interaction_mode === 'text' || agent.interaction_mode === 'both') && (
+          <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl border-2 border-gray-200 dark:border-gray-700 mb-8 overflow-hidden">
+            {/* Chat Header */}
+            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                    <ChatBubbleLeftRightIcon className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">
+                      {t.common.status === 'Statut' ? 'Chat avec' : 'Chat with'} {agent.name}
+                    </h2>
+                    <p className="text-xs text-indigo-100">
+                      {textChatConnecting 
+                        ? (t.common.status === 'Statut' ? 'Connexion...' : 'Connecting...')
+                        : textChatConnected 
+                        ? (t.common.status === 'Statut' ? 'En ligne' : 'Online')
+                        : (t.common.status === 'Statut' ? 'Hors ligne' : 'Offline')}
+                    </p>
+                  </div>
+                </div>
+                {!textChatConnected && !textChatConnecting && (
+                  <button
+                    onClick={startTextChat}
+                    className="px-5 py-2.5 bg-white/20 hover:bg-white/30 backdrop-blur-sm text-white font-semibold rounded-xl transition-all duration-200 flex items-center gap-2"
+                  >
+                    <ChatBubbleLeftRightIcon className="w-5 h-5" />
+                    {t.common.status === 'Statut' ? 'Démarrer' : 'Start'}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {textChatConnecting && (
+              <div className="flex flex-col items-center justify-center py-16">
+                <div className="relative mb-6">
+                  <div className="w-16 h-16 border-4 border-indigo-200 dark:border-indigo-800 rounded-full"></div>
+                  <div className="absolute top-0 left-0 w-16 h-16 border-4 border-transparent border-t-indigo-600 rounded-full animate-spin"></div>
+                </div>
+                <p className="text-lg font-semibold text-gray-700 dark:text-gray-300">
+                  {t.common.status === 'Statut' ? 'Connexion au chat...' : 'Connecting to chat...'}
                 </p>
-                <button
-                  onClick={startConversation}
-                  className="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
-                >
-                  <MicrophoneIcon className="w-6 h-6" />
-                  {t.publicAgent.connect}
-                </button>
-              </>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                  {t.common.status === 'Statut' ? 'Veuillez patienter' : 'Please wait'}
+                </p>
+              </div>
             )}
+
+            {textChatConnected && (
+              <div className="flex flex-col h-[500px]">
+                {/* Chat Messages */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-800">
+                  {textChatMessages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center max-w-sm">
+                        <div className="text-6xl mb-4">💬</div>
+                        <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                          {t.common.status === 'Statut' ? 'Commencez la conversation !' : 'Start the conversation!'}
+                        </h4>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          {t.common.status === 'Statut' 
+                            ? 'Tapez un message ci-dessous pour discuter avec l\'assistant IA.'
+                            : 'Type a message below to chat with the AI assistant.'}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {textChatMessages.map((msg, idx) => (
+                        <div
+                          key={idx}
+                          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
+                        >
+                          <div
+                            className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-md ${
+                              msg.role === 'user'
+                                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-sm'
+                                : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-2 border-gray-200 dark:border-gray-700 rounded-bl-sm'
+                            }`}
+                          >
+                            <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                            <p
+                              className={`text-xs mt-2 ${
+                                msg.role === 'user'
+                                  ? 'text-indigo-100'
+                                  : 'text-gray-400 dark:text-gray-500'
+                              }`}
+                            >
+                              {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                      <div ref={messagesEndRef} />
+                    </>
+                  )}
+                </div>
+
+                {/* Message Input Area */}
+                <div className="p-4 border-t-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                  <div className="flex gap-3">
+                    <input
+                      type="text"
+                      value={messageInput}
+                      onChange={(e) => setMessageInput(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          sendTextMessage()
+                        }
+                      }}
+                      placeholder={t.common.status === 'Statut' ? 'Tapez votre message...' : 'Type your message...'}
+                      className="flex-1 px-4 py-3 bg-gray-100 dark:bg-gray-700 border-0 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all"
+                    />
+                    <button
+                      onClick={sendTextMessage}
+                      disabled={!messageInput.trim()}
+                      className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed text-white rounded-xl font-semibold transition-all duration-200 flex items-center gap-2 shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
+                    >
+                      <PaperAirplaneIcon className="w-5 h-5" />
+                      <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Envoyer' : 'Send'}</span>
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between mt-3">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {t.common.status === 'Statut' ? 'Appuyez sur Entrée pour envoyer' : 'Press Enter to send'} • {t.common.status === 'Statut' ? 'Shift + Entrée pour nouvelle ligne' : 'Shift + Enter for new line'}
+                    </p>
+                    <button
+                      onClick={stopTextChat}
+                      className="px-4 py-2 text-sm bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-400 rounded-lg font-medium transition-colors"
+                    >
+                      {t.common.status === 'Statut' ? 'Terminer' : 'End Chat'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!textChatConnected && !textChatConnecting && (
+              <div className="p-8 text-center">
+                <div className="mb-6">
+                  <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-indigo-100 to-purple-100 dark:from-indigo-900 dark:to-purple-900 mb-4">
+                    <ChatBubbleLeftRightIcon className="w-10 h-10 text-indigo-600 dark:text-indigo-400" />
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                    {t.common.status === 'Statut' ? 'Prêt à discuter ?' : 'Ready to Chat?'}
+                  </h3>
+                  <p className="text-gray-600 dark:text-gray-400 mb-6">
+                    {t.common.status === 'Statut'
+                      ? `Cliquez sur le bouton ci-dessus pour commencer à discuter avec ${agent.name}`
+                      : `Click the button above to start chatting with ${agent.name}`}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Voice Interface - for voice or both mode */}
+        {(agent.interaction_mode === 'voice' || agent.interaction_mode === 'both') && (
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-200 dark:border-gray-700">
+            <div className="text-center">
+              {!isConnected && !isConnecting && (
+                <>
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
+                    {t.common.status === 'Statut' ? 'Prêt à démarrer ?' : 'Ready to Start?'}
+                  </h2>
+                  <p className="text-gray-600 dark:text-gray-400 mb-8">
+                    {t.common.status === 'Statut'
+                      ? `Cliquez sur le bouton ci-dessous pour parler avec ${agent.name}`
+                      : `Click the button below to start talking with ${agent.name}`}
+                  </p>
+                  <button
+                    onClick={startConversation}
+                    className="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
+                  >
+                    <MicrophoneIcon className="w-6 h-6" />
+                    {t.publicAgent.connect}
+                  </button>
+                </>
+              )}
 
             {isConnecting && (
               <>
@@ -511,7 +791,8 @@ export default function PublicAgentPage() {
               </ul>
             </div>
           )}
-        </div>
+          </div>
+        )}
 
         {/* Transcript */}
         {transcript.length > 0 && (
