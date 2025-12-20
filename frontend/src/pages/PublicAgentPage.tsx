@@ -581,15 +581,26 @@ export default function PublicAgentPage() {
                     </p>
                   </div>
                 </div>
-                {!textChatConnected && !textChatConnecting && (
-                  <button
-                    onClick={startTextChat}
-                    className="px-5 py-2.5 bg-white/20 hover:bg-white/30 backdrop-blur-sm text-white font-semibold rounded-xl transition-all duration-200 flex items-center gap-2"
-                  >
-                    <ChatBubbleLeftRightIcon className="w-5 h-5" />
-                    {t.common.status === 'Statut' ? 'Démarrer' : 'Start'}
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {!textChatConnected && !textChatConnecting && (
+                    <button
+                      onClick={startTextChat}
+                      className="px-5 py-2.5 bg-white/20 hover:bg-white/30 backdrop-blur-sm text-white font-semibold rounded-xl transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg"
+                    >
+                      <ChatBubbleLeftRightIcon className="w-5 h-5" />
+                      {t.common.status === 'Statut' ? 'Démarrer' : 'Start'}
+                    </button>
+                  )}
+                  {textChatConnected && (
+                    <button
+                      onClick={stopTextChat}
+                      className="px-5 py-2.5 bg-red-500/20 hover:bg-red-500/30 backdrop-blur-sm text-white font-semibold rounded-xl transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg border border-red-300/30"
+                    >
+                      <StopIcon className="w-5 h-5" />
+                      {t.common.status === 'Statut' ? 'Terminer' : 'End Chat'}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -689,51 +700,57 @@ export default function PublicAgentPage() {
 
                 {/* Message Input Area */}
                 <div className="p-4 border-t-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-                  <div className="flex gap-3">
-                    <input
-                      type="text"
-                      value={messageInput}
-                      onChange={(e) => setMessageInput(e.target.value)}
-                      onKeyPress={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault()
-                          sendTextMessage()
-                        }
-                      }}
-                      placeholder={isWaitingForResponse 
-                        ? (t.common.status === 'Statut' ? 'En attente de la réponse...' : 'Waiting for response...')
-                        : (t.common.status === 'Statut' ? 'Tapez votre message...' : 'Type your message...')}
-                      disabled={isWaitingForResponse}
-                      className="flex-1 px-4 py-3 bg-gray-100 dark:bg-gray-700 border-0 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
-                    <button
-                      onClick={sendTextMessage}
-                      disabled={!messageInput.trim() || isWaitingForResponse}
-                      className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed text-white rounded-xl font-semibold transition-all duration-200 flex items-center gap-2 shadow-lg hover:shadow-xl transform hover:scale-105 disabled:transform-none"
-                    >
-                      {isWaitingForResponse ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                          <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Envoi...' : 'Sending...'}</span>
-                        </>
-                      ) : (
-                        <>
-                          <PaperAirplaneIcon className="w-5 h-5" />
-                          <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Envoyer' : 'Send'}</span>
-                        </>
-                      )}
-                    </button>
+                  <div className="flex gap-2 items-end">
+                    <div className="flex-1 relative">
+                      <textarea
+                        value={messageInput}
+                        onChange={(e) => setMessageInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault()
+                            sendTextMessage()
+                          }
+                        }}
+                        placeholder={isWaitingForResponse 
+                          ? (t.common.status === 'Statut' ? 'En attente de la réponse...' : 'Waiting for response...')
+                          : (t.common.status === 'Statut' ? 'Tapez votre message...' : 'Type your message...')}
+                        disabled={isWaitingForResponse}
+                        rows={1}
+                        className="w-full px-4 py-3 pr-12 bg-gray-50 dark:bg-gray-900/50 border-2 border-gray-200 dark:border-gray-700 rounded-2xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:focus:border-indigo-400 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed resize-none min-h-[52px] max-h-[120px] overflow-y-auto shadow-sm hover:border-gray-300 dark:hover:border-gray-600"
+                        style={{ 
+                          height: 'auto',
+                          minHeight: '52px'
+                        }}
+                        onInput={(e) => {
+                          const target = e.target as HTMLTextAreaElement
+                          target.style.height = 'auto'
+                          target.style.height = `${Math.min(target.scrollHeight, 120)}px`
+                        }}
+                      />
+                    </div>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <button
+                        onClick={sendTextMessage}
+                        disabled={!messageInput.trim() || isWaitingForResponse}
+                        className="h-[52px] w-[52px] bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 active:scale-95 text-white rounded-2xl font-semibold transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg hover:shadow-xl disabled:shadow-none group"
+                        title={t.common.status === 'Statut' ? 'Envoyer (Entrée)' : 'Send (Enter)'}
+                      >
+                        {isWaitingForResponse ? (
+                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <PaperAirplaneIcon className="w-5 h-5 transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                        )}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between mt-3">
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {t.common.status === 'Statut' ? 'Appuyez sur Entrée pour envoyer' : 'Press Enter to send'} • {t.common.status === 'Statut' ? 'Shift + Entrée pour nouvelle ligne' : 'Shift + Enter for new line'}
+                  <div className="flex items-center justify-center mt-2.5">
+                    <p className="text-xs text-gray-400 dark:text-gray-500">
+                      <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Appuyez sur Entrée pour envoyer' : 'Press Enter to send'}</span>
+                      <span className="sm:hidden">{t.common.status === 'Statut' ? 'Entrée pour envoyer' : 'Enter to send'}</span>
+                      <span className="mx-1.5">•</span>
+                      <span className="hidden sm:inline">{t.common.status === 'Statut' ? 'Shift + Entrée pour nouvelle ligne' : 'Shift + Enter for new line'}</span>
+                      <span className="sm:hidden">{t.common.status === 'Statut' ? 'Shift+Entrée' : 'Shift+Enter'}</span>
                     </p>
-                    <button
-                      onClick={stopTextChat}
-                      className="px-4 py-2 text-sm bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-400 rounded-lg font-medium transition-colors"
-                    >
-                      {t.common.status === 'Statut' ? 'Terminer' : 'End Chat'}
-                    </button>
                   </div>
                 </div>
               </div>
@@ -821,19 +838,28 @@ export default function PublicAgentPage() {
                 {/* Message Input */}
                 <div className="mb-6 max-w-md mx-auto">
                   <div className="flex gap-2">
-                    <input
-                      type="text"
+                    <textarea
                       value={messageInput}
                       onChange={(e) => setMessageInput(e.target.value)}
-                      onKeyPress={(e) => {
+                      onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault()
                           sendMessage()
                         }
                       }}
                       placeholder={t.publicAgent.messagePlaceholder}
-                      className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      rows={1}
+                      className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none min-h-[40px] max-h-[100px] overflow-y-auto"
                       disabled={sendingMessage}
+                      style={{ 
+                        height: 'auto',
+                        minHeight: '40px'
+                      }}
+                      onInput={(e) => {
+                        const target = e.target as HTMLTextAreaElement
+                        target.style.height = 'auto'
+                        target.style.height = `${Math.min(target.scrollHeight, 100)}px`
+                      }}
                     />
                     <button
                       onClick={sendMessage}

@@ -193,7 +193,7 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
     setInputMessage('')
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
@@ -287,37 +287,51 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
 
         {/* Input */}
         <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-b-2xl">
-          <div className="flex gap-3">
-            <input
-              type="text"
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder={isConnected ? (isWaitingForResponse ? "Waiting for response..." : "Type your message...") : "Connecting..."}
-              disabled={!isConnected || isWaitingForResponse}
-              className="flex-1 px-4 py-3 bg-gray-100 dark:bg-gray-700 border-0 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:opacity-50"
-            />
-            <button
-              onClick={handleSendMessage}
-              disabled={!isConnected || !inputMessage.trim() || isWaitingForResponse}
-              className="px-5 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-xl font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {isWaitingForResponse ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Sending...</span>
-                </>
-              ) : (
-                <>
-                  <PaperAirplaneIcon className="h-5 w-5" />
-                  <span>Send</span>
-                </>
-              )}
-            </button>
+          <div className="flex gap-2 items-end">
+            <div className="flex-1 relative">
+              <textarea
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={isConnected ? (isWaitingForResponse ? "Waiting for response..." : "Type your message...") : "Connecting..."}
+                disabled={!isConnected || isWaitingForResponse}
+                rows={1}
+                className="w-full px-4 py-3 pr-12 bg-gray-50 dark:bg-gray-900/50 border-2 border-gray-200 dark:border-gray-700 rounded-2xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:focus:border-blue-400 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed resize-none min-h-[52px] max-h-[120px] overflow-y-auto transition-all shadow-sm hover:border-gray-300 dark:hover:border-gray-600"
+                style={{ 
+                  height: 'auto',
+                  minHeight: '52px'
+                }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement
+                  target.style.height = 'auto'
+                  target.style.height = `${Math.min(target.scrollHeight, 120)}px`
+                }}
+              />
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button
+                onClick={handleSendMessage}
+                disabled={!isConnected || !inputMessage.trim() || isWaitingForResponse}
+                className="h-[52px] w-[52px] bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 active:scale-95 text-white rounded-2xl font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg hover:shadow-xl disabled:shadow-none group"
+                title="Send message (Enter)"
+              >
+                {isWaitingForResponse ? (
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <PaperAirplaneIcon className="h-5 w-5 transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                )}
+              </button>
+            </div>
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-            Press Enter to send • Shift + Enter for new line
-          </p>
+          <div className="flex items-center justify-between mt-2.5">
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              <span className="hidden sm:inline">Press Enter to send</span>
+              <span className="sm:hidden">Enter to send</span>
+              <span className="mx-1.5">•</span>
+              <span className="hidden sm:inline">Shift + Enter for new line</span>
+              <span className="sm:hidden">Shift+Enter</span>
+            </p>
+          </div>
         </div>
       </div>
     </div>
