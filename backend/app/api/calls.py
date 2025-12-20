@@ -369,7 +369,7 @@ async def generate_summary_background(call_id: int, user_id: int):
         # Generate summary - this is the long-running operation
         # The database session will be released during the API call
         summary_service = CallSummaryService()
-        result = await summary_service.generate_summary(call)
+        result = await summary_service.generate_summary(call, db)
         
         # Check for errors
         if result.get("error"):

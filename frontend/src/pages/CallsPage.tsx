@@ -96,6 +96,7 @@ export default function CallsPage() {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [actionRequiredFilter, setActionRequiredFilter] = useState<boolean | null>(null)
+  const [callTypeFilter, setCallTypeFilter] = useState<'all' | 'call' | 'chat'>('all')
   const [selectedCallIds, setSelectedCallIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
   const [deletingCallId, setDeletingCallId] = useState<number | null>(null)
@@ -157,8 +158,20 @@ export default function CallsPage() {
             setCalls(prevCalls => {
               const existingIndex = prevCalls.findIndex(call => call.id === data.call.id)
               if (existingIndex >= 0) {
-                // Update existing call
-                const updatedCall = { ...prevCalls[existingIndex], ...data.call }
+                // Update existing call, preserving has_messages and caller_phone for text chat detection
+                const existingCall = prevCalls[existingIndex]
+                // Preserve caller_phone if not in update (important for text chat detection)
+                // Text chats don't have caller_phone, so we must preserve null/undefined
+                const caller_phone = data.call.caller_phone !== undefined ? data.call.caller_phone : existingCall.caller_phone
+                // If caller_phone is null/undefined, it's likely a text chat, so set has_messages to true
+                const has_messages = data.call.has_messages ?? existingCall.has_messages ?? (!caller_phone ? true : false)
+                
+                const updatedCall = { 
+                  ...existingCall, 
+                  ...data.call,
+                  has_messages,
+                  caller_phone
+                }
                 
                 // If there's a new message, we need to reload the call to get full details
                 if (data.call.new_message) {
@@ -183,7 +196,17 @@ export default function CallsPage() {
                 )
               } else {
                 // Add new call at the beginning (most recent first)
-                return [data.call, ...prevCalls]
+                // For new calls, detect if it's a text chat (no caller_phone means it's likely a chat)
+                // Text chats don't have caller_phone, so if it's null/undefined, set has_messages to true
+                const caller_phone = data.call.caller_phone
+                const has_messages = data.call.has_messages ?? (!caller_phone ? true : false)
+                
+                const newCall = {
+                  ...data.call,
+                  has_messages,
+                  caller_phone
+                }
+                return [newCall, ...prevCalls]
               }
             })
           }
@@ -398,8 +421,18 @@ export default function CallsPage() {
     }
   }
 
-  // Use calls directly since they're already paginated from the server
-  const paginatedCalls = calls
+  // Filter calls by type (call/chat) client-side
+  const filteredCalls = calls.filter(call => {
+    if (callTypeFilter === 'all') return true
+    const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
+    const isTextChat = hasMessages && !call.caller_phone
+    if (callTypeFilter === 'chat') return isTextChat
+    if (callTypeFilter === 'call') return !isTextChat
+    return true
+  })
+  
+  // Use filtered calls (they're already paginated from the server)
+  const paginatedCalls = filteredCalls
   
   // Calculate display values
   const startItem = totalCalls > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0
@@ -548,6 +581,29 @@ export default function CallsPage() {
                     <option value="completed">Completed</option>
                     <option value="failed">Failed</option>
                     <option value="interrupted">Interrupted</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Call Type Filter */}
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
+                  {t.common.status === 'Statut' ? 'Type' : 'Type'}
+                </label>
+                <div className="relative">
+                  <select
+                    value={callTypeFilter}
+                    onChange={(e) => setCallTypeFilter(e.target.value as 'all' | 'call' | 'chat')}
+                    className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all appearance-none cursor-pointer hover:border-gray-400 dark:hover:border-gray-500"
+                  >
+                    <option value="all">{t.common.status === 'Statut' ? 'Tous' : 'All'}</option>
+                    <option value="call">🎤 {t.common.status === 'Statut' ? 'Appels' : 'Calls'}</option>
+                    <option value="chat">💬 {t.common.status === 'Statut' ? 'Chats' : 'Chats'}</option>
                   </select>
                   <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
                     <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">

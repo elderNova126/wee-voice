@@ -102,7 +102,7 @@ async def auto_summarize_call(call_id: int):
         # Generate summary
         try:
             summary_service = CallSummaryService()
-            result = await summary_service.generate_summary(call)
+            result = await summary_service.generate_summary(call, db)
             
             if result.get("error"):
                 logger.error(f"Summarization failed for call {call_id}: {result.get('error')}")

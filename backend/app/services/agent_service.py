@@ -35,6 +35,7 @@ from app.core.config import settings
 from app.models import Call, CallStatus, VoiceAgent
 from app.services.rag_service import get_rag_service
 from app.services.call_followup_service import update_call_follow_up_data
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -1051,7 +1052,7 @@ class CallSummaryService:
         if not self.openai_api_key:
             logger.warning("OPENAI_API_KEY not configured; call summaries will fall back to Gemini (if configured).")
     
-    async def generate_summary(self, call: Call) -> Dict[str, Any]:
+    async def generate_summary(self, call: Call, db: Optional[Session] = None) -> Dict[str, Any]:
         """Generate a comprehensive summary of the call"""
         if not call.transcript:
             return {"error": "No transcript available"}
@@ -1071,7 +1072,21 @@ class CallSummaryService:
                 ]
             return [str(value)]
         
-        prompt = f"""Analyse cette conversation téléphonique en français et fournis:
+        # Get agent language to determine summary language
+        agent_language = "fr-FR"  # Default to French
+        if db:
+            try:
+                agent = db.query(VoiceAgent).filter(VoiceAgent.id == call.agent_id).first()
+                if agent and agent.language:
+                    agent_language = agent.language
+            except Exception as e:
+                logger.warning(f"Could not fetch agent language: {e}")
+        
+        # Determine if language is French
+        is_french = agent_language.startswith('fr')
+        
+        if is_french:
+            prompt = f"""Analyse cette conversation téléphonique en français et fournis:
 
 1. Un résumé concis (2-3 phrases)
 2. Les points clés discutés
@@ -1082,6 +1097,19 @@ Conversation:
 {call.transcript}
 
 Réponds en JSON avec les clés: summary, key_points (liste), sentiment, action_items (liste)
+"""
+        else:
+            prompt = f"""Analyze this phone conversation in English and provide:
+
+1. A concise summary (2-3 sentences)
+2. Key points discussed
+3. Overall sentiment (positive, negative, neutral)
+4. Follow-up actions (if any)
+
+Conversation:
+{call.transcript}
+
+Respond in JSON with keys: summary, key_points (array), sentiment, action_items (array)
 """
         
         try:
