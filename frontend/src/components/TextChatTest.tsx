@@ -8,6 +8,9 @@ interface Message {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
+  id?: string
+  isTyping?: boolean
+  isStreaming?: boolean
 }
 
 interface TextChatTestProps {
@@ -67,13 +70,56 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
         
         if (data.type === 'session_started') {
           console.log('✓ Session started:', data)
-        } else if (data.type === 'message' && data.role === 'assistant') {
+        } else if (data.type === 'message_chunk' && data.role === 'assistant') {
+          // Handle streaming chunks
           setIsWaitingForResponse(false)
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: data.content,
-            timestamp: data.timestamp || new Date().toISOString()
-          }])
+          
+          setMessages(prev => {
+            const lastMessage = prev[prev.length - 1]
+            const isLastMessageAssistant = lastMessage && lastMessage.role === 'assistant' && lastMessage.isStreaming
+            
+            if (isLastMessageAssistant) {
+              // Update existing streaming message
+              return prev.map((msg, idx) => 
+                idx === prev.length - 1
+                  ? { ...msg, content: msg.content + data.content, isStreaming: !data.done }
+                  : msg
+              )
+            } else {
+              // Create new streaming message
+              return [...prev, {
+                role: 'assistant',
+                content: data.content,
+                timestamp: data.timestamp || new Date().toISOString(),
+                id: `stream-${Date.now()}`,
+                isStreaming: !data.done
+              }]
+            }
+          })
+        } else if (data.type === 'message' && data.role === 'assistant') {
+          // Handle final complete message (for backward compatibility or fallback)
+          setIsWaitingForResponse(false)
+          
+          setMessages(prev => {
+            const lastMessage = prev[prev.length - 1]
+            const isLastMessageAssistant = lastMessage && lastMessage.role === 'assistant' && lastMessage.isStreaming
+            
+            if (isLastMessageAssistant) {
+              // Replace streaming message with final message
+              return prev.map((msg, idx) => 
+                idx === prev.length - 1
+                  ? { ...msg, content: data.content, isStreaming: false, id: undefined }
+                  : msg
+              )
+            } else {
+              // Add new message
+              return [...prev, {
+                role: 'assistant',
+                content: data.content,
+                timestamp: data.timestamp || new Date().toISOString()
+              }]
+            }
+          })
         } else if (data.type === 'error') {
           setIsWaitingForResponse(false)
           console.error('Server error:', data.message)
@@ -200,7 +246,7 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
 
           {messages.map((message, index) => (
             <div
-              key={index}
+              key={message.id || index}
               className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} ${
                 message.role === 'system' ? 'justify-center' : ''
               }`}
@@ -214,18 +260,25 @@ export default function TextChatTest({ agentId, agentName, onClose }: TextChatTe
                     : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 rounded-bl-sm'
                 }`}
               >
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                <p
-                  className={`text-xs mt-1 ${
-                    message.role === 'user'
-                      ? 'text-blue-100'
-                      : message.role === 'system'
-                      ? 'text-yellow-700 dark:text-yellow-300'
-                      : 'text-gray-400'
-                  }`}
-                >
-                  {new Date(message.timestamp).toLocaleTimeString()}
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                  {message.content}
+                  {(message.isTyping || message.isStreaming) && (
+                    <span className="inline-block w-2 h-4 ml-1 bg-indigo-500 animate-pulse"></span>
+                  )}
                 </p>
+                {!message.isTyping && !message.isStreaming && (
+                  <p
+                    className={`text-xs mt-1 ${
+                      message.role === 'user'
+                        ? 'text-blue-100'
+                        : message.role === 'system'
+                        ? 'text-yellow-700 dark:text-yellow-300'
+                        : 'text-gray-400'
+                    }`}
+                  >
+                    {new Date(message.timestamp).toLocaleTimeString()}
+                  </p>
+                )}
               </div>
             </div>
           ))}

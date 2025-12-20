@@ -355,13 +355,60 @@ export default function PublicAgentPage() {
             if (data.call_id) {
               setCallId(data.call_id)
             }
-          } else if (data.type === 'message' && data.role === 'assistant') {
+          } else if (data.type === 'message_chunk' && data.role === 'assistant') {
+            // Handle streaming chunks
             setIsWaitingForResponse(false)
-            setTextChatMessages(prev => [...prev, {
-              role: 'assistant',
-              content: data.content,
-              timestamp: data.timestamp || new Date().toISOString()
-            }])
+            
+            setTextChatMessages(prev => {
+              const lastMessage = prev[prev.length - 1]
+              const lastMsgAny = lastMessage as any
+              const isLastMessageAssistant = lastMessage && lastMessage.role === 'assistant' && lastMsgAny.isStreaming
+              
+              if (isLastMessageAssistant) {
+                // Update existing streaming message
+                return prev.map((msg, idx) => {
+                  const msgAny = msg as any
+                  return idx === prev.length - 1
+                    ? { ...msg, content: msg.content + data.content, isStreaming: !data.done }
+                    : msg
+                })
+              } else {
+                // Create new streaming message
+                return [...prev, {
+                  role: 'assistant',
+                  content: data.content,
+                  timestamp: data.timestamp || new Date().toISOString(),
+                  id: `stream-${Date.now()}`,
+                  isStreaming: !data.done
+                }]
+              }
+            })
+          } else if (data.type === 'message' && data.role === 'assistant') {
+            // Handle final complete message (for backward compatibility or fallback)
+            setIsWaitingForResponse(false)
+            
+            setTextChatMessages(prev => {
+              const lastMessage = prev[prev.length - 1]
+              const lastMsgAny = lastMessage as any
+              const isLastMessageAssistant = lastMessage && lastMessage.role === 'assistant' && lastMsgAny.isStreaming
+              
+              if (isLastMessageAssistant) {
+                // Replace streaming message with final message
+                return prev.map((msg, idx) => {
+                  const msgAny = msg as any
+                  return idx === prev.length - 1
+                    ? { ...msg, content: data.content, isStreaming: false, id: undefined }
+                    : msg
+                })
+              } else {
+                // Add new message
+                return [...prev, {
+                  role: 'assistant',
+                  content: data.content,
+                  timestamp: data.timestamp || new Date().toISOString()
+                }]
+              }
+            })
           } else if (data.type === 'error') {
             setIsWaitingForResponse(false)
             console.error('Text chat error:', data.message)
@@ -581,31 +628,41 @@ export default function PublicAgentPage() {
                     </div>
                   ) : (
                     <>
-                      {textChatMessages.map((msg, idx) => (
-                        <div
-                          key={idx}
-                          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
-                        >
+                      {textChatMessages.map((msg, idx) => {
+                        const msgAny = msg as any
+                        return (
                           <div
-                            className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-md ${
-                              msg.role === 'user'
-                                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-sm'
-                                : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-2 border-gray-200 dark:border-gray-700 rounded-bl-sm'
-                            }`}
+                            key={msgAny.id || idx}
+                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
                           >
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                            <p
-                              className={`text-xs mt-2 ${
+                            <div
+                              className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-md ${
                                 msg.role === 'user'
-                                  ? 'text-indigo-100'
-                                  : 'text-gray-400 dark:text-gray-500'
+                                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-sm'
+                                  : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-2 border-gray-200 dark:border-gray-700 rounded-bl-sm'
                               }`}
                             >
-                              {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </p>
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                                {msg.content}
+                                {(msgAny.isTyping || msgAny.isStreaming) && (
+                                  <span className="inline-block w-2 h-4 ml-1 bg-indigo-500 animate-pulse"></span>
+                                )}
+                              </p>
+                              {!msgAny.isTyping && !msgAny.isStreaming && (
+                                <p
+                                  className={`text-xs mt-2 ${
+                                    msg.role === 'user'
+                                      ? 'text-indigo-100'
+                                      : 'text-gray-400 dark:text-gray-500'
+                                  }`}
+                                >
+                                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                       
                       {/* Loading indicator when waiting for response */}
                       {isWaitingForResponse && (

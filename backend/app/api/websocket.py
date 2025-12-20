@@ -929,23 +929,71 @@ async def text_chat_websocket(
                     # Save user message to DB
                     await chat_service.save_message_to_db("user", user_message, db)
                     
-                    # Get AI response
-                    response = await chat_service.send_message(user_message)
+                    # Stream AI response in real-time
+                    full_response = ""
+                    needs_callback = False
+                    callback_priority = None
                     
-                    # Send response to client
-                    await websocket.send_json({
-                        "type": "message",
-                        "role": "assistant",
-                        "content": response["text"],
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "needs_callback": response.get("needs_callback", False),
-                        "callback_priority": response.get("callback_priority")
-                    })
+                    try:
+                        async for chunk_data in chat_service.stream_message(user_message):
+                            chunk_text = chunk_data.get("chunk", "")
+                            is_done = chunk_data.get("done", False)
+                            
+                            if chunk_text:
+                                full_response += chunk_text
+                                
+                                # Send chunk to client
+                                await websocket.send_json({
+                                    "type": "message_chunk",
+                                    "role": "assistant",
+                                    "content": chunk_text,
+                                    "done": False,
+                                    "timestamp": datetime.utcnow().isoformat()
+                                })
+                            
+                            # Update callback info if detected
+                            if chunk_data.get("needs_callback"):
+                                needs_callback = True
+                                callback_priority = chunk_data.get("callback_priority")
+                            
+                            # Send final message when done
+                            if is_done:
+                                await websocket.send_json({
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "content": full_response,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "needs_callback": needs_callback,
+                                    "callback_priority": callback_priority,
+                                    "done": True
+                                })
+                                
+                                # Save assistant message to DB
+                                await chat_service.save_message_to_db("assistant", full_response, db)
+                                
+                                logger.info(f"📤 Streamed AI response complete: {full_response[:100]}")
+                                break
                     
-                    # Save assistant message to DB
-                    await chat_service.save_message_to_db("assistant", response["text"], db)
-                    
-                    logger.info(f"📤 Sent AI response: {response['text'][:100]}")
+                    except Exception as e:
+                        logger.error(f"Error streaming response: {e}", exc_info=True)
+                        # Fallback to non-streaming if streaming fails
+                        try:
+                            response = await chat_service.send_message(user_message)
+                            await websocket.send_json({
+                                "type": "message",
+                                "role": "assistant",
+                                "content": response["text"],
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "needs_callback": response.get("needs_callback", False),
+                                "callback_priority": response.get("callback_priority")
+                            })
+                            await chat_service.save_message_to_db("assistant", response["text"], db)
+                        except Exception as fallback_error:
+                            logger.error(f"Fallback also failed: {fallback_error}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "Failed to get response. Please try again."
+                            })
                 
                 elif data.get("type") == "end_session":
                     logger.info(f"End session requested for {session_id}")

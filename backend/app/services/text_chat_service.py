@@ -223,6 +223,89 @@ Example: "[CALLBACK_HIGH] I understand your concern. Let me connect you with a t
                 "callback_priority": None
             }
     
+    async def stream_message(self, user_message: str) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Stream AI response in real-time as tokens are generated
+        Yields: {"chunk": "text", "done": bool, "needs_callback": bool, "callback_priority": str or None}
+        """
+        try:
+            # Add user message to history
+            self.conversation_history.append({
+                "role": "user",
+                "content": user_message
+            })
+            
+            # Check if RAG is enabled and search for relevant context
+            rag_context = ""
+            if self.agent.rag_enabled and self.rag_service:
+                try:
+                    logger.info(f"Searching knowledge base for: {user_message[:100]}")
+                    results = await self.rag_service.search(
+                        agent_id=self.agent.id,
+                        query=user_message,
+                        top_k=3
+                    )
+                    
+                    if results:
+                        rag_context = "\n\n[KNOWLEDGE BASE CONTEXT]\n"
+                        for i, result in enumerate(results, 1):
+                            rag_context += f"\nDocument {i}: {result.get('content', '')[:500]}\n"
+                        logger.info(f"Found {len(results)} relevant documents")
+                except Exception as e:
+                    logger.error(f"RAG search error: {e}")
+            
+            # Build complete message with context
+            complete_message = user_message
+            if rag_context:
+                complete_message = rag_context + "\n\nUser question: " + user_message
+            
+            # Stream AI response
+            full_response = ""
+            needs_callback = False
+            callback_priority = None
+            
+            async for chunk_data in self._stream_ai_response(complete_message):
+                chunk_text = chunk_data.get("chunk", "")
+                full_response += chunk_text
+                
+                # Check for callback markers in accumulated response
+                if not needs_callback:
+                    for marker, priority in [
+                        ("[CALLBACK_URGENT]", "urgent"),
+                        ("[CALLBACK_HIGH]", "high"),
+                        ("[CALLBACK_NORMAL]", "normal")
+                    ]:
+                        if marker in full_response:
+                            needs_callback = True
+                            callback_priority = priority.lower()
+                            break
+                
+                yield {
+                    "chunk": chunk_text,
+                    "done": chunk_data.get("done", False),
+                    "needs_callback": needs_callback,
+                    "callback_priority": callback_priority
+                }
+            
+            # Clean up callback markers from final response
+            for marker in ["[CALLBACK_URGENT]", "[CALLBACK_HIGH]", "[CALLBACK_NORMAL]"]:
+                full_response = full_response.replace(marker, "").strip()
+            
+            # Add assistant message to history (without markers)
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": full_response
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in stream_message: {e}", exc_info=True)
+            yield {
+                "chunk": "I apologize, but I encountered an error processing your message. Please try again.",
+                "done": True,
+                "needs_callback": False,
+                "callback_priority": None
+            }
+    
     async def _get_ai_response(self, message: str) -> str:
         """Get AI response using Anthropic (primary) or OpenAI (fallback)"""
         
@@ -295,6 +378,94 @@ Example: "[CALLBACK_HIGH] I understand your concern. Let me connect you with a t
                 raise Exception(f"Both AI providers failed. {' | '.join(error_parts)}")
         
         # No providers available - provide detailed diagnostics
+        error_msg = "No AI provider available"
+        if anthropic_error:
+            error_msg += f". Anthropic error: {anthropic_error}"
+        if not self.openai_client:
+            error_msg += ". OpenAI client failed to initialize"
+        raise Exception(error_msg)
+    
+    async def _stream_ai_response(self, message: str) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream AI response using Anthropic (primary) or OpenAI (fallback)"""
+        
+        anthropic_error = None
+        
+        # Try Anthropic first
+        if self.anthropic_client:
+            try:
+                logger.info("Using Anthropic streaming for text chat response")
+                
+                # Use stream parameter for Anthropic
+                async with self.anthropic_client.messages.stream(
+                    model=settings.ANTHROPIC_MODEL,
+                    max_tokens=1024,
+                    system=self.system_prompt,
+                    messages=self._format_history_for_anthropic()
+                ) as stream:
+                    async for text_block in stream.text_stream:
+                        if text_block:
+                            yield {"chunk": text_block, "done": False}
+                    
+                    # Get final message to check for stop reason
+                    final_message = await stream.get_final_message()
+                    yield {"chunk": "", "done": True}
+                    logger.info("✓ Anthropic streaming completed")
+                    return
+                    
+            except Exception as e:
+                anthropic_error = str(e)
+                error_lower = anthropic_error.lower()
+                
+                # Check for specific error types
+                if '403' in anthropic_error or 'forbidden' in error_lower or 'not allowed' in error_lower:
+                    logger.error(f"Anthropic API error (403 Forbidden): {anthropic_error}")
+                    logger.warning("Anthropic API key may be invalid, expired, or restricted. Falling back to OpenAI...")
+                elif '401' in anthropic_error or 'unauthorized' in error_lower:
+                    logger.error(f"Anthropic API error (401 Unauthorized): {anthropic_error}")
+                    logger.warning("Anthropic API key is invalid. Falling back to OpenAI...")
+                else:
+                    logger.error(f"Anthropic API error: {anthropic_error}")
+                    logger.info("Falling back to OpenAI...")
+        
+        # Fallback to OpenAI streaming
+        if self.openai_client:
+            try:
+                logger.info("Using OpenAI streaming for text chat response")
+                
+                messages = [{"role": "system", "content": self.system_prompt}]
+                messages.extend(self.conversation_history)
+                
+                stream = await self.openai_client.chat.completions.create(
+                    model=settings.OPENAI_CHAT_MODEL,
+                    messages=messages,
+                    max_tokens=1024,
+                    temperature=float(self.agent.temperature) if hasattr(self.agent, 'temperature') else 0.7,
+                    stream=True
+                )
+                
+                async for chunk in stream:
+                    if chunk.choices and len(chunk.choices) > 0:
+                        delta = chunk.choices[0].delta
+                        if hasattr(delta, 'content') and delta.content:
+                            yield {"chunk": delta.content, "done": False}
+                
+                yield {"chunk": "", "done": True}
+                logger.info("✓ OpenAI streaming completed")
+                return
+                
+            except Exception as e:
+                openai_error = str(e)
+                logger.error(f"OpenAI API error: {openai_error}")
+                
+                # Build comprehensive error message
+                error_parts = []
+                if anthropic_error:
+                    error_parts.append(f"Anthropic: {anthropic_error}")
+                error_parts.append(f"OpenAI: {openai_error}")
+                
+                raise Exception(f"Both AI providers failed. {' | '.join(error_parts)}")
+        
+        # No providers available
         error_details = []
         diagnostics = []
         
