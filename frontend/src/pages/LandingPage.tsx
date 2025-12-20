@@ -18,7 +18,12 @@ import {
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
   SparklesIcon,
-  ChatBubbleLeftRightIcon
+  ChatBubbleLeftRightIcon,
+  MagnifyingGlassIcon,
+  FunnelIcon,
+  XMarkIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
@@ -34,6 +39,13 @@ export default function LandingPage() {
   const navigate = useNavigate()
   const [publicAgents, setPublicAgents] = useState<PublicAgent[]>([])
   const [loadingAgents, setLoadingAgents] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('all')
+  const [selectedInteractionMode, setSelectedInteractionMode] = useState<string>('all')
+  const [selectedRagEnabled, setSelectedRagEnabled] = useState<string>('all')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [agentsPerPage] = useState(9) // 3 columns x 3 rows
+  const [showFilters, setShowFilters] = useState(false)
 
   const features = [
     {
@@ -95,6 +107,11 @@ interface PublicAgent {
     loadPublicAgents()
   }, [])
 
+  // Reset to first page when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery, selectedLanguage, selectedInteractionMode, selectedRagEnabled])
+
   const loadPublicAgents = async () => {
     try {
       setLoadingAgents(true)
@@ -111,6 +128,58 @@ interface PublicAgent {
     logout()
     navigate('/login')
   }
+
+  // Filter and search logic
+  const filteredAgents = publicAgents.filter((agent) => {
+    // Search filter
+    const matchesSearch = 
+      !searchQuery ||
+      agent.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (agent.description && agent.description.toLowerCase().includes(searchQuery.toLowerCase()))
+
+    // Language filter
+    const matchesLanguage = 
+      selectedLanguage === 'all' || agent.language === selectedLanguage
+
+    // Interaction mode filter
+    const matchesInteractionMode = 
+      selectedInteractionMode === 'all' || agent.interaction_mode === selectedInteractionMode
+
+    // RAG enabled filter
+    const matchesRag = 
+      selectedRagEnabled === 'all' ||
+      (selectedRagEnabled === 'yes' && agent.rag_enabled) ||
+      (selectedRagEnabled === 'no' && !agent.rag_enabled)
+
+    return matchesSearch && matchesLanguage && matchesInteractionMode && matchesRag
+  })
+
+  // Pagination
+  const totalPages = Math.ceil(filteredAgents.length / agentsPerPage)
+  const indexOfLastAgent = currentPage * agentsPerPage
+  const indexOfFirstAgent = indexOfLastAgent - agentsPerPage
+  const currentAgents = filteredAgents.slice(indexOfFirstAgent, indexOfLastAgent)
+
+  // Get unique languages from agents
+  const availableLanguages = Array.from(
+    new Set(publicAgents.map(agent => agent.language))
+  ).sort()
+
+  // Clear all filters
+  const clearFilters = () => {
+    setSearchQuery('')
+    setSelectedLanguage('all')
+    setSelectedInteractionMode('all')
+    setSelectedRagEnabled('all')
+    setCurrentPage(1)
+  }
+
+  // Check if any filters are active
+  const hasActiveFilters = 
+    searchQuery !== '' ||
+    selectedLanguage !== 'all' ||
+    selectedInteractionMode !== 'all' ||
+    selectedRagEnabled !== 'all'
 
   const themeOptions = [
     { name: 'Light', value: 'light' as const, icon: SunIcon },
@@ -373,6 +442,127 @@ interface PublicAgent {
               </p>
             </div>
 
+            {/* Search and Filter Bar */}
+            <div className="mb-8 space-y-4">
+              {/* Search Bar and Filter Button in One Line */}
+              <div className="flex items-center gap-4">
+                {/* Search Bar */}
+                <div className="relative flex-1">
+                  <MagnifyingGlassIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t.common.status === 'Statut' ? 'Rechercher par nom ou description...' : 'Search by name or description...'}
+                    className="w-full pl-12 pr-4 py-3 bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-4 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <XMarkIcon className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Toggle Button */}
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`inline-flex items-center gap-2 px-4 py-3 rounded-xl font-medium transition-all whitespace-nowrap ${
+                    showFilters || hasActiveFilters
+                      ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  <FunnelIcon className="w-5 h-5" />
+                  {t.common.status === 'Statut' ? 'Filtres' : 'Filters'}
+                  {hasActiveFilters && (
+                    <span className="ml-1 px-2 py-0.5 bg-white/20 dark:bg-white/10 rounded-full text-xs">
+                      {[searchQuery, selectedLanguage, selectedInteractionMode, selectedRagEnabled].filter(f => f !== 'all' && f !== '').length}
+                    </span>
+                  )}
+                </button>
+
+                {/* Clear Filters Button */}
+                {hasActiveFilters && (
+                  <button
+                    onClick={clearFilters}
+                    className="inline-flex items-center gap-2 px-4 py-3 text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors whitespace-nowrap"
+                  >
+                    <XMarkIcon className="w-4 h-4" />
+                    {t.common.status === 'Statut' ? 'Effacer' : 'Clear'}
+                  </button>
+                )}
+              </div>
+
+              {/* Results count and info */}
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  {filteredAgents.length} {t.common.status === 'Statut' ? 'agent(s) trouvé(s)' : 'agent(s) found'}
+                </div>
+              </div>
+
+              {/* Filter Panel */}
+              {showFilters && (
+                <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border-2 border-gray-200 dark:border-gray-700 shadow-lg">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {/* Language Filter */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                        {t.common.status === 'Statut' ? 'Langue' : 'Language'}
+                      </label>
+                      <select
+                        value={selectedLanguage}
+                        onChange={(e) => setSelectedLanguage(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                      >
+                        <option value="all">{t.common.status === 'Statut' ? 'Toutes les langues' : 'All Languages'}</option>
+                        {availableLanguages.map((lang) => (
+                          <option key={lang} value={lang}>
+                            {lang === 'fr-FR' ? '🇫🇷 Français' : lang === 'en-US' ? '🇬🇧 English' : lang}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Interaction Mode Filter */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                        {t.common.status === 'Statut' ? 'Mode d\'interaction' : 'Interaction Mode'}
+                      </label>
+                      <select
+                        value={selectedInteractionMode}
+                        onChange={(e) => setSelectedInteractionMode(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                      >
+                        <option value="all">{t.common.status === 'Statut' ? 'Tous les modes' : 'All Modes'}</option>
+                        <option value="voice">{t.common.status === 'Statut' ? '🎤 Voix' : '🎤 Voice'}</option>
+                        <option value="text">{t.common.status === 'Statut' ? '💬 Texte' : '💬 Text'}</option>
+                        <option value="both">{t.common.status === 'Statut' ? '🎤💬 Voix & Texte' : '🎤💬 Voice & Text'}</option>
+                      </select>
+                    </div>
+
+                    {/* RAG Enabled Filter */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                        {t.common.status === 'Statut' ? 'Base de connaissances' : 'Knowledge Base'}
+                      </label>
+                      <select
+                        value={selectedRagEnabled}
+                        onChange={(e) => setSelectedRagEnabled(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-900 border-2 border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                      >
+                        <option value="all">{t.common.status === 'Statut' ? 'Tous' : 'All'}</option>
+                        <option value="yes">{t.common.status === 'Statut' ? '✓ Avec base de connaissances' : '✓ With Knowledge Base'}</option>
+                        <option value="no">{t.common.status === 'Statut' ? '✗ Sans base de connaissances' : '✗ Without Knowledge Base'}</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {loadingAgents ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {[...Array(3)].map((_, index) => (
@@ -399,9 +589,28 @@ interface PublicAgent {
                   </div>
                 ))}
               </div>
+            ) : filteredAgents.length === 0 ? (
+              <div className="text-center py-12">
+                <MagnifyingGlassIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600 dark:text-gray-400 mb-6 text-lg">
+                  {t.common.status === 'Statut' 
+                    ? 'Aucun agent ne correspond à vos critères de recherche.' 
+                    : 'No agents match your search criteria.'}
+                </p>
+                {hasActiveFilters && (
+                  <button
+                    onClick={clearFilters}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200"
+                  >
+                    <XMarkIcon className="w-5 h-5" />
+                    {t.common.status === 'Statut' ? 'Effacer les filtres' : 'Clear filters'}
+                  </button>
+                )}
+              </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {publicAgents.map((agent) => {
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {currentAgents.map((agent) => {
                   // Get interaction mode icon and color
                   const getInteractionIcon = () => {
                     if (agent.interaction_mode === 'text') {
@@ -514,10 +723,72 @@ interface PublicAgent {
                     </div>
                   )
                 })}
-              </div>
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="mt-12 flex items-center justify-center gap-2">
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      className="px-4 py-2 rounded-lg bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+                    >
+                      <ChevronLeftIcon className="w-5 h-5" />
+                      {t.common.status === 'Statut' ? 'Précédent' : 'Previous'}
+                    </button>
+
+                    {/* Page Numbers */}
+                    <div className="flex items-center gap-2">
+                      {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                        // Show first page, last page, current page, and pages around current
+                        if (
+                          page === 1 ||
+                          page === totalPages ||
+                          (page >= currentPage - 1 && page <= currentPage + 1)
+                        ) {
+                          return (
+                            <button
+                              key={page}
+                              onClick={() => setCurrentPage(page)}
+                              className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                                currentPage === page
+                                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                                  : 'bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                              }`}
+                            >
+                              {page}
+                            </button>
+                          )
+                        } else if (page === currentPage - 2 || page === currentPage + 2) {
+                          return <span key={page} className="px-2 text-gray-400">...</span>
+                        }
+                        return null
+                      })}
+                    </div>
+
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                      className="px-4 py-2 rounded-lg bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+                    >
+                      {t.common.status === 'Statut' ? 'Suivant' : 'Next'}
+                      <ChevronRightIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Results info */}
+                {filteredAgents.length > 0 && (
+                  <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
+                    {t.common.status === 'Statut' 
+                      ? `Affichage de ${indexOfFirstAgent + 1} à ${Math.min(indexOfLastAgent, filteredAgents.length)} sur ${filteredAgents.length} agent(s)`
+                      : `Showing ${indexOfFirstAgent + 1} to ${Math.min(indexOfLastAgent, filteredAgents.length)} of ${filteredAgents.length} agent(s)`}
+                  </div>
+                )}
+              </>
             )}
 
-            {/* Call to action if no agents */}
+            {/* Call to action if no agents at all */}
             {!loadingAgents && publicAgents.length === 0 && (
               <div className="text-center py-12">
                 <MicrophoneIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
