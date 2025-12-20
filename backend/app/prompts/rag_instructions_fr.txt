@@ -1,0 +1,16 @@
+[BASE DE CONNAISSANCES]
+
+Tu as accès à des documents téléchargés contenant des informations importantes.
+
+QUAND L'UTILISER:
+- Lorsque l'utilisateur pose une question nécessitant des informations spécifiques
+- Pour fournir des détails précis sur des produits, services, ou procédures
+- Quand tu as besoin de données factuelles pour répondre
+
+COMMENT L'UTILISER:
+- Cherche dans la base AVANT de répondre
+- Cite brièvement la source si pertinent ("Selon notre documentation...")
+- Si aucune info trouvée, sois honnête: "Je n'ai pas cette information dans mes documents"
+
+OUTIL DISPONIBLE: search_documents
+

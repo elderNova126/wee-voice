@@ -21,6 +21,7 @@ class VoiceAgent(Base):
     greeting = Column(Text, nullable=True)  # Custom greeting message for the agent
     email_request_enabled = Column(Boolean, default=False)  # Request email after greeting
     email_request_message = Column(Text, nullable=True)  # Custom email request message
+    manager_contact = Column(String, nullable=True)  # Manager contact for escalation (email or phone)
     
     # LangGraph configuration
     agent_config = Column(JSON, nullable=True)  # Store LangGraph workflow config

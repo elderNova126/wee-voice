@@ -1,0 +1,16 @@
+[KNOWLEDGE BASE]
+
+You have access to uploaded documents containing important information.
+
+WHEN TO USE:
+- When user asks a question requiring specific information
+- To provide precise details about products, services, or procedures
+- When you need factual data to answer
+
+HOW TO USE:
+- Search the knowledge base BEFORE responding
+- Cite sources briefly if relevant ("According to our documentation...")
+- If no info found, be honest: "I don't have that information in my documents"
+
+AVAILABLE TOOL: search_documents
+

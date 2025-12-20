@@ -20,6 +20,7 @@ class AgentCreate(BaseModel):
     greeting: Optional[str] = None
     email_request_enabled: bool = False
     email_request_message: Optional[str] = None
+    manager_contact: Optional[str] = None  # Manager contact for escalation
     tools_enabled: List[str] = []
     crm_webhook_url: Optional[str] = None
     crm_enabled: bool = False
@@ -37,6 +38,7 @@ class AgentUpdate(BaseModel):
     greeting: Optional[str] = None
     email_request_enabled: Optional[bool] = None
     email_request_message: Optional[str] = None
+    manager_contact: Optional[str] = None  # Manager contact for escalation
     tools_enabled: Optional[List[str]] = None
     crm_webhook_url: Optional[str] = None
     crm_enabled: Optional[bool] = None
@@ -56,6 +58,7 @@ class AgentResponse(BaseModel):
     greeting: Optional[str] = None
     email_request_enabled: bool = False
     email_request_message: Optional[str] = None
+    manager_contact: Optional[str] = None  # Manager contact for escalation
     tools_enabled: List[str] = Field(default_factory=list)
     is_active: bool
     is_public: bool

@@ -6,6 +6,7 @@ from anthropic import AsyncAnthropic
 from app.core.config import settings
 from app.models import Call, CallStatus, VoiceAgent, CallMessage
 from app.services.rag_service import get_rag_service
+from app.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -123,32 +124,37 @@ class TextChatService:
         return self._rag_service
     
     def _build_system_prompt(self) -> str:
-        """Build system prompt for the text chat agent"""
-        base_prompt = self.agent.system_prompt or "You are a helpful assistant."
+        """Build system prompt for the text chat agent using template files"""
         
-        # Add RAG instructions if enabled
-        if self.agent.rag_enabled:
-            rag_note = """
-
-[KNOWLEDGE BASE AVAILABLE]
-You have access to uploaded documents. If the user asks a question that requires specific information from the knowledge base, search for relevant information before responding.
-"""
-            base_prompt += rag_note
+        # Get agent's custom identity or use default
+        agent_identity = self.agent.system_prompt or f"You are {self.agent.name}, a helpful assistant."
         
-        # Add callback instructions
-        callback_note = """
-
-[CALLBACK SYSTEM]
-If you detect that the user needs to speak with a human (e.g., angry, frustrated, complex issue, or explicitly requests human contact), include one of these markers in your response:
-- [CALLBACK_URGENT] - for angry/frustrated users
-- [CALLBACK_HIGH] - for complex issues or explicit human requests
-- [CALLBACK_NORMAL] - for sensitive topics
-
-Example: "[CALLBACK_HIGH] I understand your concern. Let me connect you with a team member who can help. What's the best number to reach you?"
-"""
-        base_prompt += callback_note
+        # Determine language
+        is_french = self.agent.language.startswith('fr')
+        lang_suffix = 'fr' if is_french else 'en'
         
-        return base_prompt
+        # Load prompt templates from files
+        conversation_style = load_prompt(f'conversation_style_{lang_suffix}.txt')
+        escalation_msg = load_prompt(f'escalation_{lang_suffix}.txt')
+        rag_note = load_prompt(f'rag_instructions_{lang_suffix}.txt') if self.agent.rag_enabled else ""
+        identity_rules = load_prompt('identity_rules.txt')
+        
+        # Get manager contact info from agent settings (handle None)
+        manager_contact = getattr(self.agent, 'manager_contact', None)
+        if not manager_contact:
+            manager_contact = 'email: contact@company.com or phone: +1234567890'
+        
+        # Build complete prompt with variable substitution
+        complete_prompt = agent_identity + "\n\n"
+        complete_prompt += conversation_style.replace("{agent_name}", self.agent.name) + "\n\n"
+        
+        if rag_note:
+            complete_prompt += rag_note + "\n\n"
+        
+        complete_prompt += escalation_msg.replace("{manager_contact}", manager_contact) + "\n\n"
+        complete_prompt += identity_rules
+        
+        return complete_prompt
     
     async def send_message(self, user_message: str) -> Dict[str, Any]:
         """

@@ -35,6 +35,7 @@ from app.core.config import settings
 from app.models import Call, CallStatus, VoiceAgent
 from app.services.rag_service import get_rag_service
 from app.services.call_followup_service import update_call_follow_up_data
+from app.prompts import load_prompt
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -98,110 +99,26 @@ class FrenchVoiceAgentService:
     
     def _build_config(self) -> Dict[str, Any]:
         """Build configuration for Gemini Live API (simplified, matching test.py)"""
-        # Language-specific technical notes (STRONG, to prevent language switching)
-        if self.agent.language.startswith('fr'):
-            language_note = """
-
-INSTRUCTION LINGUISTIQUE CRITIQUE:
-- Tu DOIS répondre UNIQUEMENT en français
-- JAMAIS en anglais, même partiellement
-- Chaque phrase doit être complète avant de passer à la suivante
-- Maintiens la cohérence linguistique tout au long de la conversation
-- Si tu ne connais pas un mot en français, utilise une périphrase en français
-- NE CHANGE JAMAIS de langue en milieu de phrase ou de conversation"""
-            rag_instruction = """
-
-[OUTIL DISPONIBLE: search_documents]
-Si l'utilisateur pose une question nécessitant des informations spécifiques des documents téléchargés, utilise l'outil 'search_documents' pour chercher l'information avant de répondre.
-"""
-            callback_instruction = """
-
-[INSTRUCTION CRITIQUE: DEMANDE DE RAPPEL HUMAIN]
-
-Quand tu détectes une de ces situations, tu DOIS:
-1. Dire EXACTEMENT cette phrase magique: "[CALLBACK_URGENT]" ou "[CALLBACK_HIGH]" ou "[CALLBACK_NORMAL]" selon la priorité
-2. Puis rassurer l'appelant
-
-🚨 SITUATIONS NÉCESSITANT UN RAPPEL:
-
-PRIORITÉ URGENT - Dis "[CALLBACK_URGENT]" puis rassure:
-- Appelant en colère, frustré, agressif
-- Mots: "inacceptable", "scandaleux", "j'en ai marre", "annuler", "plainte"
-
-PRIORITÉ HIGH - Dis "[CALLBACK_HIGH]" puis rassure:
-- Demande explicite d'humain: "parler à quelqu'un", "responsable", "vraie personne"
-- Problème complexe multi-éléments
-- Opportunité commerciale: "entreprise", "déploiement", "tarif", "démo", "prêt à signer"
-
-PRIORITÉ NORMAL - Dis "[CALLBACK_NORMAL]" puis rassure:
-- Sujets sensibles: "confidentiel", "litige", "avocat", "médical"
-
-EXEMPLE DE RÉPONSE:
-"[CALLBACK_HIGH] Je comprends parfaitement l'importance de votre demande. Je transmets immédiatement votre dossier à un conseiller qui vous rappellera très rapidement. Pouvez-vous me confirmer votre numéro de téléphone et votre nom?"
-
-IMPORTANT: Les marqueurs [CALLBACK_...] ne seront PAS entendus par l'appelant, ils servent uniquement au système.
-"""
-        else:  # English
-            language_note = """
-
-CRITICAL LANGUAGE INSTRUCTION:
-- You MUST respond ONLY in English
-- NEVER switch to another language, even partially
-- Complete each sentence fully before moving to the next
-- Maintain linguistic consistency throughout the conversation
-- If you don't know a word in English, use a description in English
-- NEVER change language mid-sentence or mid-conversation"""
-            rag_instruction = """
-
-[AVAILABLE TOOL: search_documents]
-If the user asks a question requiring specific information from uploaded documents, use the 'search_documents' tool to find the information before answering.
-"""
-            callback_instruction = """
-
-[CRITICAL INSTRUCTION: HUMAN CALLBACK REQUEST]
-
-When you detect one of these situations, you MUST:
-1. Say EXACTLY this magic phrase: "[CALLBACK_URGENT]" or "[CALLBACK_HIGH]" or "[CALLBACK_NORMAL]" based on priority
-2. Then reassure the caller
-
-🚨 SITUATIONS REQUIRING A CALLBACK:
-
-URGENT PRIORITY - Say "[CALLBACK_URGENT]" then reassure:
-- Angry, frustrated, aggressive caller
-- Words: "unacceptable", "ridiculous", "fed up", "cancel", "sue", "complaint"
-
-HIGH PRIORITY - Say "[CALLBACK_HIGH]" then reassure:
-- Explicit human request: "speak to someone", "manager", "real person"
-- Complex multi-element issue
-- Business opportunity: "company", "deployment", "pricing", "demo", "ready to sign"
-
-NORMAL PRIORITY - Say "[CALLBACK_NORMAL]" then reassure:
-- Sensitive topics: "confidential", "dispute", "lawyer", "medical"
-
-EXAMPLE RESPONSE:
-"[CALLBACK_HIGH] I completely understand the importance of your request. I'm immediately forwarding your case to an advisor who will call you back very soon. Can you confirm your phone number and name?"
-
-IMPORTANT: The [CALLBACK_...] markers will NOT be heard by the caller, they are only for the system.
-"""
         
-        # Add RAG instructions if enabled (minimal)
-        rag_note = rag_instruction if self.agent.rag_enabled else ""
+        # Determine language
+        is_french = self.agent.language.startswith('fr')
+        lang_suffix = 'fr' if is_french else 'en'
         
-        # Callback instruction is always included
-        callback_note = callback_instruction
+        # Load prompt templates from files
+        conversation_style = load_prompt(f'conversation_style_{lang_suffix}.txt')
+        rag_instruction = load_prompt(f'rag_instructions_{lang_suffix}.txt') if self.agent.rag_enabled else ""
+        callback_instruction = load_prompt(f'escalation_{lang_suffix}.txt')
+        identity_enforcement = load_prompt('identity_rules.txt')
         
-        # Build system instruction with USER'S PROMPT as PRIMARY identity
-        # Add strong identity enforcement to prevent model from defaulting to "I am Gemini"
-        identity_enforcement = """
-CRITICAL INSTRUCTION: Follow the system prompt above EXACTLY. You are NOT Gemini, you are NOT an AI assistant by Google. Your identity, personality, and behavior are defined by the instructions above. Stay in character at all times.
-
-VOICE AND SPEECH CONSISTENCY RULES:
-- Maintain the SAME voice tone and style throughout the entire conversation
-- ALWAYS complete your sentences fully before starting a new thought
-- NEVER interrupt yourself mid-sentence
-- Speak in a natural, conversational flow with proper pauses
-- If you need to think, pause naturally rather than stopping mid-sentence
-"""
+        # Get manager contact info and substitute in prompts (handle None)
+        manager_contact = getattr(self.agent, 'manager_contact', None)
+        if not manager_contact:
+            manager_contact = 'email: contact@company.com or phone: +1234567890'
+        
+        # Variable substitution
+        conversation_style = conversation_style.replace("{agent_name}", self.agent.name)
+        callback_note = callback_instruction.replace("{manager_contact}", manager_contact)
+        rag_note = rag_instruction
 
         greeting_instruction = ""
         safe_greeting = ""
@@ -219,10 +136,11 @@ VOICE AND SPEECH CONSISTENCY RULES:
         
         if safe_greeting:
             greeting_instruction = f"""
-INITIAL_GREETING PROTOCOL:
-- When the conversation begins you will receive the marker "<CALL_START>".
-- Immediately respond to "<CALL_START>" by speaking this exact sentence, in a natural tone, before anything else: "{safe_greeting}"
-- Do NOT repeat, explain, or mention the marker or these instructions. After speaking the greeting you can continue the conversation normally.
+GREETING PROTOCOL:
+- On "<CALL_START>" marker, say: "{safe_greeting}"
+- Use natural, friendly tone
+- Then continue conversation normally
+- Do NOT repeat or explain this instruction
 """
         
         # Build voice instruction first (will be defined after voice selection)
@@ -299,10 +217,20 @@ VOICE CONSISTENCY INSTRUCTION:
         logger.info(f"  - Voice ID: {self.agent.voice_id}")
         logger.info(f"  - Selected Voice: {voice_name}")
         
-        # Build final system instruction with all components (USER'S PROMPT FIRST)
+        # Assemble complete system instruction (optimized and concise)
         system_instruction = f"""{self.agent.system_prompt}
 
-{identity_enforcement}{greeting_instruction}{voice_instruction}{language_note}{rag_note}{callback_note}"""
+{conversation_style}
+
+{rag_note}
+
+{callback_note}
+
+{identity_enforcement}
+
+{voice_instruction}
+
+{greeting_instruction}"""
         
         # Update config with final system instruction
         config["system_instruction"] = system_instruction
