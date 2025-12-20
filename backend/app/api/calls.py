@@ -39,6 +39,7 @@ class CallResponse(BaseModel):
     is_favorite: bool = False
     caller_phone: Optional[str] = None  # Caller's phone number
     caller_name: Optional[str] = None  # Caller's name
+    has_messages: bool = False  # Whether this call has text chat messages
     
     class Config:
         from_attributes = True
@@ -190,11 +191,40 @@ def list_calls(
         if call.action_items:
             update_call_follow_up_data(call, call.action_items)
     
+    # Check which calls have messages (for text chat detection)
+    call_ids = [call.id for call in calls]
+    calls_with_messages = set()
+    if call_ids:
+        try:
+            message_counts = db.query(
+                CallMessage.call_id,
+                func.count(CallMessage.id).label('message_count')
+            ).filter(
+                CallMessage.call_id.in_(call_ids)
+            ).group_by(CallMessage.call_id).all()
+            
+            calls_with_messages = {row.call_id for row in message_counts if row.message_count > 0}
+            logger.debug(f"Found {len(calls_with_messages)} calls with messages out of {len(call_ids)} total calls")
+        except Exception as e:
+            logger.error(f"Error checking for messages: {e}")
+            calls_with_messages = set()
+    
+    # Serialize calls and add has_messages flag
+    serialized_calls = []
+    for call in calls:
+        call_dict = CallResponse.model_validate(call).model_dump()
+        has_messages = call.id in calls_with_messages
+        call_dict['has_messages'] = has_messages
+        # Debug logging for text chat detection
+        if has_messages and not call.transcript:
+            logger.debug(f"Call {call.id} detected as text chat: has_messages={has_messages}, transcript={'present' if call.transcript else 'none'}")
+        serialized_calls.append(call_dict)
+    
     # Calculate total pages
     total_pages = (total + per_page - 1) // per_page if total > 0 else 0
 
     return PaginatedCallResponse(
-        items=calls,
+        items=serialized_calls,
         total=total,
         page=page,
         per_page=per_page,

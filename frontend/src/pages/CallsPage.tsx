@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { PhoneIcon, ClockIcon, CurrencyDollarIcon, FunnelIcon, ExclamationTriangleIcon, TrashIcon, ArrowPathIcon, ChartBarIcon, ChevronLeftIcon, ChevronRightIcon, StarIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { PhoneIcon, ClockIcon, CurrencyDollarIcon, FunnelIcon, ExclamationTriangleIcon, TrashIcon, ArrowPathIcon, ChartBarIcon, ChevronLeftIcon, ChevronRightIcon, StarIcon, MagnifyingGlassIcon, XMarkIcon, ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { callsAPI } from '@/lib/api'
@@ -29,6 +29,7 @@ interface Call {
   messages?: CallMessage[]  // Messages for the call
   caller_phone?: string | null  // Caller's phone number
   caller_name?: string | null  // Caller's name
+  has_messages?: boolean  // Whether this call has text chat messages
 }
 
 interface CallMessage {
@@ -436,7 +437,7 @@ export default function CallsPage() {
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-1">{t.callsPage.callHistory}</h1>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                {t.common.status === 'Statut' ? 'Consultez et analysez tous les appels des agents vocaux' : 'View and analyze all voice agent calls'}
+                {t.common.status === 'Statut' ? 'Consultez et analysez tous les appels et chats des agents' : 'View and analyze all voice calls and text chats from agents'}
               </p>
             </div>
             
@@ -666,7 +667,7 @@ export default function CallsPage() {
           <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
           <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-white">{t.callsPage.noCalls}</h3>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {t.common.status === 'Statut' ? 'Commencez à tester vos agents pour voir l\'historique des appels ici.' : 'Start testing your agents to see call history here.'}
+            {t.common.status === 'Statut' ? 'Commencez à tester vos agents pour voir l\'historique des appels et chats ici.' : 'Start testing your agents to see call and chat history here.'}
           </p>
         </div>
       ) : (
@@ -783,21 +784,87 @@ export default function CallsPage() {
                       onClick={(e) => e.stopPropagation()}
                       className="mt-1 w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 flex-shrink-0"
                     />
-                    <div className="p-2 sm:p-3 bg-blue-100 dark:bg-blue-900 rounded-lg flex-shrink-0">
-                      <PhoneIcon className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600" />
-                    </div>
+                    {(() => {
+                      // Determine if this is a text chat call
+                      // Use has_messages from backend if available, otherwise fallback to checking messages array
+                      const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
+                      const isTextChat = hasMessages && !call.transcript
+                      const isVoiceCall = call.transcript || (!hasMessages)
+                      const callType = isTextChat ? 'text' : isVoiceCall ? 'voice' : 'both'
+                      
+                      return (
+                        <div className={`p-2 sm:p-3 rounded-lg flex-shrink-0 ${
+                          callType === 'text' 
+                            ? 'bg-purple-100 dark:bg-purple-900' 
+                            : callType === 'both'
+                            ? 'bg-indigo-100 dark:bg-indigo-900'
+                            : 'bg-blue-100 dark:bg-blue-900'
+                        }`}>
+                          {callType === 'text' ? (
+                            <ChatBubbleLeftRightIcon className="h-5 w-5 sm:h-6 sm:w-6 text-purple-600 dark:text-purple-400" />
+                          ) : callType === 'both' ? (
+                            <div className="flex items-center gap-0.5">
+                              <PhoneIcon className="h-3 w-3 sm:h-4 sm:w-4 text-indigo-600 dark:text-indigo-400" />
+                              <ChatBubbleLeftRightIcon className="h-3 w-3 sm:h-4 sm:w-4 text-indigo-600 dark:text-indigo-400" />
+                            </div>
+                          ) : (
+                            <PhoneIcon className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600 dark:text-blue-400" />
+                          )}
+                        </div>
+                      )
+                    })()}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-                          {call.caller_phone ? (
-                            <span className="flex items-center gap-2">
-                              <PhoneIcon className="h-4 w-4 text-gray-500" />
-                              {call.caller_name || call.caller_phone}
-                            </span>
-                          ) : (
-                            `Call #${call.id}`
-                          )}
+                          {(() => {
+                            // Use has_messages from backend if available, otherwise fallback to checking messages array
+                            const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
+                            // Text chat: has messages AND no transcript (transcript is null/empty)
+                            const isTextChat = hasMessages && (!call.transcript || call.transcript.trim() === '')
+                            
+                            // Debug logging (remove in production)
+                            if (call.id === 584 || (hasMessages && !call.transcript)) {
+                              console.log(`Call ${call.id}: has_messages=${call.has_messages}, hasMessages=${hasMessages}, transcript=${call.transcript ? 'present' : 'none'}, isTextChat=${isTextChat}`)
+                            }
+                            
+                            if (call.caller_phone) {
+                              return (
+                                <span className="flex items-center gap-2">
+                                  <PhoneIcon className="h-4 w-4 text-gray-500" />
+                                  {call.caller_name || call.caller_phone}
+                                </span>
+                              )
+                            } else {
+                              return isTextChat 
+                                ? (t.common.status === 'Statut' ? `Chat #${call.id}` : `Chat #${call.id}`)
+                                : `Call #${call.id}`
+                            }
+                          })()}
                         </h3>
+                        {(() => {
+                          // Use has_messages from backend if available, otherwise fallback to checking messages array
+                          const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
+                          const isTextChat = hasMessages && !call.transcript
+                          const isVoiceCall = call.transcript || (!hasMessages)
+                          const callType = isTextChat ? 'text' : isVoiceCall ? 'voice' : 'both'
+                          
+                          return (
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                              callType === 'text'
+                                ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'
+                                : callType === 'both'
+                                ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200'
+                                : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                            }`}>
+                              {callType === 'text' 
+                                ? (t.common.status === 'Statut' ? '💬 Chat' : '💬 Chat')
+                                : callType === 'both'
+                                ? (t.common.status === 'Statut' ? '🎤💬 Mixte' : '🎤💬 Mixed')
+                                : (t.common.status === 'Statut' ? '🎤 Appel' : '🎤 Call')
+                              }
+                            </span>
+                          )
+                        })()}
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(call.status)}`}>
                           {call.status}
                         </span>
@@ -811,15 +878,23 @@ export default function CallsPage() {
                             {t.callsPage.actionRequired}
                           </span>
                         )}
-                        {call.summarization_status && (
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                            call.summarization_status === 'summarized'
-                              ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                              : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
-                          }`}>
-                            {call.summarization_status === 'summarized' ? 'Summarized' : 'No Summarized'}
-                          </span>
-                        )}
+                        {(() => {
+                          // Use has_messages from backend if available, otherwise fallback to checking messages array
+                          const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
+                          const isTextChat = hasMessages && !call.transcript
+                          // Only show summarization status for voice calls, not text chats
+                          if (isTextChat) return null
+                          
+                          return call.summarization_status ? (
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                              call.summarization_status === 'summarized'
+                                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                            }`}>
+                              {call.summarization_status === 'summarized' ? 'Summarized' : 'No Summarized'}
+                            </span>
+                          ) : null
+                        })()}
                       </div>
                       <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
                         {call.started_at ? formatDate(call.started_at) : 'Initializing...'}
@@ -1061,7 +1136,9 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const displayCall = callDetails ?? call
   const { actionRequests: modalActionRequests, others: modalOtherTags } = partitionFollowUpTags(displayCall.action_tags ?? [])
   const transcriptSource: any = transcript ?? displayCall.transcript
-  const transcriptAvailable = Boolean(transcriptSource)
+  // For text chats, use messages as the source for summary generation
+  const isTextChat = displayCall.messages && displayCall.messages.length > 0 && !displayCall.transcript
+  const transcriptAvailable = Boolean(transcriptSource) || (isTextChat && displayCall.messages && displayCall.messages.length > 0)
   const hasEmailRequest = modalActionRequests.some((tag) => tag.toLowerCase().includes('email'))
 
   useEffect(() => {
@@ -1125,9 +1202,18 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
 
         <div className="relative bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
           <div className="mb-6">
-            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-              {t.callsPage.callDetails}
-            </h3>
+            <div className="flex items-center gap-3 mb-2">
+              <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
+                {isTextChat 
+                  ? (t.common.status === 'Statut' ? 'Détails du Chat' : 'Chat Details')
+                  : t.callsPage.callDetails}
+              </h3>
+              {isTextChat && (
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                  💬 {t.common.status === 'Statut' ? 'Chat' : 'Chat'}
+                </span>
+              )}
+            </div>
             <p className="text-gray-600 dark:text-gray-400 mt-1">
               {t.callsPage.sessionId}: {displayCall.session_id}
             </p>
@@ -1324,11 +1410,12 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
               </div>
             )}
 
-            {/* Messages - Real-time conversation */}
+            {/* Messages - Real-time conversation (for text chat) */}
             {displayCall.messages && displayCall.messages.length > 0 && (
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-lg font-semibold text-gray-900 dark:text-white">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                    <ChatBubbleLeftRightIcon className="h-5 w-5 text-purple-600 dark:text-purple-400" />
                     {t.callsPage.messages} {displayCall.status === 'in_progress' || displayCall.status === 'summarizing' ? (
                       <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
                         {t.callsPage.live}
@@ -1336,22 +1423,44 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                     ) : null}
                   </h4>
                 </div>
-                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg space-y-3 border-2 border-gray-200 dark:border-gray-700" style={{ maxHeight: '500px', overflowY: 'auto' }}>
                   {displayCall.messages.map((message: any, index: number) => (
                     <div
                       key={index}
-                      className={`p-3 rounded-lg ${
+                      className={`p-4 rounded-2xl shadow-sm ${
                         message.role === 'user'
-                          ? 'bg-blue-50 dark:bg-blue-900/30 ml-8'
+                          ? 'bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 ml-8 border-l-4 border-blue-500'
                           : message.role === 'system'
-                          ? 'bg-gray-100 dark:bg-gray-800 mr-8'
-                          : 'bg-gray-50 dark:bg-gray-800 mr-8'
+                          ? 'bg-yellow-50 dark:bg-yellow-900/20 mr-8 border-l-4 border-yellow-500'
+                          : 'bg-white dark:bg-gray-800 mr-8 border-l-4 border-purple-500'
                       }`}
                     >
-                      <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        {message.role === 'user' ? t.callsPage.visitor : message.role === 'system' ? t.callsPage.system : t.callsPage.agent} • {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-xs font-semibold text-gray-600 dark:text-gray-400 flex items-center gap-2">
+                          {message.role === 'user' ? (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                              {t.callsPage.visitor}
+                            </>
+                          ) : message.role === 'system' ? (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+                              {t.callsPage.system}
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                              {t.callsPage.agent}
+                            </>
+                          )}
+                        </div>
+                        {message.timestamp && (
+                          <div className="text-xs text-gray-500 dark:text-gray-500">
+                            {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        )}
                       </div>
-                      <div className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap break-words">
+                      <div className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap break-words leading-relaxed">
                         {message.content}
                       </div>
                     </div>
