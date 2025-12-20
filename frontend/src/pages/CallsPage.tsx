@@ -7,6 +7,7 @@ import { callsAPI } from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
 import { useTranslation } from '@/lib/translations'
+import { useLanguageStore } from '@/store/languageStore'
 
 interface Call {
   id: number
@@ -788,8 +789,10 @@ export default function CallsPage() {
                       // Determine if this is a text chat call
                       // Use has_messages from backend if available, otherwise fallback to checking messages array
                       const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
-                      const isTextChat = hasMessages && !call.transcript
-                      const isVoiceCall = call.transcript || (!hasMessages)
+                      // Text chat: has messages AND no caller_phone (text chats don't have phone numbers)
+                      // We check caller_phone instead of transcript because completed text chats may have transcripts generated from messages
+                      const isTextChat = hasMessages && !call.caller_phone
+                      const isVoiceCall = call.caller_phone || (!hasMessages)
                       const callType = isTextChat ? 'text' : isVoiceCall ? 'voice' : 'both'
                       
                       return (
@@ -819,13 +822,9 @@ export default function CallsPage() {
                           {(() => {
                             // Use has_messages from backend if available, otherwise fallback to checking messages array
                             const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
-                            // Text chat: has messages AND no transcript (transcript is null/empty)
-                            const isTextChat = hasMessages && (!call.transcript || call.transcript.trim() === '')
-                            
-                            // Debug logging (remove in production)
-                            if (call.id === 584 || (hasMessages && !call.transcript)) {
-                              console.log(`Call ${call.id}: has_messages=${call.has_messages}, hasMessages=${hasMessages}, transcript=${call.transcript ? 'present' : 'none'}, isTextChat=${isTextChat}`)
-                            }
+                            // Text chat: has messages AND no caller_phone (text chats don't have phone numbers)
+                            // We check caller_phone instead of transcript because completed text chats may have transcripts generated from messages
+                            const isTextChat = hasMessages && !call.caller_phone
                             
                             if (call.caller_phone) {
                               return (
@@ -844,8 +843,9 @@ export default function CallsPage() {
                         {(() => {
                           // Use has_messages from backend if available, otherwise fallback to checking messages array
                           const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
-                          const isTextChat = hasMessages && !call.transcript
-                          const isVoiceCall = call.transcript || (!hasMessages)
+                          // Text chat: has messages AND no caller_phone (text chats don't have phone numbers)
+                          const isTextChat = hasMessages && !call.caller_phone
+                          const isVoiceCall = call.caller_phone || (!hasMessages)
                           const callType = isTextChat ? 'text' : isVoiceCall ? 'voice' : 'both'
                           
                           return (
@@ -881,7 +881,8 @@ export default function CallsPage() {
                         {(() => {
                           // Use has_messages from backend if available, otherwise fallback to checking messages array
                           const hasMessages = call.has_messages ?? (call.messages && call.messages.length > 0)
-                          const isTextChat = hasMessages && !call.transcript
+                          // Text chat: has messages AND no caller_phone (text chats don't have phone numbers)
+                          const isTextChat = hasMessages && !call.caller_phone
                           // Only show summarization status for voice calls, not text chats
                           if (isTextChat) return null
                           
@@ -1041,6 +1042,8 @@ interface CallDetailsModalProps {
 
 function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const t = useTranslation()
+  const { language } = useLanguageStore()
+  const isFrench = language === 'fr'
   const [transcript, setTranscript] = useState<any>(null)
   const [callDetails, setCallDetails] = useState<CallWithDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(true)
@@ -1062,7 +1065,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
       setCallDetails(response.data)
     } catch (error) {
       console.error('Failed to load call details:', error)
-      toast.error(t.common.status === 'Statut' ? 'Échec du chargement des détails de l\'appel' : 'Failed to load call details')
+      toast.error(isFrench ? 'Échec du chargement des détails de l\'appel' : 'Failed to load call details')
     } finally {
       setLoadingDetails(false)
     }
@@ -1080,7 +1083,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
         setTranscript(call.transcript ?? null)
       } else {
         console.error('Failed to load transcript:', error)
-        toast.error(t.common.status === 'Statut' ? 'Échec du chargement de la transcription' : 'Failed to load transcript')
+        toast.error(isFrench ? 'Échec du chargement de la transcription' : 'Failed to load transcript')
       }
     }
   }, [call.id, call.transcript, t])
@@ -1123,11 +1126,11 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
     setGeneratingSummary(true)
     try {
       await callsAPI.generateSummary(call.id)
-      toast.success(t.common.status === 'Statut' ? 'Résumé régénéré' : 'Summary regenerated')
+      toast.success(isFrench ? 'Résumé régénéré' : 'Summary regenerated')
       await Promise.all([loadCallDetails(), loadTranscript()])
     } catch (error) {
       console.error('Failed to regenerate summary:', error)
-      toast.error(t.common.status === 'Statut' ? 'Erreur lors de la régénération du résumé' : 'Error regenerating summary')
+      toast.error(isFrench ? 'Erreur lors de la régénération du résumé' : 'Error regenerating summary')
     } finally {
       setGeneratingSummary(false)
     }
@@ -1137,7 +1140,9 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const { actionRequests: modalActionRequests, others: modalOtherTags } = partitionFollowUpTags(displayCall.action_tags ?? [])
   const transcriptSource: any = transcript ?? displayCall.transcript
   // For text chats, use messages as the source for summary generation
-  const isTextChat = displayCall.messages && displayCall.messages.length > 0 && !displayCall.transcript
+  // Text chat: has messages AND no caller_phone (text chats don't have phone numbers)
+  const hasMessages = displayCall.messages && displayCall.messages.length > 0
+  const isTextChat = hasMessages && !displayCall.caller_phone
   const transcriptAvailable = Boolean(transcriptSource) || (isTextChat && displayCall.messages && displayCall.messages.length > 0)
   const hasEmailRequest = modalActionRequests.some((tag) => tag.toLowerCase().includes('email'))
 
@@ -1159,15 +1164,15 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
   const handleSendEmail = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!emailForm.to_email.trim()) {
-      toast.error(t.common.status === 'Statut' ? 'L\'email du destinataire est requis' : 'Recipient email is required')
+      toast.error(isFrench ? 'L\'email du destinataire est requis' : 'Recipient email is required')
       return
     }
     if (!emailForm.subject.trim()) {
-      toast.error(t.common.status === 'Statut' ? 'Le sujet est requis' : 'Subject is required')
+      toast.error(isFrench ? 'Le sujet est requis' : 'Subject is required')
       return
     }
     if (!emailForm.body.trim()) {
-      toast.error(t.common.status === 'Statut' ? 'Le corps de l\'email ne peut pas être vide' : 'Email body cannot be empty')
+      toast.error(isFrench ? 'Le corps de l\'email ne peut pas être vide' : 'Email body cannot be empty')
       return
     }
 
@@ -1182,7 +1187,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
       setShowEmailComposer(false)
       setEmailForm({
         to_email: '',
-        subject: `${t.common.status === 'Statut' ? 'Suivi pour l\'appel' : 'Follow-up for call'} #${call.id}`,
+        subject: `${isFrench ? 'Suivi pour l\'appel' : 'Follow-up for call'} #${call.id}`,
         body: ''
       })
       await loadCallDetails()
@@ -1205,12 +1210,12 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
             <div className="flex items-center gap-3 mb-2">
               <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
                 {isTextChat 
-                  ? (t.common.status === 'Statut' ? 'Détails du Chat' : 'Chat Details')
+                  ? (isFrench ? 'Détails du Chat' : 'Chat Details')
                   : t.callsPage.callDetails}
               </h3>
               {isTextChat && (
                 <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
-                  💬 {t.common.status === 'Statut' ? 'Chat' : 'Chat'}
+                  💬 {isFrench ? 'Chat' : 'Chat'}
                 </span>
               )}
             </div>
@@ -1308,7 +1313,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                       {t.callsPage.sendEmail}
                     </h5>
                     <p className="text-xs text-amber-700 dark:text-amber-300">
-                      {t.common.status === 'Statut' ? 'Complétez la demande d\'action en envoyant un email directement au client.' : 'Complete the action request by emailing the customer directly.'}
+                      {isFrench ? 'Complétez la demande d\'action en envoyant un email directement au client.' : 'Complete the action request by emailing the customer directly.'}
                     </p>
                   </div>
                   <button
@@ -1358,7 +1363,7 @@ function CallDetailsModal({ call, onClose }: CallDetailsModalProps) {
                         value={emailForm.body}
                         onChange={handleEmailFieldChange}
                         className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-                        placeholder={t.common.status === 'Statut' ? 'Rédigez votre email de suivi...' : 'Draft your follow-up email...'}
+                        placeholder={isFrench ? 'Rédigez votre email de suivi...' : 'Draft your follow-up email...'}
                         required
                       />
                     </div>
