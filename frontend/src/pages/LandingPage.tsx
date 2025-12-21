@@ -410,41 +410,6 @@ interface PublicAgent {
         </div>
       </section>
 
-      {/* Features Section */}
-      <section className="py-20 px-6 bg-white dark:bg-gray-800">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl sm:text-5xl font-bold text-gray-900 dark:text-white mb-4">
-              {t.landing.fonctionnalitesPuissantes}
-            </h2>
-            <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-              {t.landing.fonctionnalitesDesc}
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {features.map((feature) => (
-              <div
-                key={feature.name}
-                className="group relative bg-gray-50 dark:bg-gray-900 rounded-xl p-6 hover:shadow-xl transition-all duration-200 border border-gray-200 dark:border-gray-700"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-purple-600/10 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
-                <div className="relative">
-                  <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-4 shadow-md`}>
-                    <feature.icon className="w-6 h-6 text-white" />
-                  </div>
-                  <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
-                    {feature.name}
-                  </h3>
-                  <p className="text-gray-600 dark:text-gray-300 leading-relaxed">
-                    {feature.description}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* Public Agents Section */}
       <section id="public-agents" className="py-20 px-6 scroll-mt-40">
         <div className="max-w-7xl mx-auto">
@@ -458,9 +423,9 @@ interface PublicAgent {
               <h2 className="text-4xl sm:text-5xl font-bold text-gray-900 dark:text-white mb-4">
                 {t.landing.agentsPublicsDisponibles}
               </h2>
-              <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
+              {/* <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
                 {t.landing.agentsPublicsDesc}
-              </p>
+              </p> */}
             </div>
 
             {/* Search and Filter Bar */}
@@ -828,6 +793,43 @@ interface PublicAgent {
             )}
         </div>
       </section>
+      
+      {/* Features Section */}
+      <section className="py-20 px-6 bg-white dark:bg-gray-800">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-4xl sm:text-5xl font-bold text-gray-900 dark:text-white mb-4">
+              {t.landing.fonctionnalitesPuissantes}
+            </h2>
+            <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
+              {t.landing.fonctionnalitesDesc}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            {features.map((feature) => (
+              <div
+                key={feature.name}
+                className="group relative bg-gray-50 dark:bg-gray-900 rounded-xl p-6 hover:shadow-xl transition-all duration-200 border border-gray-200 dark:border-gray-700"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-purple-600/10 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"></div>
+                <div className="relative">
+                  <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-4 shadow-md`}>
+                    <feature.icon className="w-6 h-6 text-white" />
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                    {feature.name}
+                  </h3>
+                  <p className="text-gray-600 dark:text-gray-300 leading-relaxed">
+                    {feature.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+
 
       {/* Benefits Section */}
       <section className="py-20 px-6">
