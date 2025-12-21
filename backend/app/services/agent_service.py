@@ -109,6 +109,7 @@ class FrenchVoiceAgentService:
         rag_instruction = load_prompt(f'rag_instructions_{lang_suffix}.txt') if self.agent.rag_enabled else ""
         callback_instruction = load_prompt(f'escalation_{lang_suffix}.txt')
         identity_enforcement = load_prompt('identity_rules.txt')
+        context_rules = load_prompt('conversation_context_rules.txt')
         
         # Get manager contact info and substitute in prompts (handle None)
         manager_contact = getattr(self.agent, 'manager_contact', None)
@@ -218,9 +219,16 @@ VOICE CONSISTENCY INSTRUCTION:
         logger.info(f"  - Selected Voice: {voice_name}")
         
         # Assemble complete system instruction (optimized and concise)
-        system_instruction = f"""{self.agent.system_prompt}
+        # IMPORTANT: The agent's system_prompt defines the agent's identity and primary behavior
+        # All other instructions are supplementary and should not override the agent's core identity
+        system_instruction = f"""=== YOUR IDENTITY AND ROLE (PRIMARY - ALWAYS FOLLOW THIS) ===
+{self.agent.system_prompt}
 
+=== CONVERSATION STYLE GUIDELINES (Follow these while staying in character) ===
 {conversation_style}
+
+=== CONVERSATION CONTEXT & ACTIVE LISTENING ===
+{context_rules}
 
 {rag_note}
 
@@ -230,7 +238,19 @@ VOICE CONSISTENCY INSTRUCTION:
 
 {voice_instruction}
 
-{greeting_instruction}"""
+{greeting_instruction}
+
+=== CRITICAL REMINDER ===
+- Your identity, role, and behavior are defined in the section above marked "YOUR IDENTITY AND ROLE"
+- All other instructions help you communicate effectively WHILE staying in your defined character
+- Never use generic responses - always respond as the character defined in your system prompt
+- If the conversation style suggests something that conflicts with your role, prioritize your role definition
+- MAINTAIN CONVERSATION CONTEXT: Remember what has been discussed, never repeat questions already answered
+- LISTEN AND ADAPT: Respond to what the user is saying NOW, not just follow a script
+- AVOID REPETITION: Never use the same phrases over and over - vary your language naturally
+- NO EMOJIS: Keep professional conversations emoji-free
+- ANSWER DIRECTLY: When users ask questions or make requests, address them first before continuing
+- INTRODUCE YOURSELF ONLY ONCE: Give your name, company, and role ONLY in the first message - never repeat introductions in subsequent responses"""
         
         # Update config with final system instruction
         config["system_instruction"] = system_instruction
