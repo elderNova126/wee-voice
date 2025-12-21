@@ -221,15 +221,17 @@ interface PublicAgent {
               {t.landing.demo}
             </Link>
 
-            {/* Language Switcher */}
-            <div className="hidden sm:block">
-              <LanguageSwitcher />
-            </div>
-
-            {/* Theme Dropdown */}
+            {/* Profile Menu */}
             <Menu as="div" className="relative">
-              <Menu.Button className="p-2 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                <ThemeIcon className="w-5 h-5" />
+              <Menu.Button className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                {isAuthenticated && user ? (
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
+                    {user.full_name?.charAt(0).toUpperCase()}
+                  </div>
+                ) : (
+                  <UserCircleIcon className="w-8 h-8 text-gray-700 dark:text-gray-300" />
+                )}
+                <ChevronDownIcon className="w-4 h-4 text-gray-700 dark:text-gray-300 hidden sm:block" />
               </Menu.Button>
               <Transition
                 as={Fragment}
@@ -240,8 +242,76 @@ interface PublicAgent {
                 leaveFrom="transform opacity-100 scale-100"
                 leaveTo="transform opacity-0 scale-95"
               >
-                <Menu.Items className="absolute right-0 mt-2 w-48 origin-top-right bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                <Menu.Items className="absolute right-0 mt-2 w-56 origin-top-right bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
+                  {/* User Info (only if authenticated) */}
+                  {isAuthenticated && user && (
+                    <div className="px-4 py-3">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{user.full_name}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user.email}</p>
+                    </div>
+                  )}
+                  
+                  {/* Login/Register (only if not authenticated) */}
+                  {!isAuthenticated && (
+                    <div className="p-1">
+                      <Menu.Item>
+                        {({ active }) => (
+                          <Link
+                            to="/login"
+                            className={`${
+                              active ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                            } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                          >
+                            <ArrowRightOnRectangleIcon className="mr-3 h-5 w-5" />
+                            {t.landing.commencer}
+                          </Link>
+                        )}
+                      </Menu.Item>
+                    </div>
+                  )}
+
+                  {/* Dashboard Link (only if authenticated) */}
+                  {isAuthenticated && (
+                    <div className="p-1">
+                      <Menu.Item>
+                        {({ active }) => (
+                          <Link
+                            to="/dashboard"
+                            className={`${
+                              active ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
+                            } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
+                          >
+                            <UserCircleIcon className="mr-3 h-5 w-5" />
+                            {t.landing.tableauDeBord}
+                          </Link>
+                        )}
+                      </Menu.Item>
+                    </div>
+                  )}
+
+                  {/* Language Settings */}
                   <div className="p-1">
+                    <div className="px-4 py-2.5">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                          <GlobeAltIcon className="w-4 h-4" />
+                          {t.settings.language}
+                        </span>
+                      </div>
+                      <LanguageSwitcher />
+                    </div>
+                  </div>
+
+                  {/* Theme Settings */}
+                  <div className="p-1">
+                    <div className="px-4 py-2.5 pb-1">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                          <ThemeIcon className="w-4 h-4" />
+                          {t.settings.theme}
+                        </span>
+                      </div>
+                    </div>
                     {themeOptions.map((option) => (
                       <Menu.Item key={option.value}>
                         {({ active }) => (
@@ -263,51 +333,9 @@ interface PublicAgent {
                       </Menu.Item>
                     ))}
                   </div>
-                </Menu.Items>
-              </Transition>
-            </Menu>
 
-            {/* User Menu or Login Button */}
-            {isAuthenticated && user ? (
-              <Menu as="div" className="relative">
-                <Menu.Button className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm">
-                    {user.full_name?.charAt(0).toUpperCase()}
-                  </div>
-                  <ChevronDownIcon className="w-4 h-4 text-gray-700 dark:text-gray-300 hidden sm:block" />
-                </Menu.Button>
-                <Transition
-                  as={Fragment}
-                  enter="transition ease-out duration-100"
-                  enterFrom="transform opacity-0 scale-95"
-                  enterTo="transform opacity-100 scale-100"
-                  leave="transition ease-in duration-75"
-                  leaveFrom="transform opacity-100 scale-100"
-                  leaveTo="transform opacity-0 scale-95"
-                >
-                  <Menu.Items className="absolute right-0 mt-2 w-56 origin-top-right bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-black ring-opacity-5 divide-y divide-gray-100 dark:divide-gray-700 focus:outline-none overflow-hidden">
-                    {/* User Info */}
-                    <div className="px-4 py-3">
-                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{user.full_name}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user.email}</p>
-                    </div>
-                    {/* Dashboard Link */}
-                    <div className="p-1">
-                      <Menu.Item>
-                        {({ active }) => (
-                          <Link
-                            to="/dashboard"
-                            className={`${
-                              active ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
-                            } group flex items-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
-                          >
-                            <UserCircleIcon className="mr-3 h-5 w-5" />
-                            {t.landing.tableauDeBord}
-                          </Link>
-                        )}
-                      </Menu.Item>
-                    </div>
-                    {/* Logout */}
+                  {/* Logout (only if authenticated) */}
+                  {isAuthenticated && (
                     <div className="p-1">
                       <Menu.Item>
                         {({ active }) => (
@@ -323,17 +351,10 @@ interface PublicAgent {
                         )}
                       </Menu.Item>
                     </div>
-                  </Menu.Items>
-                </Transition>
-              </Menu>
-            ) : (
-              <Link
-                to="/login"
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-medium rounded-lg shadow-md transition-all duration-200"
-              >
-                {t.landing.commencer}
-              </Link>
-            )}
+                  )}
+                </Menu.Items>
+              </Transition>
+            </Menu>
           </div>
         </nav>
       </header>

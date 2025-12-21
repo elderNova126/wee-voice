@@ -12,11 +12,11 @@ export default function LanguageSwitcher() {
   ]
 
   return (
-    <div className="relative">
+    <div className="relative w-full">
       <select
         value={language}
         onChange={(e) => setLanguage(e.target.value as 'fr' | 'en')}
-        className="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 pr-8 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+        className="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 pr-8 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer w-full"
         aria-label={t.settings.language}
       >
         {languages.map((lang) => (
