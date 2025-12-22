@@ -4,6 +4,7 @@ import { MicrophoneIcon, StopIcon, ArrowLeftIcon, SparklesIcon, GlobeAltIcon, Ph
 import toast from 'react-hot-toast'
 import { VoiceWebSocket, api, callsAPI, API_URL } from '@/lib/api'
 import { useTranslation } from '@/lib/translations'
+import { LoadingSpinner } from '@/components/ui'
 
 interface Agent {
   id: number
@@ -36,6 +37,7 @@ export default function PublicAgentPage() {
   const [textChatConnected, setTextChatConnected] = useState(false)
   const [textChatConnecting, setTextChatConnecting] = useState(false)
   const [isWaitingForResponse, setIsWaitingForResponse] = useState(false)
+  const [selectedMode, setSelectedMode] = useState<'chat' | 'voice'>('voice') // Track selected interaction mode
   const textChatWsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   
@@ -57,6 +59,20 @@ export default function PublicAgentPage() {
       cleanupTextChat()
     }
   }, [agentId])
+
+  // Set initial mode based on agent interaction_mode
+  useEffect(() => {
+    if (agent) {
+      if (agent.interaction_mode === 'text') {
+        setSelectedMode('chat')
+      } else if (agent.interaction_mode === 'voice') {
+        setSelectedMode('voice')
+      } else if (agent.interaction_mode === 'both') {
+        // Default to voice for 'both' mode, but user can switch
+        setSelectedMode('voice')
+      }
+    }
+  }, [agent])
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -467,10 +483,20 @@ export default function PublicAgentPage() {
     toast.success(t.common.status === 'Statut' ? 'Chat terminé' : 'Chat ended')
   }
 
+  const handleModeSwitch = (mode: 'chat' | 'voice') => {
+    // Clean up current connections before switching
+    if (mode === 'chat' && isConnected) {
+      stopConversation()
+    } else if (mode === 'voice' && textChatConnected) {
+      stopTextChat()
+    }
+    setSelectedMode(mode)
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+        <LoadingSpinner size="md" />
       </div>
     )
   }
@@ -558,8 +584,38 @@ export default function PublicAgentPage() {
           </div>
         </div>
 
-        {/* Text Chat Interface - for text or both mode */}
-        {(agent.interaction_mode === 'text' || agent.interaction_mode === 'both') && (
+        {/* Mode Selector - Show when both modes are available */}
+        {agent.interaction_mode === 'both' && (
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-2 mb-8 border border-gray-200 dark:border-gray-700">
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleModeSwitch('voice')}
+                className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-semibold transition-all duration-200 ${
+                  selectedMode === 'voice'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                <MicrophoneIcon className="w-5 h-5" />
+                <span>{t.common.status === 'Statut' ? 'Voix' : 'Voice'}</span>
+              </button>
+              <button
+                onClick={() => handleModeSwitch('chat')}
+                className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-semibold transition-all duration-200 ${
+                  selectedMode === 'chat'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                <ChatBubbleLeftRightIcon className="w-5 h-5" />
+                <span>{t.common.status === 'Statut' ? 'Chat' : 'Chat'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Text Chat Interface - Show when text mode is selected or agent only supports text */}
+        {((agent.interaction_mode === 'text') || (agent.interaction_mode === 'both' && selectedMode === 'chat')) && (
           <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl border-2 border-gray-200 dark:border-gray-700 mb-8 overflow-hidden">
             {/* Chat Header */}
             <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-5">
@@ -776,8 +832,8 @@ export default function PublicAgentPage() {
           </div>
         )}
 
-        {/* Voice Interface - for voice or both mode */}
-        {(agent.interaction_mode === 'voice' || agent.interaction_mode === 'both') && (
+        {/* Voice Interface - Show when voice mode is selected or agent only supports voice */}
+        {((agent.interaction_mode === 'voice') || (agent.interaction_mode === 'both' && selectedMode === 'voice')) && (
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-200 dark:border-gray-700">
             <div className="text-center">
               {!isConnected && !isConnecting && (

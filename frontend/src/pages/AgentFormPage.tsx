@@ -10,12 +10,12 @@ import {
   UserPlusIcon,
   XMarkIcon,
   ChatBubbleLeftRightIcon,
-  MicrophoneIcon,
-  ArrowPathIcon
+  MicrophoneIcon
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, api, librariesAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
+import { LoadingSpinner } from '@/components/ui'
 
 interface AgentFormData {
   name: string
@@ -370,19 +370,7 @@ export default function AgentFormPage() {
     return (
       <DashboardLayout>
         <div className="flex flex-col items-center justify-center min-h-[60vh]">
-          {/* Loader2 Style Spinner - Multi-layered rotating circles */}
-          <div className="relative w-20 h-20">
-            {/* Outer rotating circle */}
-            <div className="absolute inset-0 border-4 border-transparent border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin" style={{ animationDuration: '1s' }}></div>
-            {/* Middle rotating circle (reverse) */}
-            <div className="absolute inset-2 border-4 border-transparent border-r-purple-600 dark:border-r-purple-400 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
-            {/* Inner rotating circle */}
-            <div className="absolute inset-4 border-4 border-transparent border-b-pink-600 dark:border-b-pink-400 rounded-full animate-spin" style={{ animationDuration: '2s' }}></div>
-            {/* Center icon */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <ArrowPathIcon className="w-8 h-8 text-blue-600 dark:text-blue-400 animate-spin" style={{ animationDuration: '0.8s' }} />
-            </div>
-          </div>
+          <LoadingSpinner size="md" />
           <p className="mt-8 text-lg font-semibold text-gray-700 dark:text-gray-300 animate-pulse">
             {t.common.status === 'Statut' ? 'Chargement des détails de l\'agent...' : 'Loading agent details...'}
           </p>

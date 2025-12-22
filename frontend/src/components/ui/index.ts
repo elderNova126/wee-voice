@@ -5,4 +5,5 @@ export { StatCard } from './StatCard'
 export { Input } from './Input'
 export { Table, TableHead, TableBody, TableRow, TableHeader, TableCell } from './Table'
 export { EmptyState } from './EmptyState'
+export { default as LoadingSpinner } from './LoadingSpinner'
 
