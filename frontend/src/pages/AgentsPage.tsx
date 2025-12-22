@@ -270,14 +270,11 @@ export default function AgentsPage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5 lg:gap-6">
           {filteredAgents.map((agent, index) => {
-            // Generate harmonious color scheme based on agent index
+            // Subtle, refined color scheme aligned with project theme
             const colorSchemes = [
-              { gradient: 'from-blue-500 via-cyan-500 to-teal-500', icon: 'from-blue-400 to-cyan-400', badge: 'from-blue-500 to-cyan-500', hover: 'hover:from-blue-600 hover:to-cyan-600' },
-              { gradient: 'from-purple-500 via-pink-500 to-rose-500', icon: 'from-purple-400 to-pink-400', badge: 'from-purple-500 to-pink-500', hover: 'hover:from-purple-600 hover:to-pink-600' },
-              { gradient: 'from-indigo-500 via-blue-500 to-purple-500', icon: 'from-indigo-400 to-purple-400', badge: 'from-indigo-500 to-purple-500', hover: 'hover:from-indigo-600 hover:to-purple-600' },
-              { gradient: 'from-emerald-500 via-teal-500 to-cyan-500', icon: 'from-emerald-400 to-teal-400', badge: 'from-emerald-500 to-teal-500', hover: 'hover:from-emerald-600 hover:to-teal-600' },
-              { gradient: 'from-orange-500 via-amber-500 to-yellow-500', icon: 'from-orange-400 to-amber-400', badge: 'from-orange-500 to-amber-500', hover: 'hover:from-orange-600 hover:to-amber-600' },
-              { gradient: 'from-violet-500 via-purple-500 to-fuchsia-500', icon: 'from-violet-400 to-fuchsia-400', badge: 'from-violet-500 to-fuchsia-500', hover: 'hover:from-violet-600 hover:to-fuchsia-600' },
+              { gradient: 'from-blue-600 to-indigo-600', icon: 'from-blue-500 to-indigo-500', badge: 'from-blue-600 to-indigo-600', hover: 'hover:from-blue-700 hover:to-indigo-700' },
+              { gradient: 'from-indigo-600 to-purple-600', icon: 'from-indigo-500 to-purple-500', badge: 'from-indigo-600 to-purple-600', hover: 'hover:from-indigo-700 hover:to-purple-700' },
+              { gradient: 'from-purple-600 to-indigo-600', icon: 'from-purple-500 to-indigo-500', badge: 'from-purple-600 to-indigo-600', hover: 'hover:from-purple-700 hover:to-indigo-700' },
             ]
             const colorScheme = colorSchemes[index % colorSchemes.length]
             
@@ -290,22 +287,22 @@ export default function AgentsPage() {
                   : 'border border-gray-200 dark:border-gray-700'
               }`}
             >
-              {/* Gradient Header */}
-              <div className={`h-2 sm:h-2.5 bg-gradient-to-r ${colorScheme.gradient}`} />
+              {/* Subtle Gradient Header */}
+              <div className={`h-1.5 sm:h-2 bg-gradient-to-r ${colorScheme.gradient} opacity-90`} />
 
               {/* Status and Role Badges */}
               <div className="absolute top-3 right-3 sm:top-4 sm:right-4 flex gap-1.5 sm:gap-2 flex-wrap justify-end max-w-[55%] sm:max-w-[50%] z-10">
                 {agent.role === 'collaborator' && (
-                  <span className="px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-md flex items-center gap-0.5 sm:gap-1">
+                  <span className="px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-semibold rounded-full bg-indigo-600 dark:bg-indigo-500 text-white shadow-sm flex items-center gap-0.5 sm:gap-1">
                     <UserGroupIcon className="h-2.5 w-2.5 sm:h-3 sm:w-3 flex-shrink-0" />
                     <span className="hidden sm:inline">Team</span>
                   </span>
                 )}
                 <span
-                  className={`px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-full shadow-md flex items-center gap-0.5 sm:gap-1 ${
+                  className={`px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-semibold rounded-full shadow-sm flex items-center gap-0.5 sm:gap-1 ${
                     agent.is_public
-                      ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white'
-                      : 'bg-gradient-to-r from-gray-500 to-gray-600 text-white'
+                      ? 'bg-green-600 dark:bg-green-500 text-white'
+                      : 'bg-gray-600 dark:bg-gray-500 text-white'
                   }`}
                 >
                   {agent.is_public ? (
@@ -325,7 +322,7 @@ export default function AgentsPage() {
               {/* Agent Header */}
               <div className="p-4 sm:p-5 lg:p-6 pb-3 sm:pb-4">
                 <div className="flex items-start gap-3 sm:gap-4 mb-3 sm:mb-4">
-                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-gradient-to-br ${colorScheme.icon} shadow-lg flex-shrink-0`}>
+                  <div className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-gradient-to-br ${colorScheme.icon} shadow-md flex-shrink-0`}>
                     <div className="text-white">
                       {getInteractionIcon(agent.interaction_mode)}
                     </div>
@@ -370,7 +367,7 @@ export default function AgentsPage() {
                     {agent.permissions.map((perm) => (
                       <span
                         key={perm}
-                        className="px-2 sm:px-2.5 py-0.5 sm:py-1 text-[10px] sm:text-xs font-semibold rounded-lg bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 border border-purple-200 dark:border-purple-800"
+                        className="px-2 sm:px-2.5 py-0.5 sm:py-1 text-[10px] sm:text-xs font-medium rounded-lg bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 border border-indigo-200/50 dark:border-indigo-800/50"
                       >
                         {perm}
                       </span>
@@ -390,7 +387,7 @@ export default function AgentsPage() {
               <div className="px-4 sm:px-5 lg:px-6 pb-4 sm:pb-5 lg:pb-6 pt-0 flex gap-1.5 sm:gap-2">
                 <button
                   onClick={() => handleTest(agent)}
-                  className={`flex-1 inline-flex justify-center items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl bg-gradient-to-r ${colorScheme.badge} ${colorScheme.hover} text-white font-semibold text-xs sm:text-sm py-2 sm:py-2.5 lg:py-3 transition-all shadow-md hover:shadow-lg transform hover:scale-105`}
+                  className={`flex-1 inline-flex justify-center items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl bg-gradient-to-r ${colorScheme.badge} ${colorScheme.hover} text-white font-semibold text-xs sm:text-sm py-2 sm:py-2.5 lg:py-3 transition-all shadow-sm hover:shadow-md transform hover:scale-[1.02]`}
                 >
                   <PlayIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
                   <span className="hidden sm:inline">{t.agentsPage.test}</span>
@@ -400,7 +397,7 @@ export default function AgentsPage() {
                   <>
                     <Link
                       to={`/dashboard/agents/${agent.id}/embed`}
-                      className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900 dark:hover:bg-indigo-800 text-indigo-700 dark:text-indigo-300 transition-all shadow-md hover:shadow-lg"
+                      className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 transition-all shadow-sm hover:shadow-md"
                       title="Embed Widget"
                     >
                       <CodeBracketIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
