@@ -451,7 +451,7 @@ class AudioSocketSession:
         
         print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms ({MIN_START_CHUNKS} chunks), jitter={JITTER_BUFFER_MS}ms", flush=True)
         
-        transport = self.writer.transport
+        # AudioSocket frame header (type + length)
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
         # Async jitter buffer (like Asterisk-AI-Voice-Agent)
@@ -527,8 +527,8 @@ class AudioSocketSession:
                     frame = pending[:FRAME_SIZE]
                     pending = pending[FRAME_SIZE:]
                     try:
-                        transport.write(header + frame)
-                        await asyncio.sleep(0)  # Yield to event loop
+                        self.writer.write(header + frame)
+                        await self.writer.drain()  # CRITICAL: wait for buffer flush like Asterisk-AI-Voice-Agent
                         stats['sent'] += 1
                         empty_backoff = 0
                         last_real_emit_ts = time.perf_counter()
@@ -539,7 +539,8 @@ class AudioSocketSession:
                     # End of stream
                     if pending:
                         try:
-                            transport.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
+                            self.writer.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
+                            await self.writer.drain()
                             stats['sent'] += 1
                         except:
                             pass
@@ -560,13 +561,19 @@ class AudioSocketSession:
                             stats['underruns'] += 1
                             stats['underrun_empty'] += 1
                             try:
-                                transport.write(header + SILENCE_FRAME)
+                                self.writer.write(header + SILENCE_FRAME)
+                                await self.writer.drain()
                                 stats['sent'] += 1
                             except:
                                 break
                         empty_backoff = 0  # Reset after sending filler
                 
                 next_tick += TICK_SECONDS
+                
+                # Reset timing if we're behind (prevents drift from drain latency)
+                now_after = time.perf_counter()
+                if next_tick < now_after:
+                    next_tick = now_after
                 
                 # Periodic log
                 if stats['sent'] > 0 and stats['sent'] % 500 == 0:
@@ -600,10 +607,16 @@ class AudioSocketSession:
                         first_chunk = False
                         attack_state = None
                     
+                    # === DC offset removal BEFORE resampling (like Asterisk-AI-Voice-Agent) ===
+                    audio_24k = remove_dc_offset(audio_24k, threshold=256)
+                    
                     # === Resample 24kHz → 8kHz (using audioop.ratecv with state) ===
                     audio_8k, resample_state = audioop.ratecv(
                         audio_24k, 2, 1, 24000, 8000, resample_state
                     )
+                    
+                    # === DC offset removal AFTER resampling (post-resample clamp) ===
+                    audio_8k = remove_dc_offset(audio_8k, threshold=128)
                     
                     # === Apply attack envelope (20ms) ===
                     audio_8k, attack_state = apply_attack_envelope(
