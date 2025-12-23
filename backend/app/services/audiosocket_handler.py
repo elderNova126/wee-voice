@@ -49,6 +49,135 @@ SAMPLE_RATE = 8000
 FRAME_SIZE = 320
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
+# Audio Quality Settings (based on Asterisk-AI-Voice-Agent)
+# These values are tuned for telephony audio
+AUDIO_TARGET_RMS = 1400  # Target RMS level for normalization
+AUDIO_MAX_GAIN_DB = 18.0  # Maximum gain to apply (prevents excessive amplification)
+AUDIO_ATTACK_MS = 10  # Attack envelope to smooth audio starts
+
+
+def normalize_audio(pcm_bytes: bytes, target_rms: int = AUDIO_TARGET_RMS, max_gain_db: float = AUDIO_MAX_GAIN_DB) -> bytes:
+    """
+    Apply RMS-based normalization to boost quiet audio.
+    
+    Based on Asterisk-AI-Voice-Agent's _apply_normalizer function.
+    This ensures consistent audio levels for better voice quality.
+    
+    Args:
+        pcm_bytes: Raw PCM16 audio bytes
+        target_rms: Target RMS level (default 1400 for telephony)
+        max_gain_db: Maximum gain in dB to apply (default 18.0)
+        
+    Returns:
+        Normalized PCM16 audio bytes
+    """
+    import math
+    import array
+    
+    if not pcm_bytes or len(pcm_bytes) < 4 or target_rms <= 0:
+        return pcm_bytes
+    
+    try:
+        # Decode PCM16 samples
+        buf = array.array('h')
+        buf.frombytes(pcm_bytes)
+        
+        if buf.itemsize != 2 or len(buf) == 0:
+            return pcm_bytes
+        
+        # Compute RMS (Root Mean Square)
+        acc = 0.0
+        for s in buf:
+            acc += float(s) * float(s)
+        rms = math.sqrt(acc / float(len(buf))) if len(buf) > 0 else 0.0
+        
+        # Prevent divide-by-zero by clamping effective RMS to >= 1.0
+        effective_rms = max(1.0, float(rms))
+        
+        # Compute linear gain toward target, limited by max_gain_db
+        desired = float(target_rms) / effective_rms
+        max_lin = math.pow(10.0, float(max_gain_db) / 20.0)
+        gain = min(desired, max_lin)
+        
+        # Skip if gain is too small (avoid unnecessary processing)
+        if gain <= 1.02:
+            return pcm_bytes
+        
+        # Apply gain and clip to int16 range
+        for i, s in enumerate(buf):
+            y = float(s) * gain
+            if y > 32767.0:
+                y = 32767.0
+            elif y < -32768.0:
+                y = -32768.0
+            buf[i] = int(y)
+        
+        return buf.tobytes()
+        
+    except Exception as e:
+        print(f"[NORMALIZE] Error: {e}", flush=True)
+        return pcm_bytes
+
+
+def apply_attack_envelope(pcm_bytes: bytes, sample_rate: int = 8000, attack_ms: int = AUDIO_ATTACK_MS, 
+                          attack_state: dict = None) -> tuple:
+    """
+    Apply a linear attack envelope at the start of audio to avoid harsh starts.
+    
+    Based on Asterisk-AI-Voice-Agent's _apply_attack_envelope function.
+    This prevents "popping" or harsh audio starts.
+    
+    Args:
+        pcm_bytes: Raw PCM16 audio bytes
+        sample_rate: Sample rate in Hz
+        attack_ms: Attack duration in milliseconds
+        attack_state: Dictionary to track state across calls
+        
+    Returns:
+        Tuple of (processed_bytes, updated_state)
+    """
+    import array
+    
+    if not pcm_bytes or sample_rate <= 0 or attack_ms <= 0:
+        return pcm_bytes, attack_state
+    
+    if attack_state is None:
+        attack_state = {'bytes_remaining': int(sample_rate * (attack_ms / 1000.0) * 2)}
+    
+    try:
+        total_attack_bytes = int(max(0, int(sample_rate * (attack_ms / 1000.0)) * 2))
+        remaining = int(attack_state.get('bytes_remaining', total_attack_bytes))
+        
+        if remaining <= 0:
+            return pcm_bytes, attack_state
+        
+        buf = array.array('h')
+        buf.frombytes(pcm_bytes)
+        
+        if buf.itemsize != 2:
+            return pcm_bytes, attack_state
+        
+        # Number of samples to shape in this buffer
+        shape_samples = min(len(buf), remaining // 2)
+        if shape_samples <= 0:
+            return pcm_bytes, attack_state
+        
+        # Linear ramp from ~0 -> 1 over remaining bytes
+        for i in range(shape_samples):
+            consumed_bytes = (total_attack_bytes - remaining) + (i * 2)
+            alpha = max(0.0, min(1.0, consumed_bytes / float(max(1, total_attack_bytes))))
+            s = int(buf[i])
+            buf[i] = int(round(s * alpha))
+        
+        remaining -= shape_samples * 2
+        attack_state['bytes_remaining'] = max(0, remaining)
+        
+        return buf.tobytes(), attack_state
+        
+    except Exception as e:
+        print(f"[ATTACK] Error: {e}", flush=True)
+        return pcm_bytes, attack_state
+
 
 class StreamingResampler:
     """
@@ -56,20 +185,34 @@ class StreamingResampler:
     
     Unlike stateless soxr.resample(), this maintains state between calls
     for smooth, gap-free audio.
+    
+    Uses VHQ (Very High Quality) mode for best audio quality.
     """
-    def __init__(self, from_rate: int, to_rate: int):
+    def __init__(self, from_rate: int, to_rate: int, quality: str = 'VHQ'):
         self.from_rate = from_rate
         self.to_rate = to_rate
         self.resampler = None
+        self.quality = quality
         
         if SOXR_AVAILABLE:
             try:
-                # Create streaming resampler
+                # Create streaming resampler with VHQ quality for best audio
+                # soxr quality options: VHQ (best), HQ (default), MQ, LQ, QQ
+                quality_map = {
+                    'VHQ': soxr.VHQ,
+                    'HQ': soxr.HQ,
+                    'MQ': soxr.MQ,
+                    'LQ': soxr.LQ,
+                }
+                soxr_quality = quality_map.get(quality, soxr.VHQ)
+                
                 self.resampler = soxr.ResampleStream(
                     from_rate, to_rate,
                     num_channels=1,
-                    dtype=np.float32
+                    dtype=np.float32,
+                    quality=soxr_quality  # Use VHQ for best quality
                 )
+                print(f"[RESAMPLE] Using soxr {quality} quality: {from_rate}Hz -> {to_rate}Hz", flush=True)
             except Exception as e:
                 print(f"[RESAMPLE] soxr stream init error: {e}", flush=True)
         
@@ -260,7 +403,7 @@ class AudioSocketSession:
         import threading
         import queue
         
-        print(f"[UNIFIED] Starting - optimized with diagnostics", flush=True)
+        print(f"[UNIFIED] Starting - VHQ resampling + audio normalization (RMS={AUDIO_TARGET_RMS}, max_gain={AUDIO_MAX_GAIN_DB}dB)", flush=True)
         
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
@@ -296,14 +439,20 @@ class AudioSocketSession:
         
         print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms ({PRE_BUFFER_BYTES}b), min_buffer={MIN_BUFFER_MS}ms", flush=True)
         
-        # Streaming resampler for seamless audio
+        # Streaming resampler for seamless audio with VHQ (Very High Quality)
         if SOXR_AVAILABLE:
-            resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.float32)
-            print(f"[UNIFIED] Using soxr streaming resampler", flush=True)
+            try:
+                # Use VHQ (Very High Quality) for best audio quality
+                resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.float32, quality=soxr.VHQ)
+                print(f"[UNIFIED] Using soxr VHQ streaming resampler (24kHz→8kHz)", flush=True)
+            except Exception as e:
+                print(f"[UNIFIED] soxr VHQ failed, using default: {e}", flush=True)
+                resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.float32)
         else:
             resampler = None
             print(f"[UNIFIED] WARNING: Using audioop fallback", flush=True)
         resample_state = None
+        attack_state = None  # For attack envelope
         
         def audio_sender_thread():
             """Sender with precise 20ms timing and adaptive underrun handling"""
@@ -497,8 +646,8 @@ class AudioSocketSession:
                     next_frame_time = time.perf_counter()
         
         async def receiver():
-            """Receive from Gemini and resample"""
-            nonlocal resample_state
+            """Receive from Gemini, resample with VHQ quality, and normalize audio"""
+            nonlocal resample_state, attack_state
             ready_event.set()
             first_chunk = True
             
@@ -516,8 +665,9 @@ class AudioSocketSession:
                         stats['first_audio_time'] = time.perf_counter()
                         print(f"[RECV] ▶ FIRST AUDIO from Gemini: {len(audio_24k)} bytes", flush=True)
                         first_chunk = False
+                        attack_state = None  # Reset attack envelope for new audio stream
                     
-                    # Resample 24k -> 8k using streaming resampler
+                    # Resample 24k -> 8k using VHQ streaming resampler
                     if SOXR_AVAILABLE and resampler:
                         audio_np = np.frombuffer(audio_24k, dtype=np.int16)
                         audio_float = audio_np.astype(np.float32) / 32768.0
@@ -528,6 +678,13 @@ class AudioSocketSession:
                             audio_24k, 2, 1, 24000, 8000, resample_state
                         )
                     
+                    # Apply audio quality improvements (based on Asterisk-AI-Voice-Agent)
+                    # 1. Apply attack envelope to smooth audio starts (prevents pops/clicks)
+                    audio_8k, attack_state = apply_attack_envelope(audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state)
+                    
+                    # 2. Apply audio normalization to boost quiet audio
+                    audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
+                    
                     # Put in queue
                     try:
                         audio_queue.put_nowait(audio_8k)
@@ -537,7 +694,7 @@ class AudioSocketSession:
                     
                     # Log periodically
                     if stats['recv'] <= 5 or stats['recv'] % 50 == 0:
-                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)} bytes, q={audio_queue.qsize()}", flush=True)
+                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)} bytes (normalized), q={audio_queue.qsize()}", flush=True)
                         
             except asyncio.CancelledError:
                 pass
