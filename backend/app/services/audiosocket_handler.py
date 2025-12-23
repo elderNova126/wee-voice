@@ -592,16 +592,20 @@ class AudioSocketSession:
                         return
                         
                 elif len(audio_buffer) > 0:
-                    # Partial frame - pad with silence and send immediately
-                    # (Don't skip - that causes gaps!)
+                    # Partial frame - ALWAYS send it (padded with silence at the end)
+                    # Key insight: Delaying partial audio causes choppiness because it shifts
+                    # audio in time. Better to send immediately and pad the remainder.
+                    # The padding at the END of the frame is less noticeable than inserting
+                    # a full silence frame before delayed audio.
                     idle_ms = (time.perf_counter() - last_audio_time) * 1000
                     
                     stats['underruns'] += 1
                     stats['underrun_partial'] += 1
                     if stats['underrun_partial'] <= 5:
-                        print(f"[SEND] ⚠ UNDERRUN(partial): buf={len(audio_buffer)}b, frame#{stats['sent']}", flush=True)
+                        print(f"[SEND] PARTIAL: buf={len(audio_buffer)}b, idle={idle_ms:.0f}ms", flush=True)
+                    
                     try:
-                        # Pad remaining bytes with silence
+                        # Send partial audio padded with silence at the end
                         transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
                         audio_buffer = b''
                         stats['sent'] += 1
@@ -644,6 +648,8 @@ class AudioSocketSession:
             nonlocal resample_state, attack_state
             ready_event.set()
             first_chunk = True
+            last_audio_recv_time = 0.0  # Track when we last received audio (for segment detection)
+            SEGMENT_GAP_MS = 200  # If no audio for 200ms, it's a new segment
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -654,17 +660,29 @@ class AudioSocketSession:
                     if len(audio_24k) % 2:
                         audio_24k = audio_24k[:-1]
                     
+                    now = time.perf_counter()
+                    
                     # Track first audio timing
                     if first_chunk:
-                        stats['first_audio_time'] = time.perf_counter()
+                        stats['first_audio_time'] = now
                         print(f"[RECV] ▶ FIRST AUDIO from Gemini: {len(audio_24k)} bytes", flush=True)
                         first_chunk = False
                         attack_state = None  # Reset attack envelope for new audio stream
+                    elif last_audio_recv_time > 0:
+                        # Check if this is a NEW speech segment (gap in audio)
+                        gap_ms = (now - last_audio_recv_time) * 1000
+                        if gap_ms > SEGMENT_GAP_MS:
+                            # New speech segment - reset attack envelope for smooth start
+                            attack_state = None
+                            print(f"[RECV] ▶ NEW SEGMENT (gap={gap_ms:.0f}ms): resetting attack envelope", flush=True)
+                    
+                    last_audio_recv_time = now
                     
                     # === Audio Processing Pipeline (matches Asterisk-AI-Voice-Agent) ===
                     # Step 1: Remove DC offset from source audio BEFORE resampling
-                    # (DC offset causes clicks/pops at chunk boundaries)
-                    audio_24k = remove_dc_offset(audio_24k, threshold=256)
+                    # Use higher threshold (512) to be conservative - only fix significant DC
+                    # (Asterisk-AI-Voice-Agent uses 1024 for initial, 256 for post-resample)
+                    audio_24k = remove_dc_offset(audio_24k, threshold=512)
                     
                     # Step 2: Resample 24k -> 8k using audioop.ratecv with state
                     # (Asterisk-AI-Voice-Agent uses audioop exclusively - proven for telephony)
@@ -674,7 +692,8 @@ class AudioSocketSession:
                     )
                     
                     # Step 3: Remove DC offset AFTER resampling (resampling can introduce bias)
-                    audio_8k = remove_dc_offset(audio_8k, threshold=128)
+                    # Use threshold=256 to match Asterisk-AI-Voice-Agent's post-resample correction
+                    audio_8k = remove_dc_offset(audio_8k, threshold=256)
                     
                     # Step 4: Apply attack envelope to smooth audio starts (prevents pops/clicks)
                     audio_8k, attack_state = apply_attack_envelope(audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state)
