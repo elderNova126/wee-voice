@@ -528,7 +528,10 @@ class AudioSocketSession:
                     pending = pending[FRAME_SIZE:]
                     try:
                         self.writer.write(header + frame)
-                        await self.writer.drain()  # CRITICAL: wait for buffer flush like Asterisk-AI-Voice-Agent
+                        # Only drain if write buffer is getting large (avoid blocking on every frame)
+                        write_buf = self.writer.transport.get_write_buffer_size()
+                        if write_buf > 4096:  # Only drain if > 4KB buffered
+                            await self.writer.drain()
                         stats['sent'] += 1
                         empty_backoff = 0
                         last_real_emit_ts = time.perf_counter()
@@ -536,14 +539,18 @@ class AudioSocketSession:
                         break
                 
                 elif sentinel_seen:
-                    # End of stream
+                    # End of stream - send any remaining partial data
                     if pending:
                         try:
                             self.writer.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
-                            await self.writer.drain()
                             stats['sent'] += 1
                         except:
                             pass
+                    # Final drain to flush everything
+                    try:
+                        await self.writer.drain()
+                    except:
+                        pass
                     print(f"[PACER] ✓ Done: {stats['sent']} frames, under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
                     break
                 
@@ -556,17 +563,33 @@ class AudioSocketSession:
                     else:
                         # Backoff exhausted - check if should send filler
                         time_since_real = (time.perf_counter() - last_real_emit_ts) * 1000 if last_real_emit_ts else 0
-                        if time_since_real < PROVIDER_GRACE_MS:
-                            # Send filler (silence)
+                        
+                        # Suppress filler if prolonged idle (like max_filler_idle_ms in Asterisk-AI-Voice-Agent)
+                        MAX_FILLER_IDLE_MS = 400
+                        if time_since_real >= MAX_FILLER_IDLE_MS:
+                            # Don't send filler - just wait (prevents tail drift)
+                            pass
+                        elif time_since_real < PROVIDER_GRACE_MS:
+                            # Send filler - include any partial pending data (CRITICAL FIX)
+                            if pending:
+                                # Pad partial data with silence
+                                frame = pending + (b'\x00' * (FRAME_SIZE - len(pending)))
+                                pending = b''
+                                stats['underrun_partial'] += 1
+                            else:
+                                frame = SILENCE_FRAME
+                                stats['underrun_empty'] += 1
                             stats['underruns'] += 1
-                            stats['underrun_empty'] += 1
                             try:
-                                self.writer.write(header + SILENCE_FRAME)
-                                await self.writer.drain()
+                                self.writer.write(header + frame)
+                                # Only drain if needed (consistent with regular frame sending)
+                                write_buf = self.writer.transport.get_write_buffer_size()
+                                if write_buf > 4096:
+                                    await self.writer.drain()
                                 stats['sent'] += 1
                             except:
                                 break
-                        empty_backoff = 0  # Reset after sending filler
+                        empty_backoff = 0  # Reset after backoff exhausted
                 
                 next_tick += TICK_SECONDS
                 
@@ -607,16 +630,12 @@ class AudioSocketSession:
                         first_chunk = False
                         attack_state = None
                     
-                    # === DC offset removal BEFORE resampling (like Asterisk-AI-Voice-Agent) ===
-                    audio_24k = remove_dc_offset(audio_24k, threshold=256)
-                    
                     # === Resample 24kHz → 8kHz (using audioop.ratecv with state) ===
+                    # NOTE: DC offset removal DISABLED - Asterisk-AI-Voice-Agent also disabled _apply_dc_block
+                    # Only use audioop.ratecv for resampling (same as their resample_audio function)
                     audio_8k, resample_state = audioop.ratecv(
                         audio_24k, 2, 1, 24000, 8000, resample_state
                     )
-                    
-                    # === DC offset removal AFTER resampling (post-resample clamp) ===
-                    audio_8k = remove_dc_offset(audio_8k, threshold=128)
                     
                     # === Apply attack envelope (20ms) ===
                     audio_8k, attack_state = apply_attack_envelope(
@@ -632,6 +651,10 @@ class AudioSocketSession:
                         stats['recv'] += 1
                     except asyncio.QueueFull:
                         pass  # Drop if full
+                    
+                    # IMPORTANT: Yield to event loop to allow pacer to run
+                    # This prevents receiver from starving the pacer
+                    await asyncio.sleep(0)
                     
                     # Log progress
                     if stats['recv'] <= 3 or stats['recv'] % 50 == 0:
