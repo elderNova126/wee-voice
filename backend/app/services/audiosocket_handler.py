@@ -498,41 +498,59 @@ class AudioSocketSession:
             frame_time = frame_time_base
             end_signal = False
             
-            # Adaptive rate control
-            SLOW_RATE = 0.025  # 25ms per frame when buffer low (20% slower)
-            NORMAL_RATE = 0.02  # 20ms per frame normally
-            CRITICAL_BUFFER = FRAME_SIZE * 5  # 100ms - switch to slow mode
-            RECOVER_BUFFER = FRAME_SIZE * 15  # 300ms - switch to normal mode
+            # Adaptive rate control - more aggressive to handle Gemini's burst gaps
+            SLOW_RATE = 0.030  # 30ms per frame when buffer low (50% slower)
+            NORMAL_RATE = 0.020  # 20ms per frame normally
+            CRITICAL_BUFFER = FRAME_SIZE * 10  # 200ms - switch to slow mode (earlier)
+            RECOVER_BUFFER = FRAME_SIZE * 25  # 500ms - switch to normal mode (higher threshold)
             
             ready_event.wait(timeout=5)
             print(f"[SEND] Adaptive sender starting (slow={SLOW_RATE*1000:.0f}ms, normal={NORMAL_RATE*1000:.0f}ms)", flush=True)
             
             # === INITIAL BUFFER: Wait for reasonable amount ===
-            # Don't wait for full 2s - just get enough to start smoothly
-            INITIAL_BUFFER = FRAME_SIZE * 25  # 500ms worth (8000 bytes)
+            # Gemini sends in bursts - first burst may be large but next burst delayed
+            # We MUST wait a minimum time to see if more bursts are coming
+            INITIAL_BUFFER = FRAME_SIZE * 50  # 1000ms worth (16000 bytes)
+            MIN_WAIT_SEC = 0.5  # ALWAYS wait at least 500ms to catch multiple bursts
+            MAX_WAIT_SEC = 5.0  # Give up after 5 seconds
+            
             buffer_start = time.perf_counter()
+            last_log = 0
             
             while not stop_event.is_set() and not end_signal:
                 try:
-                    chunk = audio_queue.get(timeout=0.1)
+                    chunk = audio_queue.get(timeout=0.05)  # 50ms poll
                     if chunk is None:
                         end_signal = True
                         break
                     pending += chunk
+                    
+                    # Log progress every 200ms of audio
+                    buf_ms = len(pending) / 16
+                    if buf_ms >= last_log + 200:
+                        print(f"[SEND] Buffering: {buf_ms:.0f}ms", flush=True)
+                        last_log = buf_ms
+                        
                 except queue.Empty:
                     pass
                 
                 elapsed = time.perf_counter() - buffer_start
+                buf_ms = len(pending) / 16
                 
-                # Start when we have 500ms OR waited 1 second with some audio
-                if len(pending) >= INITIAL_BUFFER:
-                    print(f"[SEND] Initial buffer ready: {len(pending)/16:.0f}ms", flush=True)
+                # Exit conditions - note MIN_WAIT requirement!
+                # 1. Have 1 second buffer AND waited minimum time
+                if len(pending) >= INITIAL_BUFFER and elapsed >= MIN_WAIT_SEC:
+                    print(f"[SEND] Buffer ready: {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
                     break
-                if len(pending) >= FRAME_SIZE * 5 and elapsed > 1.0:
-                    print(f"[SEND] Starting early: {len(pending)/16:.0f}ms after {elapsed:.1f}s", flush=True)
+                
+                # 2. Have some audio and waited past max time
+                if len(pending) >= FRAME_SIZE * 5 and elapsed > MAX_WAIT_SEC:
+                    print(f"[SEND] Max wait reached: {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
                     break
-                if elapsed > 10.0:
-                    print(f"[SEND] Timeout: {len(pending)/16:.0f}ms", flush=True)
+                
+                # 3. Hard timeout
+                if elapsed > 15.0:
+                    print(f"[SEND] Timeout: {buf_ms:.0f}ms", flush=True)
                     break
             
             if len(pending) < FRAME_SIZE:
