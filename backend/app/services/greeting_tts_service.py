@@ -74,18 +74,35 @@ def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender
     Returns None if not cached - caller should NOT wait for generation.
     """
     if not greeting_text:
+        print(f"[GREETING-CACHE] No greeting text provided", flush=True)
         return None
     
     voice = get_gemini_voice_name(language, gender)
     cache_path = get_greeting_cache_path(greeting_text, voice)
+    
+    print(f"[GREETING-CACHE] Looking for: {cache_path.name}", flush=True)
+    print(f"[GREETING-CACHE] Voice={voice}, Lang={language}, Gender={gender}", flush=True)
+    print(f"[GREETING-CACHE] Greeting text: '{greeting_text[:50]}...'", flush=True)
     
     if cache_path.exists():
         try:
             with open(cache_path, 'rb') as f:
                 data = f.read()
             if len(data) > 0:
+                print(f"[GREETING-CACHE] ✅ Found: {len(data)} bytes", flush=True)
                 return data
-        except Exception:
+            else:
+                print(f"[GREETING-CACHE] ⚠ File exists but empty", flush=True)
+        except Exception as e:
+            print(f"[GREETING-CACHE] ❌ Read error: {e}", flush=True)
+    else:
+        print(f"[GREETING-CACHE] ⚠ File not found: {cache_path}", flush=True)
+        # List available cache files for debugging
+        try:
+            files = list(GREETING_CACHE_DIR.glob("*.pcm"))
+            if files:
+                print(f"[GREETING-CACHE] Available files: {[f.name for f in files[:5]]}", flush=True)
+        except:
             pass
     
     return None

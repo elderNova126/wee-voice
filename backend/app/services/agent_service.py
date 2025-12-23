@@ -432,21 +432,10 @@ VOICE CONSISTENCY INSTRUCTION:
                 except Exception as e:
                     logger.warning(f"Failed to send greeting trigger: {e}")
             elif self.skip_greeting_trigger:
-                logger.info("Skipping CALL_START trigger - TTS greeting was already played")
-                # Inform Gemini that greeting was already delivered via TTS
-                try:
-                    if self.agent.language.startswith('fr'):
-                        await self.session.send(
-                            input=f"[Le message d'accueil a déjà été prononcé: \"{self.agent.greeting}\". Attends que l'appelant parle, puis réponds naturellement en français.]",
-                            end_of_turn=False
-                        )
-                    else:
-                        await self.session.send(
-                            input=f"[The greeting has already been spoken: \"{self.agent.greeting}\". Wait for the caller to speak, then respond naturally in English.]",
-                            end_of_turn=False
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to send greeting context: {e}")
+                logger.info("Skipping CALL_START trigger - pre-recorded greeting was already played")
+                # Don't send anything to Gemini - just let it listen for user audio
+                # The greeting was already played via pre-recorded audio
+                # Gemini will respond naturally when user speaks
             
             # Note: Status and started_at are now set in websocket.py after this returns successfully
             return True

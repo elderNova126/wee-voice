@@ -1285,11 +1285,13 @@ class AudioSocketSession:
             
             logger.info(f"Created call {self.call.id}")
             
-            # Get CACHED TTS greeting INSTANTLY (no generation during call!)
-            # Greetings are pre-generated at server startup or when agent is updated
-            if self.agent.greeting and EDGE_TTS_AVAILABLE:
+            # Get CACHED greeting INSTANTLY (no generation during call!)
+            # Greetings are pre-generated at server startup using GEMINI (same voice)
+            if self.agent.greeting:
                 language = getattr(self.agent, 'language', 'fr-FR')
                 gender = getattr(self.agent, 'voice_gender', 'male')
+                
+                print(f"[SETUP] Looking for cached greeting (lang={language}, gender={gender})...", flush=True)
                 
                 # INSTANT cache lookup (no await, no blocking!)
                 self.greeting_audio = get_cached_greeting_sync(
@@ -1299,9 +1301,9 @@ class AudioSocketSession:
                 )
                 
                 if self.greeting_audio:
-                    print(f"[SETUP] ✅ TTS greeting from cache: {len(self.greeting_audio)} bytes (INSTANT!)", flush=True)
+                    print(f"[SETUP] ✅ Greeting from cache: {len(self.greeting_audio)} bytes (INSTANT!)", flush=True)
                 else:
-                    print(f"[SETUP] ⚠ No cached greeting, using Gemini (trigger background gen)", flush=True)
+                    print(f"[SETUP] ⚠ No cached greeting found, Gemini will generate during call", flush=True)
                     # Trigger background generation for NEXT call (non-blocking)
                     tts_service = get_greeting_tts_service()
                     tts_service.trigger_background_generation(
@@ -1309,6 +1311,8 @@ class AudioSocketSession:
                         language=language,
                         gender=gender
                     )
+            else:
+                print(f"[SETUP] No greeting configured for agent", flush=True)
             
             print(f"[SETUP] _setup_call_quick() DONE", flush=True)
             return True
@@ -1350,21 +1354,36 @@ class AudioSocketSession:
     
     async def _play_tts_greeting(self):
         """
-        Play pre-generated TTS greeting IMMEDIATELY.
+        Play pre-generated greeting IMMEDIATELY.
         This runs in parallel with Gemini connection, eliminating the 5-10s delay.
         """
         if not self.greeting_audio:
+            print(f"[GREETING-PLAY] ⚠ No greeting audio to play", flush=True)
             return
         
         import time
         t0 = time.perf_counter()
-        print(f"[TTS-GREETING] Starting playback of {len(self.greeting_audio)} bytes", flush=True)
+        audio_duration_ms = len(self.greeting_audio) / 16  # 8kHz * 2 bytes = 16 bytes/ms
+        
+        # Check audio quality before playback
+        try:
+            rms_before = audioop.rms(self.greeting_audio, 2)
+            print(f"[GREETING-PLAY] 🎤 Starting playback: {len(self.greeting_audio)} bytes ({audio_duration_ms:.0f}ms), RMS={rms_before}", flush=True)
+        except:
+            print(f"[GREETING-PLAY] 🎤 Starting playback: {len(self.greeting_audio)} bytes ({audio_duration_ms:.0f}ms)", flush=True)
         
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         frames_sent = 0
         
-        # Apply normalization to TTS audio for consistent volume
+        # Apply normalization for consistent volume
         audio_data = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
+        
+        # Check RMS after normalization
+        try:
+            rms_after = audioop.rms(audio_data, 2)
+            print(f"[GREETING-PLAY] Normalized RMS: {rms_after}", flush=True)
+        except:
+            pass
         
         # Send audio in 20ms frames with proper timing
         frame_duration = 0.02  # 20ms
@@ -1373,6 +1392,7 @@ class AudioSocketSession:
         try:
             for i in range(0, len(audio_data), FRAME_SIZE):
                 if not self.is_running:
+                    print(f"[GREETING-PLAY] ⚠ Stopped early (is_running=False)", flush=True)
                     break
                 
                 chunk = audio_data[i:i + FRAME_SIZE]
@@ -1382,8 +1402,12 @@ class AudioSocketSession:
                 self.writer.write(header + chunk)
                 frames_sent += 1
                 
+                # Log first few frames for debugging
+                if frames_sent <= 3:
+                    print(f"[GREETING-PLAY] Frame #{frames_sent} sent ({len(chunk)} bytes)", flush=True)
+                
                 # Drain periodically to prevent buffer overflow
-                if frames_sent % 25 == 0:  # Every 500ms
+                if frames_sent % 25 == 0:
                     await self.writer.drain()
                 
                 # Precise timing
@@ -1395,12 +1419,14 @@ class AudioSocketSession:
             await self.writer.drain()
             
             elapsed = (time.perf_counter() - t0) * 1000
-            print(f"[TTS-GREETING] ✅ Complete: {frames_sent} frames in {elapsed:.0f}ms", flush=True)
+            print(f"[GREETING-PLAY] ✅ Complete: {frames_sent} frames in {elapsed:.0f}ms", flush=True)
             
             self.greeting_played = True
             
         except Exception as e:
-            print(f"[TTS-GREETING] Error: {e}", flush=True)
+            print(f"[GREETING-PLAY] ❌ Error: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
     
     async def _setup_call(self) -> bool:
         """Legacy setup method - calls new split methods for compatibility"""
