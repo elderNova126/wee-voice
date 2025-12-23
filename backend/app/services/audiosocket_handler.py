@@ -484,43 +484,32 @@ class AudioSocketSession:
         
         def audio_sender_thread():
             """
-            Adaptive sender for Gemini's phrase-by-phrase bursty output.
+            Sender matching Asterisk-AI-Voice-Agent golden config exactly.
             
-            Key insight: Gemini sends audio in small bursts (per phrase/word),
-            not one big 2-second burst. We need to:
-            1. Start with a smaller initial buffer
-            2. Slow down playback when buffer gets low (rate adaptation)
-            3. Speed back up when buffer recovers
+            Key settings from ai-agent.golden-google-live.yaml:
+            - min_start_ms: 120 (quick start)
+            - jitter_buffer_ms: 950
+            - provider_grace_ms: 500
+            - empty_backoff_ticks_max: 5
+            - chunk_size_ms: 20 (constant rate)
             """
             pending = b''
-            frame_time_base = 0.02  # 20ms base
-            frame_time = frame_time_base
             end_signal = False
             
-            # Settings from Asterisk-AI-Voice-Agent golden config
-            FRAME_TIME = 0.020  # 20ms per frame - constant rate, no adaptation!
-            
-            # From golden config: min_start_ms: 120, jitter_buffer_ms: 950
-            MIN_START_MS = 120   # Start quickly - trust the buffer
-            JITTER_BUFFER_MS = 950  # 950ms jitter buffer
-            
-            # From golden config: provider_grace_ms: 500, empty_backoff_ticks_max: 5
-            PROVIDER_GRACE_MS = 500  # Wait up to 500ms for more audio during underflow
-            EMPTY_BACKOFF_MAX = 5    # Max 5 empty ticks before sending filler
+            # === EXACT golden config values ===
+            FRAME_TIME = 0.020       # 20ms constant rate
+            MIN_START_FRAMES = 6     # 120ms (min_start_ms: 120)
+            PROVIDER_GRACE_MS = 500  # provider_grace_ms: 500
+            EMPTY_BACKOFF_MAX = 5    # empty_backoff_ticks_max: 5
             
             ready_event.wait(timeout=5)
+            print(f"[SEND] Golden config: min_start=120ms, grace=500ms, backoff=5", flush=True)
             
-            # === INITIAL BUFFER: Match golden config min_start_ms: 120 ===
-            INITIAL_BUFFER = FRAME_SIZE * 6  # 120ms (6 frames * 20ms)
-            MAX_WAIT_SEC = 5.0
-            
-            print(f"[SEND] Waiting for {MIN_START_MS}ms (golden config min_start_ms)...", flush=True)
+            # === QUICK START (min_start_ms: 120) ===
             buffer_start = time.perf_counter()
-            
-            # === QUICK START: Just wait for min_start_ms (120ms) of audio ===
             while not stop_event.is_set():
                 try:
-                    chunk = audio_queue.get(timeout=0.05)
+                    chunk = audio_queue.get(timeout=0.02)
                     if chunk is None:
                         end_signal = True
                     else:
@@ -528,14 +517,12 @@ class AudioSocketSession:
                 except queue.Empty:
                     pass
                 
-                elapsed = time.perf_counter() - buffer_start
-                
-                # Start as soon as we have 120ms OR end signal with any audio
-                if len(pending) >= INITIAL_BUFFER:
+                # Start when we have 120ms OR have any audio after 5 seconds
+                if len(pending) >= FRAME_SIZE * MIN_START_FRAMES:
                     break
                 if end_signal and len(pending) >= FRAME_SIZE:
                     break
-                if elapsed > MAX_WAIT_SEC:
+                if time.perf_counter() - buffer_start > 5.0:
                     break
             
             if len(pending) < FRAME_SIZE:
@@ -544,12 +531,9 @@ class AudioSocketSession:
             
             stats['playback_start_time'] = time.perf_counter()
             lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
-            print(f"[SEND] ▶ START: {len(pending)/16:.0f}ms buffered, latency={lat_ms:.0f}ms", flush=True)
+            print(f"[SEND] ▶ START: {len(pending)/16:.0f}ms, latency={lat_ms:.0f}ms", flush=True)
             
-            # === PLAYBACK: Golden config approach ===
-            # - Constant 20ms rate (no rate adaptation!)
-            # - provider_grace_ms: 500 - wait up to 500ms during underflow
-            # - empty_backoff_ticks_max: 5 - max 5 empty ticks before filler
+            # === CONSTANT RATE PLAYBACK with provider_grace ===
             next_tick = time.perf_counter()
             empty_backoff = 0
             last_audio_time = time.perf_counter()
@@ -560,10 +544,10 @@ class AudioSocketSession:
                 sleep_for = next_tick - now
                 if sleep_for > 0:
                     time.sleep(sleep_for)
-                elif sleep_for < -0.1:
-                    next_tick = time.perf_counter()
+                elif sleep_for < -0.05:
+                    next_tick = now  # Reset if behind
                 
-                # Drain queue
+                # Drain queue (non-blocking)
                 while True:
                     try:
                         chunk = audio_queue.get_nowait()
@@ -579,53 +563,52 @@ class AudioSocketSession:
                 if buf_level < stats['min_buffer']:
                     stats['min_buffer'] = buf_level
                 
-                # Send frame
+                # === FRAME EMISSION ===
                 if buf_level >= FRAME_SIZE:
                     # Have audio - send it
                     try:
                         transport.write(header + pending[:FRAME_SIZE])
                         pending = pending[FRAME_SIZE:]
                         stats['sent'] += 1
-                        empty_backoff = 0  # Reset backoff
+                        empty_backoff = 0
                     except:
                         return
                 
                 elif end_signal:
-                    # Stream ended
+                    # End of stream
                     if pending:
                         try:
                             transport.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
                             stats['sent'] += 1
                         except:
                             pass
-                    print(f"[SEND] ✓ Done: {stats['sent']} frames, underruns={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
+                    print(f"[SEND] ✓ Done: {stats['sent']} frames, under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
                     return
                 
                 else:
-                    # Buffer empty - use provider_grace waiting
-                    time_since_audio = (time.perf_counter() - last_audio_time) * 1000
+                    # Buffer empty - provider_grace waiting
+                    time_since = (time.perf_counter() - last_audio_time) * 1000
                     
-                    if time_since_audio < PROVIDER_GRACE_MS and empty_backoff < EMPTY_BACKOFF_MAX:
-                        # Within grace period - wait for more audio
+                    if time_since < PROVIDER_GRACE_MS and empty_backoff < EMPTY_BACKOFF_MAX:
+                        # Within grace - try to wait for audio
                         empty_backoff += 1
                         try:
-                            chunk = audio_queue.get(timeout=0.02)  # 20ms wait
+                            chunk = audio_queue.get(timeout=0.02)
                             if chunk is None:
                                 end_signal = True
                             else:
                                 pending += chunk
-                                buf_level = len(pending)
                                 last_audio_time = time.perf_counter()
                                 stats['wait_recoveries'] += 1
-                                if buf_level >= FRAME_SIZE:
+                                if len(pending) >= FRAME_SIZE:
                                     transport.write(header + pending[:FRAME_SIZE])
                                     pending = pending[FRAME_SIZE:]
                                     stats['sent'] += 1
                                     empty_backoff = 0
                         except queue.Empty:
-                            pass  # Will retry next tick
+                            pass
                     else:
-                        # Grace period expired - send silence (natural pause)
+                        # Grace expired - send silence
                         stats['underruns'] += 1
                         stats['underrun_empty'] += 1
                         try:
@@ -636,30 +619,23 @@ class AudioSocketSession:
                 
                 next_tick += FRAME_TIME
                 
-                # Log every 500 frames
+                # Periodic logging
                 if stats['sent'] % 500 == 0:
                     print(f"[SEND] {stats['sent']} frames, buf={buf_level/16:.0f}ms, under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
         
         async def receiver():
-            """Receive from Gemini, resample with SOXR (high quality), and process audio"""
+            """
+            Receive from Gemini with EXACT processing from Asterisk-AI-Voice-Agent:
+            1. Resample 24kHz → 8kHz using audioop.ratecv with state
+            2. Apply attack envelope (20ms)
+            3. Apply normalization (target_rms=1400, max_gain=18dB)
+            """
             nonlocal resample_state, attack_state
             ready_event.set()
             first_chunk = True
-            use_soxr = False
-            soxr_resampler = None
             
-            # Try to use soxr for better quality resampling
-            try:
-                import soxr
-                import numpy as np
-                # Create soxr resampler with VHQ (Very High Quality)
-                soxr_resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.int16, quality=soxr.VHQ)
-                use_soxr = True
-                print(f"[RECV] Using SOXR VHQ resampling (24kHz→8kHz)", flush=True)
-            except ImportError:
-                print(f"[RECV] SOXR not available, using audioop", flush=True)
-            except Exception as e:
-                print(f"[RECV] SOXR init failed: {e}, using audioop", flush=True)
+            # Use audioop.ratecv with state (EXACTLY like Asterisk-AI-Voice-Agent)
+            print(f"[RECV] Using audioop.ratecv with state (matches Asterisk-AI-Voice-Agent)", flush=True)
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -673,35 +649,22 @@ class AudioSocketSession:
                     # Track first audio timing
                     if first_chunk:
                         stats['first_audio_time'] = time.perf_counter()
-                        print(f"[RECV] ▶ FIRST AUDIO: {len(audio_24k)} bytes", flush=True)
+                        print(f"[RECV] ▶ FIRST: {len(audio_24k)}b", flush=True)
                         first_chunk = False
                         attack_state = None
                     
-                    # === Resample 24kHz → 8kHz ===
-                    if use_soxr and soxr_resampler:
-                        try:
-                            import numpy as np
-                            # Convert bytes to numpy array
-                            samples_24k = np.frombuffer(audio_24k, dtype=np.int16)
-                            # Resample with soxr (high quality)
-                            samples_8k = soxr_resampler.resample_chunk(samples_24k)
-                            # Convert back to bytes
-                            audio_8k = samples_8k.tobytes()
-                        except Exception as e:
-                            # Fallback to audioop if soxr fails
-                            audio_8k, resample_state = audioop.ratecv(
-                                audio_24k, 2, 1, 24000, 8000, resample_state
-                            )
-                    else:
-                        # Use audioop with state for continuity
-                        audio_8k, resample_state = audioop.ratecv(
-                            audio_24k, 2, 1, 24000, 8000, resample_state
-                        )
+                    # === Resample 24kHz → 8kHz (using audioop.ratecv with state) ===
+                    # This is EXACTLY what Asterisk-AI-Voice-Agent uses in google_live.py
+                    audio_8k, resample_state = audioop.ratecv(
+                        audio_24k, 2, 1, 24000, 8000, resample_state
+                    )
                     
-                    # Apply attack envelope at start only
-                    audio_8k, attack_state = apply_attack_envelope(audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state)
+                    # === Apply attack envelope (20ms) ===
+                    audio_8k, attack_state = apply_attack_envelope(
+                        audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state
+                    )
                     
-                    # Normalize audio levels
+                    # === Normalize audio (target_rms=1400, max_gain=18dB) ===
                     audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
                     
                     # Put in queue
@@ -709,19 +672,16 @@ class AudioSocketSession:
                         audio_queue.put_nowait(audio_8k)
                         stats['recv'] += 1
                     except queue.Full:
-                        print(f"[RECV] ⚠ Queue full!", flush=True)
+                        pass  # Drop if queue is full
                     
                     # Log progress
-                    if stats['recv'] <= 5 or stats['recv'] % 50 == 0:
-                        chunk_ms = len(audio_8k) / 16
-                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)}b ({chunk_ms:.0f}ms), q={audio_queue.qsize()}", flush=True)
+                    if stats['recv'] <= 3 or stats['recv'] % 50 == 0:
+                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)}b, q={audio_queue.qsize()}", flush=True)
                         
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 print(f"[RECV] Error: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
             
             # Signal end
             try:
