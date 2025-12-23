@@ -35,6 +35,7 @@ from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
 from app.models.database import SessionLocal
 from app.services.agent_service import FrenchVoiceAgentService
 from app.api.websocket import auto_summarize_call
+from app.services.greeting_tts_service import get_greeting_tts_service, EDGE_TTS_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +325,8 @@ class AudioSocketSession:
         self.phone_number_id = None  # Track which phone number this call is using
         self.is_busy_response = False  # Flag for busy response mode
         self.busy_config = None  # Store busy action config (busy_tone/voicemail)
+        self.greeting_audio = None  # Pre-generated greeting audio (PCM 8kHz)
+        self.greeting_played = False  # Flag to skip Gemini greeting if TTS greeting was played
         
     async def handle(self):
         import time
@@ -374,12 +377,13 @@ class AudioSocketSession:
             
             logger.info(f"Call UUID: {self.call_uuid}")
             
-            # OPTIMIZATION: Start setup in parallel phases
-            # Phase 1: Quick DB checks (busy/blocked) - must complete before allowing call
-            # Phase 2: Gemini init - can overlap with starting to receive audio
+            # OPTIMIZATION: Pipeline greeting and Gemini connection
+            # Phase 1: Quick DB setup (agent lookup, busy/block check)
+            # Phase 2: Start TTS greeting playback IMMEDIATELY (parallel with Gemini)
+            # Phase 3: Connect to Gemini (happens while greeting plays)
             print(f"[HANDLE] Starting _setup_call...", flush=True)
-            if not await self._setup_call():
-                print(f"[HANDLE] _setup_call FAILED", flush=True)
+            if not await self._setup_call_quick():
+                print(f"[HANDLE] _setup_call_quick FAILED", flush=True)
                 
                 print(f"[HANDLE] Preparing busy response", flush=True)
                 
@@ -389,7 +393,30 @@ class AudioSocketSession:
                     await self._play_busy_message()
                 return
             
-            # Signal AI is ready - greeting should already be generating
+            # Start TTS greeting playback IMMEDIATELY (if available)
+            # This happens BEFORE Gemini connects, eliminating 5-10s delay
+            greeting_task = None
+            if self.greeting_audio:
+                print(f"{ts()} 🎤 Starting IMMEDIATE TTS greeting playback ({len(self.greeting_audio)} bytes)", flush=True)
+                greeting_task = asyncio.create_task(self._play_tts_greeting())
+            
+            # Connect to Gemini (happens in parallel with greeting playback)
+            print(f"{ts()} Connecting to Gemini...", flush=True)
+            if not await self._connect_gemini():
+                print(f"[HANDLE] Gemini connection FAILED", flush=True)
+                if greeting_task:
+                    greeting_task.cancel()
+                return
+            
+            # Wait for greeting to finish if it's still playing
+            if greeting_task:
+                try:
+                    await greeting_task
+                    print(f"{ts()} TTS greeting playback complete", flush=True)
+                except asyncio.CancelledError:
+                    pass
+            
+            # Signal AI is ready - greeting already played via TTS!
             self.ai_ready.set()
             print(f"{ts()} AI READY - will now process caller audio", flush=True)
             
@@ -1127,10 +1154,14 @@ class AudioSocketSession:
         
         return False
     
-    async def _setup_call(self) -> bool:
-        """Setup call record and AI"""
-        print(f"[SETUP] _setup_call() STARTED", flush=True)
-        logger.info(f"[SETUP] _setup_call() STARTED")
+    async def _setup_call_quick(self) -> bool:
+        """
+        Quick setup: DB queries, agent lookup, restrictions check.
+        Does NOT connect to Gemini - that's done separately for pipelining.
+        Also generates TTS greeting for immediate playback.
+        """
+        print(f"[SETUP] _setup_call_quick() STARTED", flush=True)
+        logger.info(f"[SETUP] _setup_call_quick() STARTED")
         
         self.db = SessionLocal()
         try:
@@ -1250,7 +1281,50 @@ class AudioSocketSession:
             
             logger.info(f"Created call {self.call.id}")
             
-            self.agent_service = FrenchVoiceAgentService(self.agent, self.call)
+            # Generate TTS greeting for IMMEDIATE playback (eliminates 5-10s delay!)
+            if self.agent.greeting and EDGE_TTS_AVAILABLE:
+                print(f"[SETUP] Generating TTS greeting...", flush=True)
+                try:
+                    tts_service = get_greeting_tts_service()
+                    language = getattr(self.agent, 'language', 'fr-FR')
+                    gender = getattr(self.agent, 'voice_gender', 'male')
+                    
+                    # Get or generate greeting audio
+                    self.greeting_audio = await tts_service.get_greeting_audio(
+                        self.agent.greeting,
+                        language=language,
+                        gender=gender
+                    )
+                    
+                    if self.greeting_audio:
+                        print(f"[SETUP] ✅ TTS greeting ready: {len(self.greeting_audio)} bytes", flush=True)
+                    else:
+                        print(f"[SETUP] ⚠ TTS greeting generation failed, will use Gemini", flush=True)
+                except Exception as e:
+                    print(f"[SETUP] ⚠ TTS greeting error: {e}, will use Gemini", flush=True)
+                    self.greeting_audio = None
+            
+            print(f"[SETUP] _setup_call_quick() DONE", flush=True)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Setup error: {e}", exc_info=True)
+            await self._release_line()
+            return False
+    
+    async def _connect_gemini(self) -> bool:
+        """Connect to Gemini and start the AI session"""
+        try:
+            print(f"[GEMINI] Creating agent service...", flush=True)
+            
+            # Create agent service - pass flag if TTS greeting will be used
+            self.agent_service = FrenchVoiceAgentService(
+                self.agent, 
+                self.call,
+                skip_greeting_trigger=bool(self.greeting_audio)  # Skip if TTS greeting is available
+            )
+            
+            print(f"[GEMINI] Starting session (skip_greeting={bool(self.greeting_audio)})...", flush=True)
             if not await self.agent_service.start_session():
                 logger.error("Gemini failed")
                 await self._release_line()
@@ -1260,12 +1334,73 @@ class AudioSocketSession:
             self.db.commit()
             
             logger.info(f"Call {self.call.id} ready")
+            print(f"[GEMINI] Session started successfully", flush=True)
             return True
             
         except Exception as e:
-            logger.error(f"Setup error: {e}", exc_info=True)
+            logger.error(f"Gemini connection error: {e}", exc_info=True)
             await self._release_line()
             return False
+    
+    async def _play_tts_greeting(self):
+        """
+        Play pre-generated TTS greeting IMMEDIATELY.
+        This runs in parallel with Gemini connection, eliminating the 5-10s delay.
+        """
+        if not self.greeting_audio:
+            return
+        
+        import time
+        t0 = time.perf_counter()
+        print(f"[TTS-GREETING] Starting playback of {len(self.greeting_audio)} bytes", flush=True)
+        
+        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        frames_sent = 0
+        
+        # Apply normalization to TTS audio for consistent volume
+        audio_data = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
+        
+        # Send audio in 20ms frames with proper timing
+        frame_duration = 0.02  # 20ms
+        next_frame_time = time.perf_counter()
+        
+        try:
+            for i in range(0, len(audio_data), FRAME_SIZE):
+                if not self.is_running:
+                    break
+                
+                chunk = audio_data[i:i + FRAME_SIZE]
+                if len(chunk) < FRAME_SIZE:
+                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+                
+                self.writer.write(header + chunk)
+                frames_sent += 1
+                
+                # Drain periodically to prevent buffer overflow
+                if frames_sent % 25 == 0:  # Every 500ms
+                    await self.writer.drain()
+                
+                # Precise timing
+                next_frame_time += frame_duration
+                sleep_time = next_frame_time - time.perf_counter()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+            
+            await self.writer.drain()
+            
+            elapsed = (time.perf_counter() - t0) * 1000
+            print(f"[TTS-GREETING] ✅ Complete: {frames_sent} frames in {elapsed:.0f}ms", flush=True)
+            
+            self.greeting_played = True
+            
+        except Exception as e:
+            print(f"[TTS-GREETING] Error: {e}", flush=True)
+    
+    async def _setup_call(self) -> bool:
+        """Legacy setup method - calls new split methods for compatibility"""
+        if not await self._setup_call_quick():
+            return False
+        return await self._connect_gemini()
     
     async def _release_line(self):
         """Release the phone line when call ends"""

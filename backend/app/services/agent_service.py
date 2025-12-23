@@ -46,9 +46,10 @@ logger.propagate = True
 class FrenchVoiceAgentService:
     """Service for handling French voice agent conversations with ultra-low latency"""
     
-    def __init__(self, agent: VoiceAgent, call: Call):
+    def __init__(self, agent: VoiceAgent, call: Call, skip_greeting_trigger: bool = False):
         self.agent = agent
         self.call = call
+        self.skip_greeting_trigger = skip_greeting_trigger  # Skip CALL_START if TTS greeting was used
         
         # Validate API key
         if not settings.GOOGLE_API_KEY:
@@ -418,8 +419,9 @@ VOICE CONSISTENCY INSTRUCTION:
             
             logger.info(f"Successfully started voice session for call {self.call.session_id}")
             
-            # Send greeting trigger if configured
-            if self.agent.greeting:
+            # Send greeting trigger if configured AND TTS greeting was NOT used
+            # When TTS greeting is used, caller already heard the greeting - skip Gemini trigger
+            if self.agent.greeting and not self.skip_greeting_trigger:
                 try:
                     logger.info("Sending greeting trigger <CALL_START>")
                     # Add explicit language reminder with the greeting trigger
@@ -429,6 +431,22 @@ VOICE CONSISTENCY INSTRUCTION:
                         await self.session.send(input="<CALL_START> [Respond in English only]", end_of_turn=True)
                 except Exception as e:
                     logger.warning(f"Failed to send greeting trigger: {e}")
+            elif self.skip_greeting_trigger:
+                logger.info("Skipping CALL_START trigger - TTS greeting was already played")
+                # Inform Gemini that greeting was already delivered via TTS
+                try:
+                    if self.agent.language.startswith('fr'):
+                        await self.session.send(
+                            input=f"[Le message d'accueil a déjà été prononcé: \"{self.agent.greeting}\". Attends que l'appelant parle, puis réponds naturellement en français.]",
+                            end_of_turn=False
+                        )
+                    else:
+                        await self.session.send(
+                            input=f"[The greeting has already been spoken: \"{self.agent.greeting}\". Wait for the caller to speak, then respond naturally in English.]",
+                            end_of_turn=False
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to send greeting context: {e}")
             
             # Note: Status and started_at are now set in websocket.py after this returns successfully
             return True
