@@ -39,19 +39,19 @@ async def lifespan(app: FastAPI):
     _cleanup_task = asyncio.create_task(cleanup_rate_limits())
     logger.info("Started rate limit cleanup background task")
     
-    # PRE-WARM TTS greetings BEFORE accepting any calls
-    # This ensures instant greeting playback on ALL calls (including first call)
-    print("[TTS] 🔥 Pre-warming TTS greeting cache...")
+    # PRE-WARM greetings using GEMINI BEFORE accepting any calls
+    # This ensures instant greeting playback with SAME VOICE as conversation
+    print("[GREETING] 🔥 Pre-warming greeting cache using Gemini...")
     try:
-        from app.services.greeting_tts_service import prewarm_all_agent_greetings, EDGE_TTS_AVAILABLE
-        if EDGE_TTS_AVAILABLE:
+        from app.services.greeting_tts_service import prewarm_all_agent_greetings, GEMINI_AVAILABLE
+        if GEMINI_AVAILABLE:
             await prewarm_all_agent_greetings()
-            print("[TTS] ✅ Greeting cache pre-warmed - instant playback ready!")
+            print("[GREETING] ✅ Cache pre-warmed - same voice for greeting & conversation!")
         else:
-            print("[TTS] ⚠ edge-tts not available, greetings will use Gemini (slower)")
+            print("[GREETING] ⚠ Gemini not available for greeting pre-generation")
     except Exception as e:
-        print(f"[TTS] ⚠ Pre-warm failed: {e}")
-        logger.warning(f"TTS pre-warm failed: {e}")
+        print(f"[GREETING] ⚠ Pre-warm failed: {e}")
+        logger.warning(f"Greeting pre-warm failed: {e}")
     
     # Start AudioSocket server for Asterisk audio streaming
     global _audiosocket_server

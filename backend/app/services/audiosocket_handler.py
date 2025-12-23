@@ -456,26 +456,24 @@ class AudioSocketSession:
     
     async def _unified_audio_loop(self):
         """
-        ASYNC implementation matching Asterisk-AI-Voice-Agent EXACTLY.
+        ASYNC implementation for smooth audio playback.
         
-        Uses asyncio.Queue and async pacer loop like streaming_playback_manager.py.
-        Key settings from ai-agent.golden-google-live.yaml:
-        - min_start_ms: 120 (quick start with 6 frames buffered)
-        - jitter_buffer_ms: 950 (for Gemini's bursty output)
-        - provider_grace_ms: 500 (wait before sending silence)
-        - empty_backoff_ticks_max: 5 (skip ticks before filler)
-        - chunk_size_ms: 20 (constant 20ms frame rate)
+        Uses asyncio.Queue and async pacer loop.
+        OPTIMIZED settings to reduce choppy audio:
+        - Larger pre-buffer for smooth start
+        - Longer grace period for Gemini's bursty output
+        - More backoff before sending silence
         """
         import time
-        print(f"[UNIFIED] Starting ASYNC pacer (matches Asterisk-AI-Voice-Agent)", flush=True)
+        print(f"[UNIFIED] Starting ASYNC pacer (optimized for smooth audio)", flush=True)
         
-        # === EXACT settings from ai-agent.golden-google-live.yaml ===
-        CHUNK_SIZE_MS = 20           # chunk_size_ms: 20
-        MIN_START_MS = 120           # min_start_ms: 120
-        JITTER_BUFFER_MS = 950       # jitter_buffer_ms: 950
-        LOW_WATERMARK_MS = 80        # low_watermark_ms: 80
-        PROVIDER_GRACE_MS = 500      # provider_grace_ms: 500
-        EMPTY_BACKOFF_MAX = 5        # empty_backoff_ticks_max: 5
+        # === OPTIMIZED settings to reduce choppy audio ===
+        CHUNK_SIZE_MS = 20           # chunk_size_ms: 20 (fixed)
+        MIN_START_MS = 200           # INCREASED: Buffer 200ms before starting (was 120)
+        JITTER_BUFFER_MS = 1200      # INCREASED: More buffer for Gemini bursts (was 950)
+        LOW_WATERMARK_MS = 100       # INCREASED: Higher threshold (was 80)
+        PROVIDER_GRACE_MS = 800      # INCREASED: Wait longer before silence (was 500)
+        EMPTY_BACKOFF_MAX = 10       # INCREASED: More backoff ticks (was 5)
         
         # Derived values
         MIN_START_CHUNKS = max(1, MIN_START_MS // CHUNK_SIZE_MS)  # 6 chunks

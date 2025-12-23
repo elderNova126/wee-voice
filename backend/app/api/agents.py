@@ -140,21 +140,21 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
 
 
 def _regenerate_greeting_background(greeting: str, language: str, gender: str):
-    """Background task to regenerate TTS greeting"""
+    """Background task to regenerate greeting using Gemini (same voice as conversation)"""
     try:
-        from app.services.greeting_tts_service import generate_greeting_audio_background, EDGE_TTS_AVAILABLE
-        if EDGE_TTS_AVAILABLE and greeting:
+        from app.services.greeting_tts_service import generate_greeting_with_gemini, GEMINI_AVAILABLE
+        if GEMINI_AVAILABLE and greeting:
             # Run async function in sync context
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(
-                    generate_greeting_audio_background(greeting, language, gender)
+                    generate_greeting_with_gemini(greeting, language, gender)
                 )
             finally:
                 loop.close()
     except Exception as e:
-        print(f"[TTS] Background greeting regeneration failed: {e}", flush=True)
+        print(f"[GREETING] Background regeneration failed: {e}", flush=True)
 
 
 @router.post("/", response_model=AgentResponse)

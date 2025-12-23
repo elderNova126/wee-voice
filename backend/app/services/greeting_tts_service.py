@@ -1,98 +1,71 @@
 """
-Fast TTS Greeting Service
+Gemini Greeting Pre-Generation Service
 
-Pre-generates greeting audio using edge-tts for IMMEDIATE playback.
+Pre-generates greeting audio using GEMINI (same voice as conversation).
+This ensures voice consistency between greeting and conversation.
+
 Greetings are generated at server startup or when agents are updated.
 During calls, only cached greetings are used (instant read, <50ms).
-
-Uses miniaudio for pure-Python MP3 decoding (no ffmpeg required).
 """
 import asyncio
 import os
 import hashlib
 import logging
-import tempfile
 import audioop
 from pathlib import Path
 from typing import Optional, Dict
-import struct
+import time
 
 logger = logging.getLogger(__name__)
 
 # Cache directory for pre-generated greetings - use persistent location
-GREETING_CACHE_DIR = Path("/tmp/weedoo_greetings")
+GREETING_CACHE_DIR = Path("/tmp/weedoo_greetings_gemini")
 GREETING_CACHE_DIR.mkdir(exist_ok=True)
 
 # Audio format: 8kHz mono PCM (for Asterisk)
 TARGET_SAMPLE_RATE = 8000
 FRAME_SIZE = 320  # 20ms at 8kHz
 
+# Gemini outputs 24kHz audio
+GEMINI_SAMPLE_RATE = 24000
+
+# Check if Gemini is available
 try:
-    import edge_tts
-    EDGE_TTS_AVAILABLE = True
-    print("[TTS] ✅ edge-tts available for fast greeting generation", flush=True)
+    from google import genai
+    from app.core.config import settings
+    GEMINI_AVAILABLE = bool(settings.GOOGLE_API_KEY)
+    if GEMINI_AVAILABLE:
+        print("[GREETING] ✅ Gemini available for greeting generation (same voice as conversation)", flush=True)
+    else:
+        print("[GREETING] ⚠ GOOGLE_API_KEY not set", flush=True)
 except ImportError:
-    EDGE_TTS_AVAILABLE = False
-    print("[TTS] ⚠ edge-tts not available, will use Gemini for greetings", flush=True)
-
-# Try miniaudio for pure-Python MP3 decoding (no ffmpeg required)
-try:
-    import miniaudio
-    MINIAUDIO_AVAILABLE = True
-    print("[TTS] ✅ miniaudio available for MP3 decoding (no ffmpeg needed)", flush=True)
-except ImportError:
-    MINIAUDIO_AVAILABLE = False
-    print("[TTS] ⚠ miniaudio not available, trying pydub...", flush=True)
-
-# Fallback to pydub if miniaudio not available
-PYDUB_AVAILABLE = False
-if not MINIAUDIO_AVAILABLE:
-    try:
-        from pydub import AudioSegment
-        PYDUB_AVAILABLE = True
-        print("[TTS] ✅ pydub available for audio conversion", flush=True)
-    except ImportError:
-        print("[TTS] ⚠ pydub not available", flush=True)
+    GEMINI_AVAILABLE = False
+    print("[GREETING] ⚠ google-genai not available", flush=True)
 
 
-def get_greeting_cache_path(greeting_text: str, voice: str = "fr-FR-HenriNeural") -> Path:
+def get_gemini_voice_name(language: str, gender: str) -> str:
+    """Get Gemini voice name matching agent settings"""
+    # Map gender to Gemini voices (same as in agent_service.py)
+    if gender == "female":
+        return "Kore"
+    elif gender == "male":
+        return "Charon"
+    elif gender == "neutral":
+        return "Puck"
+    else:
+        # Default by language
+        if language.startswith('fr'):
+            return "Charon"
+        elif language.startswith('es'):
+            return "Kore"
+        else:
+            return "Puck"
+
+
+def get_greeting_cache_path(greeting_text: str, voice: str) -> Path:
     """Get cache file path for a greeting"""
-    cache_key = hashlib.md5(f"{greeting_text}:{voice}".encode()).hexdigest()
+    cache_key = hashlib.md5(f"{greeting_text}:{voice}:gemini".encode()).hexdigest()
     return GREETING_CACHE_DIR / f"greeting_{cache_key}.pcm"
-
-
-def get_voice_for_language(language: str, gender: str = "male") -> str:
-    """Get appropriate edge-tts voice for language"""
-    voice_map = {
-        "fr": {
-            "male": "fr-FR-HenriNeural",
-            "female": "fr-FR-DeniseNeural",
-            "neutral": "fr-FR-HenriNeural",
-        },
-        "en": {
-            "male": "en-US-GuyNeural",
-            "female": "en-US-JennyNeural", 
-            "neutral": "en-US-GuyNeural",
-        },
-        "es": {
-            "male": "es-ES-AlvaroNeural",
-            "female": "es-ES-ElviraNeural",
-            "neutral": "es-ES-AlvaroNeural",
-        },
-        "de": {
-            "male": "de-DE-ConradNeural",
-            "female": "de-DE-KatjaNeural",
-            "neutral": "de-DE-ConradNeural",
-        },
-    }
-    
-    lang_prefix = language[:2].lower() if language else "fr"
-    gender = gender.lower() if gender else "male"
-    
-    if lang_prefix in voice_map:
-        return voice_map[lang_prefix].get(gender, voice_map[lang_prefix]["male"])
-    
-    return voice_map["fr"].get(gender, "fr-FR-HenriNeural")
 
 
 def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender: str = "male") -> Optional[bytes]:
@@ -103,7 +76,7 @@ def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender
     if not greeting_text:
         return None
     
-    voice = get_voice_for_language(language, gender)
+    voice = get_gemini_voice_name(language, gender)
     cache_path = get_greeting_cache_path(greeting_text, voice)
     
     if cache_path.exists():
@@ -118,150 +91,113 @@ def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender
     return None
 
 
-async def generate_greeting_audio_background(
+async def generate_greeting_with_gemini(
     greeting_text: str,
     language: str = "fr-FR",
     gender: str = "male"
 ) -> bool:
     """
-    Generate greeting audio in background (for pre-warming cache).
-    NOT to be called during active calls - only for pre-generation.
+    Generate greeting audio using GEMINI (same voice as conversation).
+    This ensures voice consistency - greeting sounds the same as conversation.
     """
-    if not EDGE_TTS_AVAILABLE:
+    if not GEMINI_AVAILABLE:
+        print("[GREETING] ❌ Gemini not available", flush=True)
         return False
     
     if not greeting_text or not greeting_text.strip():
         return False
     
-    voice = get_voice_for_language(language, gender)
+    voice = get_gemini_voice_name(language, gender)
     cache_path = get_greeting_cache_path(greeting_text, voice)
     
     # Skip if already cached
     if cache_path.exists() and cache_path.stat().st_size > 0:
-        print(f"[TTS] Greeting already cached: {cache_path.name}", flush=True)
+        print(f"[GREETING] Already cached: {cache_path.name}", flush=True)
         return True
     
     try:
-        import time
         start_time = time.perf_counter()
-        print(f"[TTS] Generating greeting for: '{greeting_text[:50]}...'", flush=True)
+        print(f"[GREETING] Generating with Gemini ({voice}): '{greeting_text[:50]}...'", flush=True)
         
-        # Generate audio with edge-tts
-        communicate = edge_tts.Communicate(greeting_text, voice)
+        # Create Gemini client
+        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
         
+        # Build config for Gemini Live API
+        config = {
+            "response_modalities": ["AUDIO"],
+            "speech_config": {
+                "voice_config": {
+                    "prebuilt_voice_config": {
+                        "voice_name": voice
+                    }
+                }
+            }
+        }
+        
+        # Connect to Gemini and generate greeting
         audio_chunks = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_chunks.append(chunk["data"])
+        
+        async with client.aio.live.connect(
+            model=settings.GEMINI_MODEL,
+            config=config
+        ) as session:
+            # Send greeting text with instruction to just say it
+            lang_instruction = "Réponds en français" if language.startswith('fr') else "Respond in English"
+            prompt = f"[{lang_instruction}] Say exactly this greeting, nothing more: \"{greeting_text}\""
+            
+            await session.send(input=prompt, end_of_turn=True)
+            
+            # Collect audio response
+            turn = session.receive()
+            async for response in turn:
+                if hasattr(response, 'data') and response.data:
+                    audio_chunks.append(response.data)
+                
+                # Check for turn complete
+                if hasattr(response, 'server_content'):
+                    if getattr(response.server_content, 'turn_complete', False):
+                        break
         
         if not audio_chunks:
-            print("[TTS] ❌ No audio generated", flush=True)
+            print("[GREETING] ❌ No audio received from Gemini", flush=True)
             return False
         
-        mp3_data = b''.join(audio_chunks)
+        # Combine all audio chunks (24kHz PCM)
+        audio_24k = b''.join(audio_chunks)
         gen_time = (time.perf_counter() - start_time) * 1000
-        print(f"[TTS] Generated MP3 in {gen_time:.0f}ms ({len(mp3_data)} bytes)", flush=True)
+        print(f"[GREETING] Gemini generated {len(audio_24k)} bytes in {gen_time:.0f}ms", flush=True)
         
-        # Convert MP3 to 8kHz PCM using ffmpeg
-        pcm_data = await convert_mp3_to_pcm(mp3_data)
+        # Resample 24kHz -> 8kHz for Asterisk
+        audio_8k, _ = audioop.ratecv(audio_24k, 2, 1, GEMINI_SAMPLE_RATE, TARGET_SAMPLE_RATE, None)
         
-        if pcm_data:
-            try:
-                with open(cache_path, 'wb') as f:
-                    f.write(pcm_data)
-                total_time = (time.perf_counter() - start_time) * 1000
-                print(f"[TTS] ✅ Greeting cached: {len(pcm_data)} bytes in {total_time:.0f}ms", flush=True)
-                return True
-            except Exception as e:
-                print(f"[TTS] ❌ Cache write failed: {e}", flush=True)
+        # Cache the audio
+        try:
+            with open(cache_path, 'wb') as f:
+                f.write(audio_8k)
+            total_time = (time.perf_counter() - start_time) * 1000
+            print(f"[GREETING] ✅ Cached: {len(audio_8k)} bytes in {total_time:.0f}ms", flush=True)
+            return True
+        except Exception as e:
+            print(f"[GREETING] ❌ Cache write failed: {e}", flush=True)
+            return False
         
+    except Exception as e:
+        print(f"[GREETING] ❌ Gemini generation failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         return False
-        
-    except Exception as e:
-        print(f"[TTS] ❌ Generation failed: {e}", flush=True)
-        return False
-
-
-async def convert_mp3_to_pcm(mp3_data: bytes) -> Optional[bytes]:
-    """
-    Convert MP3 audio to 8kHz mono PCM.
-    Uses miniaudio (pure Python, no ffmpeg required).
-    Falls back to pydub if miniaudio not available.
-    """
-    if MINIAUDIO_AVAILABLE:
-        return await _convert_with_miniaudio(mp3_data)
-    elif PYDUB_AVAILABLE:
-        return await _convert_with_pydub(mp3_data)
-    else:
-        print("[TTS] ❌ No MP3 decoder available (install miniaudio or pydub)", flush=True)
-        return None
-
-
-async def _convert_with_miniaudio(mp3_data: bytes) -> Optional[bytes]:
-    """Convert MP3 to 8kHz PCM using miniaudio (pure Python, no ffmpeg)"""
-    try:
-        import numpy as np
-        
-        # Decode MP3 to raw PCM
-        decoded = miniaudio.decode(mp3_data, output_format=miniaudio.SampleFormat.SIGNED16)
-        
-        # Get the raw samples
-        samples = np.frombuffer(decoded.samples, dtype=np.int16)
-        
-        # Convert to mono if stereo
-        if decoded.nchannels == 2:
-            samples = samples.reshape(-1, 2).mean(axis=1).astype(np.int16)
-        
-        # Resample to 8kHz if needed
-        if decoded.sample_rate != TARGET_SAMPLE_RATE:
-            # Use audioop for resampling
-            pcm_bytes = samples.tobytes()
-            resampled, _ = audioop.ratecv(
-                pcm_bytes, 2, 1, 
-                decoded.sample_rate, TARGET_SAMPLE_RATE, 
-                None
-            )
-            return resampled
-        
-        return samples.tobytes()
-        
-    except Exception as e:
-        print(f"[TTS] miniaudio conversion failed: {e}", flush=True)
-        return None
-
-
-async def _convert_with_pydub(mp3_data: bytes) -> Optional[bytes]:
-    """Convert MP3 to 8kHz PCM using pydub (may require ffmpeg)"""
-    try:
-        import io
-        from pydub import AudioSegment
-        
-        # Load MP3 from bytes
-        audio = AudioSegment.from_mp3(io.BytesIO(mp3_data))
-        
-        # Convert to mono, 8kHz, 16-bit
-        audio = audio.set_channels(1)
-        audio = audio.set_frame_rate(TARGET_SAMPLE_RATE)
-        audio = audio.set_sample_width(2)  # 16-bit
-        
-        # Get raw PCM data
-        return audio.raw_data
-        
-    except Exception as e:
-        print(f"[TTS] pydub conversion failed: {e}", flush=True)
-        return None
 
 
 async def prewarm_all_agent_greetings():
     """
-    Pre-generate greetings for ALL agents at server startup.
-    This ensures instant greeting playback for all calls.
+    Pre-generate greetings for ALL agents at server startup using GEMINI.
+    This ensures instant greeting playback with the SAME VOICE as conversation.
     """
-    if not EDGE_TTS_AVAILABLE:
-        print("[TTS] ⚠ edge-tts not available, skipping pre-warm", flush=True)
+    if not GEMINI_AVAILABLE:
+        print("[GREETING] ⚠ Gemini not available, skipping pre-warm", flush=True)
         return
     
-    print("[TTS] 🔥 Pre-warming greeting cache for all agents...", flush=True)
+    print("[GREETING] 🔥 Pre-warming greeting cache using GEMINI (same voice as conversation)...", flush=True)
     
     try:
         from app.models.database import SessionLocal
@@ -272,43 +208,45 @@ async def prewarm_all_agent_greetings():
             agents = db.query(VoiceAgent).filter(VoiceAgent.greeting.isnot(None)).all()
             
             if not agents:
-                print("[TTS] No agents with greetings found", flush=True)
+                print("[GREETING] No agents with greetings found", flush=True)
                 return
             
-            print(f"[TTS] Found {len(agents)} agents with greetings", flush=True)
+            print(f"[GREETING] Found {len(agents)} agents with greetings", flush=True)
             
             for agent in agents:
                 if agent.greeting:
                     language = getattr(agent, 'language', 'fr-FR')
                     gender = getattr(agent, 'voice_gender', 'male')
                     
-                    success = await generate_greeting_audio_background(
+                    success = await generate_greeting_with_gemini(
                         agent.greeting,
                         language=language,
                         gender=gender
                     )
                     
-                    if success:
-                        print(f"[TTS] ✅ Agent '{agent.name}' greeting ready", flush=True)
-                    else:
-                        print(f"[TTS] ⚠ Agent '{agent.name}' greeting failed", flush=True)
+                    status = "✅" if success else "⚠"
+                    print(f"[GREETING] {status} Agent '{agent.name}'", flush=True)
+                    
+                    # Small delay between agents to avoid rate limiting
+                    await asyncio.sleep(0.5)
             
-            print("[TTS] 🔥 Pre-warm complete!", flush=True)
+            print("[GREETING] 🔥 Pre-warm complete! Same voice for greeting & conversation.", flush=True)
             
         finally:
             db.close()
             
     except Exception as e:
-        print(f"[TTS] ❌ Pre-warm error: {e}", flush=True)
+        print(f"[GREETING] ❌ Pre-warm error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
 
 
 class GreetingTTSService:
     """
-    Service for managing TTS greetings.
+    Service for managing Gemini-generated greetings.
     
-    IMPORTANT: During calls, only returns cached greetings (instant).
-    If not cached, returns None - caller should use Gemini fallback.
-    Background generation is triggered for next call.
+    Uses GEMINI to generate greetings (same voice as conversation).
+    During calls, only returns cached greetings (instant).
     """
     
     def __init__(self):
@@ -336,10 +274,10 @@ class GreetingTTSService:
         Trigger background generation for next call.
         Non-blocking - returns immediately.
         """
-        if not EDGE_TTS_AVAILABLE or not greeting_text:
+        if not GEMINI_AVAILABLE or not greeting_text:
             return
         
-        voice = get_voice_for_language(language, gender)
+        voice = get_gemini_voice_name(language, gender)
         cache_key = f"{greeting_text}:{voice}"
         
         # Skip if already generating
@@ -356,17 +294,17 @@ class GreetingTTSService:
         # Start background generation
         async def generate():
             try:
-                await generate_greeting_audio_background(greeting_text, language, gender)
+                await generate_greeting_with_gemini(greeting_text, language, gender)
             except Exception as e:
-                print(f"[TTS] Background generation error: {e}", flush=True)
+                print(f"[GREETING] Background generation error: {e}", flush=True)
             finally:
                 self._pending_generation.pop(cache_key, None)
         
         self._pending_generation[cache_key] = asyncio.create_task(generate())
-        print(f"[TTS] Triggered background generation for next call", flush=True)
+        print(f"[GREETING] Triggered background Gemini generation", flush=True)
     
     def is_available(self) -> bool:
-        return EDGE_TTS_AVAILABLE
+        return GEMINI_AVAILABLE
 
 
 # Global instance
@@ -379,3 +317,7 @@ def get_greeting_tts_service() -> GreetingTTSService:
     if _greeting_service is None:
         _greeting_service = GreetingTTSService()
     return _greeting_service
+
+
+# Keep these for backward compatibility
+EDGE_TTS_AVAILABLE = GEMINI_AVAILABLE  # Alias for compatibility

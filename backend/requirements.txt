@@ -64,9 +64,8 @@ numpy==1.24.3
 scipy==1.11.4
 soxr==0.3.7  # High-quality audio resampler (better than scipy/audioop)
 
-# Fast TTS for immediate greeting playback (eliminates 5-10s Gemini delay)
-edge-tts==6.1.12
-miniaudio==1.61  # Pure Python MP3 decoder (no ffmpeg required)
+# Note: Greetings are pre-generated using Gemini for voice consistency
+# No separate TTS needed - same voice for greeting and conversation
 
 # Text Processing (optional)
 
