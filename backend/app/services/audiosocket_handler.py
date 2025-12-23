@@ -49,11 +49,11 @@ SAMPLE_RATE = 8000
 FRAME_SIZE = 320
 SILENCE_FRAME = b'\x00' * FRAME_SIZE
 
-# Audio Quality Settings (based on Asterisk-AI-Voice-Agent)
-# These values are tuned for telephony audio
+# Audio Quality Settings (based on Asterisk-AI-Voice-Agent golden config)
+# These values are tuned for telephony audio - use conservative settings to avoid artifacts
 AUDIO_TARGET_RMS = 1400  # Target RMS level for normalization
-AUDIO_MAX_GAIN_DB = 18.0  # Maximum gain to apply (prevents excessive amplification)
-AUDIO_ATTACK_MS = 20  # Attack envelope (20ms like Asterisk-AI-Voice-Agent, was 10ms)
+AUDIO_MAX_GAIN_DB = 9.0   # REDUCED from 18 - max gain (less aggressive = less pumping)
+AUDIO_ATTACK_MS = 10      # REDUCED from 20ms - shorter attack for less audible fade-in
 
 
 def remove_dc_offset(pcm_bytes: bytes, threshold: int = 256) -> bytes:
@@ -445,14 +445,13 @@ class AudioSocketSession:
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Configuration - Larger buffer for Gemini's bursty output
-        # Based on Asterisk-AI-Voice-Agent analysis: Gemini is "bursty" (high variance)
-        # For bursty streams, use 2.5x safety margin (per adaptive_streaming.py)
-        PRE_BUFFER_MS = 800   # 800ms pre-buffer (was 500ms) - critical for bursty Gemini
-        MIN_BUFFER_MS = 40    # Minimum buffer to maintain during playback (WebRTC minimum)
+        # Configuration - Buffer settings for Gemini's bursty output
+        # Based on Asterisk-AI-Voice-Agent: Gemini is "bursty" (high variance in chunk timing)
+        PRE_BUFFER_MS = 400   # REDUCED from 800 - faster start, less latency
+        LOW_BUFFER_MS = 120   # Rebuild threshold - if below this, accumulate before sending
         
-        PRE_BUFFER_BYTES = int(PRE_BUFFER_MS * 16)  # 12800 bytes = 800ms at 8kHz 16-bit
-        MIN_BUFFER_BYTES = int(MIN_BUFFER_MS * 16)  # 640 bytes = 40ms at 8kHz 16-bit
+        PRE_BUFFER_BYTES = int(PRE_BUFFER_MS * 16)   # 6400 bytes = 400ms at 8kHz 16-bit
+        LOW_BUFFER_BYTES = int(LOW_BUFFER_MS * 16)   # 1920 bytes = 120ms at 8kHz 16-bit
         
         # Thread-safe queue with larger capacity for bursty audio
         audio_queue = queue.Queue(maxsize=3000)  # Increased from 2000
@@ -474,7 +473,7 @@ class AudioSocketSession:
             'max_queue_size': 0,
         }
         
-        print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms ({PRE_BUFFER_BYTES}b), min_buffer={MIN_BUFFER_MS}ms", flush=True)
+        print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms ({PRE_BUFFER_BYTES}b), low_buffer={LOW_BUFFER_MS}ms", flush=True)
         
         # Use audioop.ratecv with state for resampling (same as Asterisk-AI-Voice-Agent)
         # This maintains continuity between chunks for seamless telephony audio
@@ -576,9 +575,16 @@ class AudioSocketSession:
                 if len(audio_buffer) < stats['min_buffer']:
                     stats['min_buffer'] = len(audio_buffer)
                 
-                # === STEP 4: Playback - ALWAYS send a frame every 20ms ===
-                # CRITICAL: Never skip frames! Skipping causes audio gaps/choppiness.
-                # Always send: real audio, padded audio, or silence.
+                # === STEP 4: Smart Playback ===
+                # Key insight: When buffer runs low, we have two choices:
+                # 1. Send partial/silence and risk choppiness from padding
+                # 2. Pause briefly and accumulate, risking a tiny gap but getting smooth audio
+                #
+                # Strategy: Check idle time to distinguish between:
+                # - "Gemini is still sending" (recent audio) -> wait briefly for more
+                # - "Gemini finished this burst" (no recent audio) -> send what we have
+                
+                idle_ms = (time.perf_counter() - last_audio_time) * 1000
                 
                 if len(audio_buffer) >= FRAME_SIZE:
                     # Have full frame - send it
@@ -592,39 +598,39 @@ class AudioSocketSession:
                         return
                         
                 elif len(audio_buffer) > 0:
-                    # Partial frame - ALWAYS send it (padded with silence at the end)
-                    # Key insight: Delaying partial audio causes choppiness because it shifts
-                    # audio in time. Better to send immediately and pad the remainder.
-                    # The padding at the END of the frame is less noticeable than inserting
-                    # a full silence frame before delayed audio.
-                    idle_ms = (time.perf_counter() - last_audio_time) * 1000
-                    
-                    stats['underruns'] += 1
-                    stats['underrun_partial'] += 1
-                    if stats['underrun_partial'] <= 5:
-                        print(f"[SEND] PARTIAL: buf={len(audio_buffer)}b, idle={idle_ms:.0f}ms", flush=True)
-                    
-                    try:
-                        # Send partial audio padded with silence at the end
-                        transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
-                        audio_buffer = b''
-                        stats['sent'] += 1
-                        last_real_frame_time = time.perf_counter()
-                    except:
-                        return
+                    # Partial frame
+                    if idle_ms < 60:
+                        # Recent audio - Gemini might be sending more
+                        # Send silence for now, keep the partial in buffer for next tick
+                        try:
+                            transport.write(header + SILENCE_FRAME)
+                            stats['sent'] += 1
+                        except:
+                            return
+                    else:
+                        # No recent audio - this is likely end of a phrase
+                        # Pad and send the partial audio
+                        stats['underruns'] += 1
+                        stats['underrun_partial'] += 1
+                        if stats['underrun_partial'] <= 5:
+                            print(f"[SEND] PARTIAL: buf={len(audio_buffer)}b, idle={idle_ms:.0f}ms", flush=True)
+                        
+                        try:
+                            transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
+                            audio_buffer = b''
+                            stats['sent'] += 1
+                            last_real_frame_time = time.perf_counter()
+                        except:
+                            return
                         
                 else:
-                    # Buffer empty - send silence (don't skip!)
-                    idle_ms = (time.perf_counter() - last_audio_time) * 1000
-                    
-                    # Track underrun only if recently had audio
+                    # Buffer empty - send silence
                     if idle_ms < 300:
                         stats['underruns'] += 1
                         stats['underrun_empty'] += 1
                         if stats['underrun_empty'] <= 5:
                             print(f"[SEND] ⚠ UNDERRUN(empty): idle={idle_ms:.0f}ms, frame#{stats['sent']}", flush=True)
                     
-                    # ALWAYS send silence - never skip frames
                     try:
                         transport.write(header + SILENCE_FRAME)
                         stats['sent'] += 1
@@ -648,8 +654,6 @@ class AudioSocketSession:
             nonlocal resample_state, attack_state
             ready_event.set()
             first_chunk = True
-            last_audio_recv_time = 0.0  # Track when we last received audio (for segment detection)
-            SEGMENT_GAP_MS = 200  # If no audio for 200ms, it's a new segment
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -660,45 +664,29 @@ class AudioSocketSession:
                     if len(audio_24k) % 2:
                         audio_24k = audio_24k[:-1]
                     
-                    now = time.perf_counter()
-                    
                     # Track first audio timing
                     if first_chunk:
-                        stats['first_audio_time'] = now
+                        stats['first_audio_time'] = time.perf_counter()
                         print(f"[RECV] ▶ FIRST AUDIO from Gemini: {len(audio_24k)} bytes", flush=True)
                         first_chunk = False
-                        attack_state = None  # Reset attack envelope for new audio stream
-                    elif last_audio_recv_time > 0:
-                        # Check if this is a NEW speech segment (gap in audio)
-                        gap_ms = (now - last_audio_recv_time) * 1000
-                        if gap_ms > SEGMENT_GAP_MS:
-                            # New speech segment - reset attack envelope for smooth start
-                            attack_state = None
-                            print(f"[RECV] ▶ NEW SEGMENT (gap={gap_ms:.0f}ms): resetting attack envelope", flush=True)
+                        # Apply attack envelope ONLY at the very start of the call
+                        # (NOT on every gap - that causes mid-word fade-ins)
+                        attack_state = None
                     
-                    last_audio_recv_time = now
+                    # === Audio Processing Pipeline ===
+                    # SIMPLIFIED: Asterisk-AI-Voice-Agent disabled DC block ("was corrupting audio")
+                    # So we keep it minimal - just resample and normalize
                     
-                    # === Audio Processing Pipeline (matches Asterisk-AI-Voice-Agent) ===
-                    # Step 1: Remove DC offset from source audio BEFORE resampling
-                    # Use higher threshold (512) to be conservative - only fix significant DC
-                    # (Asterisk-AI-Voice-Agent uses 1024 for initial, 256 for post-resample)
-                    audio_24k = remove_dc_offset(audio_24k, threshold=512)
-                    
-                    # Step 2: Resample 24k -> 8k using audioop.ratecv with state
-                    # (Asterisk-AI-Voice-Agent uses audioop exclusively - proven for telephony)
+                    # Step 1: Resample 24k -> 8k using audioop.ratecv with state
                     # The state parameter maintains continuity between chunks for seamless audio
                     audio_8k, resample_state = audioop.ratecv(
                         audio_24k, 2, 1, 24000, 8000, resample_state
                     )
                     
-                    # Step 3: Remove DC offset AFTER resampling (resampling can introduce bias)
-                    # Use threshold=256 to match Asterisk-AI-Voice-Agent's post-resample correction
-                    audio_8k = remove_dc_offset(audio_8k, threshold=256)
-                    
-                    # Step 4: Apply attack envelope to smooth audio starts (prevents pops/clicks)
+                    # Step 2: Apply attack envelope ONLY at start (prevents pops/clicks)
                     audio_8k, attack_state = apply_attack_envelope(audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state)
                     
-                    # Step 5: Apply audio normalization to boost quiet audio
+                    # Step 3: Apply audio normalization to boost quiet audio
                     audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
                     
                     # Put in queue
