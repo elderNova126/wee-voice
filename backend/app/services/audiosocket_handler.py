@@ -423,158 +423,119 @@ class AudioSocketSession:
     
     async def _unified_audio_loop(self):
         """
-        Optimized audio loop for Gemini's bursty audio output.
+        ASYNC implementation matching Asterisk-AI-Voice-Agent EXACTLY.
         
-        Key improvements for choppy audio fix (based on Asterisk-AI-Voice-Agent):
-        1. Larger pre-buffer (800ms) for Gemini's bursty nature (was 500ms)
-        2. Adaptive underrun recovery - wait for audio before sending silence
-        3. Precise 20ms frame timing using perf_counter
-        4. Track wait recoveries to measure fix effectiveness
-        
-        Based on Asterisk-AI-Voice-Agent's adaptive_streaming.py:
-        - Gemini is classified as "bursty" (high variance CoV >= 0.5)
-        - For bursty streams, uses 2.5x safety margin (150% extra buffering)
+        Uses asyncio.Queue and async pacer loop like streaming_playback_manager.py.
+        Key settings from ai-agent.golden-google-live.yaml:
+        - min_start_ms: 120 (quick start with 6 frames buffered)
+        - jitter_buffer_ms: 950 (for Gemini's bursty output)
+        - provider_grace_ms: 500 (wait before sending silence)
+        - empty_backoff_ticks_max: 5 (skip ticks before filler)
+        - chunk_size_ms: 20 (constant 20ms frame rate)
         """
         import time
-        import threading
-        import queue
+        print(f"[UNIFIED] Starting ASYNC pacer (matches Asterisk-AI-Voice-Agent)", flush=True)
         
-        print(f"[UNIFIED] Starting - VHQ resampling + audio normalization (RMS={AUDIO_TARGET_RMS}, max_gain={AUDIO_MAX_GAIN_DB}dB)", flush=True)
+        # === EXACT settings from ai-agent.golden-google-live.yaml ===
+        CHUNK_SIZE_MS = 20           # chunk_size_ms: 20
+        MIN_START_MS = 120           # min_start_ms: 120
+        JITTER_BUFFER_MS = 950       # jitter_buffer_ms: 950
+        LOW_WATERMARK_MS = 80        # low_watermark_ms: 80
+        PROVIDER_GRACE_MS = 500      # provider_grace_ms: 500
+        EMPTY_BACKOFF_MAX = 5        # empty_backoff_ticks_max: 5
+        
+        # Derived values
+        MIN_START_CHUNKS = max(1, MIN_START_MS // CHUNK_SIZE_MS)  # 6 chunks
+        LOW_WATERMARK_CHUNKS = max(0, LOW_WATERMARK_MS // CHUNK_SIZE_MS)  # 4 chunks
+        TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02
+        
+        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms ({MIN_START_CHUNKS} chunks), jitter={JITTER_BUFFER_MS}ms", flush=True)
         
         transport = self.writer.transport
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Configuration for Gemini's BURSTY output
-        # Gemini buffers audio internally then sends large bursts with gaps between.
-        # We need a LARGE buffer to smooth out these bursts.
-        # Asterisk-AI-Voice-Agent uses 950ms jitter buffer for Google Live.
-        PRE_BUFFER_MS = 2000   # 2 seconds - must be large for bursty Gemini
-        LOW_BUFFER_MS = 500    # Start worrying when buffer drops below this
+        # Async jitter buffer (like Asterisk-AI-Voice-Agent)
+        jitter_buffer = asyncio.Queue(maxsize=500)
         
-        PRE_BUFFER_BYTES = int(PRE_BUFFER_MS * 16)   # 32000 bytes at 8kHz 16-bit
-        LOW_BUFFER_BYTES = int(LOW_BUFFER_MS * 16)   # 8000 bytes
+        # State
+        resample_state = None
+        attack_state = None
+        pending = b''  # Frame remainder buffer
+        startup_ready = False
+        empty_backoff = 0
+        last_real_emit_ts = 0.0
         
-        # Thread-safe queue with larger capacity for bursty audio
-        audio_queue = queue.Queue(maxsize=3000)  # Increased from 2000
-        stop_event = threading.Event()
-        ready_event = threading.Event()
-        
-        # Detailed statistics for debugging
         stats = {
-            'sent': 0, 
-            'recv': 0, 
-            'underruns': 0,
-            'underrun_empty': 0,      # Buffer completely empty
-            'underrun_partial': 0,     # Buffer had partial data
-            'wait_recoveries': 0,      # Times we waited and recovered (avoided underrun)
-            'first_audio_time': None,  # When first audio received from Gemini
-            'playback_start_time': None,  # When playback started
-            'last_buffer_log': 0,
-            'min_buffer': 999999,      # Track minimum buffer level (after playback started)
-            'max_queue_size': 0,
+            'sent': 0, 'recv': 0, 'underruns': 0, 
+            'underrun_empty': 0, 'underrun_partial': 0,
+            'wait_recoveries': 0, 'first_audio_time': None,
+            'playback_start_time': None, 'min_buffer': 999999,
         }
         
-        print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms, low_buffer={LOW_BUFFER_MS}ms", flush=True)
-        
-        # Use audioop.ratecv with state for resampling (same as Asterisk-AI-Voice-Agent)
-        # This maintains continuity between chunks for seamless telephony audio
-        resample_state = None  # audioop.ratecv state for continuous resampling
-        attack_state = None  # For attack envelope
-        print(f"[UNIFIED] Using audioop.ratecv with state for resampling (24kHz→8kHz)", flush=True)
-        
-        def audio_sender_thread():
+        async def pacer_loop():
             """
-            Sender matching Asterisk-AI-Voice-Agent golden config exactly.
-            
-            Key settings from ai-agent.golden-google-live.yaml:
-            - min_start_ms: 120 (quick start)
-            - jitter_buffer_ms: 950
-            - provider_grace_ms: 500
-            - empty_backoff_ticks_max: 5
-            - chunk_size_ms: 20 (constant rate)
+            ASYNC pacer loop - EXACT copy of Asterisk-AI-Voice-Agent's _pacer_loop + _drain_next_frame.
+            Runs at steady 20ms cadence, draining jitter buffer.
             """
-            pending = b''
-            end_signal = False
+            nonlocal pending, startup_ready, empty_backoff, last_real_emit_ts
             
-            # === EXACT golden config values ===
-            FRAME_TIME = 0.020       # 20ms constant rate
-            MIN_START_FRAMES = 6     # 120ms (min_start_ms: 120)
-            PROVIDER_GRACE_MS = 500  # provider_grace_ms: 500
-            EMPTY_BACKOFF_MAX = 5    # empty_backoff_ticks_max: 5
-            
-            ready_event.wait(timeout=5)
-            print(f"[SEND] Golden config: min_start=120ms, grace=500ms, backoff=5", flush=True)
-            
-            # === QUICK START (min_start_ms: 120) ===
-            buffer_start = time.perf_counter()
-            while not stop_event.is_set():
-                try:
-                    chunk = audio_queue.get(timeout=0.02)
-                    if chunk is None:
-                        end_signal = True
-                    else:
-                        pending += chunk
-                except queue.Empty:
-                    pass
-                
-                # Start when we have 120ms OR have any audio after 5 seconds
-                if len(pending) >= FRAME_SIZE * MIN_START_FRAMES:
-                    break
-                if end_signal and len(pending) >= FRAME_SIZE:
-                    break
-                if time.perf_counter() - buffer_start > 5.0:
-                    break
-            
-            if len(pending) < FRAME_SIZE:
-                print(f"[SEND] No audio", flush=True)
-                return
-            
-            stats['playback_start_time'] = time.perf_counter()
-            lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
-            print(f"[SEND] ▶ START: {len(pending)/16:.0f}ms, latency={lat_ms:.0f}ms", flush=True)
-            
-            # === CONSTANT RATE PLAYBACK with provider_grace ===
             next_tick = time.perf_counter()
-            empty_backoff = 0
-            last_audio_time = time.perf_counter()
+            sentinel_seen = False
             
-            while not stop_event.is_set():
-                # Precise 20ms timing
+            print(f"[PACER] Starting async pacer loop (20ms cadence)", flush=True)
+            
+            while self.is_running:
+                # === TIMING (like _pacer_loop) ===
                 now = time.perf_counter()
                 sleep_for = next_tick - now
                 if sleep_for > 0:
-                    time.sleep(sleep_for)
-                elif sleep_for < -0.05:
+                    await asyncio.sleep(sleep_for)
+                else:
                     next_tick = now  # Reset if behind
                 
-                # Drain queue (non-blocking)
-                while True:
+                # === DRAIN JITTER BUFFER (like _drain_next_frame) ===
+                while len(pending) < FRAME_SIZE:
                     try:
-                        chunk = audio_queue.get_nowait()
+                        chunk = jitter_buffer.get_nowait()
                         if chunk is None:
-                            end_signal = True
-                            break
+                            sentinel_seen = True
+                            continue
                         pending += chunk
-                        last_audio_time = time.perf_counter()
-                    except queue.Empty:
+                    except asyncio.QueueEmpty:
                         break
                 
                 buf_level = len(pending)
+                available_frames = buf_level // FRAME_SIZE + jitter_buffer.qsize()
+                
                 if buf_level < stats['min_buffer']:
                     stats['min_buffer'] = buf_level
                 
-                # === FRAME EMISSION ===
+                # === STARTUP GATE (like _ensure_startup_ready) ===
+                if not startup_ready:
+                    if available_frames >= MIN_START_CHUNKS:
+                        startup_ready = True
+                        stats['playback_start_time'] = time.perf_counter()
+                        lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
+                        print(f"[PACER] ▶ START: {buf_level/16:.0f}ms buffered, latency={lat_ms:.0f}ms", flush=True)
+                    else:
+                        next_tick += TICK_SECONDS
+                        continue  # Wait for more audio
+                
+                # === EMIT FRAME ===
                 if buf_level >= FRAME_SIZE:
                     # Have audio - send it
+                    frame = pending[:FRAME_SIZE]
+                    pending = pending[FRAME_SIZE:]
                     try:
-                        transport.write(header + pending[:FRAME_SIZE])
-                        pending = pending[FRAME_SIZE:]
+                        transport.write(header + frame)
+                        await asyncio.sleep(0)  # Yield to event loop
                         stats['sent'] += 1
                         empty_backoff = 0
+                        last_real_emit_ts = time.perf_counter()
                     except:
-                        return
+                        break
                 
-                elif end_signal:
+                elif sentinel_seen:
                     # End of stream
                     if pending:
                         try:
@@ -582,46 +543,34 @@ class AudioSocketSession:
                             stats['sent'] += 1
                         except:
                             pass
-                    print(f"[SEND] ✓ Done: {stats['sent']} frames, under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
-                    return
+                    print(f"[PACER] ✓ Done: {stats['sent']} frames, under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
+                    break
                 
-                else:
-                    # Buffer empty - provider_grace waiting
-                    time_since = (time.perf_counter() - last_audio_time) * 1000
-                    
-                    if time_since < PROVIDER_GRACE_MS and empty_backoff < EMPTY_BACKOFF_MAX:
-                        # Within grace - try to wait for audio
+                elif startup_ready and jitter_buffer.empty():
+                    # Buffer empty after startup - backoff logic (like _drain_next_frame)
+                    if empty_backoff < EMPTY_BACKOFF_MAX:
                         empty_backoff += 1
-                        try:
-                            chunk = audio_queue.get(timeout=0.02)
-                            if chunk is None:
-                                end_signal = True
-                            else:
-                                pending += chunk
-                                last_audio_time = time.perf_counter()
-                                stats['wait_recoveries'] += 1
-                                if len(pending) >= FRAME_SIZE:
-                                    transport.write(header + pending[:FRAME_SIZE])
-                                    pending = pending[FRAME_SIZE:]
-                                    stats['sent'] += 1
-                                    empty_backoff = 0
-                        except queue.Empty:
-                            pass
+                        stats['wait_recoveries'] += 1
+                        # Return "wait" - skip this tick
                     else:
-                        # Grace expired - send silence
-                        stats['underruns'] += 1
-                        stats['underrun_empty'] += 1
-                        try:
-                            transport.write(header + SILENCE_FRAME)
-                            stats['sent'] += 1
-                        except:
-                            return
+                        # Backoff exhausted - check if should send filler
+                        time_since_real = (time.perf_counter() - last_real_emit_ts) * 1000 if last_real_emit_ts else 0
+                        if time_since_real < PROVIDER_GRACE_MS:
+                            # Send filler (silence)
+                            stats['underruns'] += 1
+                            stats['underrun_empty'] += 1
+                            try:
+                                transport.write(header + SILENCE_FRAME)
+                                stats['sent'] += 1
+                            except:
+                                break
+                        empty_backoff = 0  # Reset after sending filler
                 
-                next_tick += FRAME_TIME
+                next_tick += TICK_SECONDS
                 
-                # Periodic logging
-                if stats['sent'] % 500 == 0:
-                    print(f"[SEND] {stats['sent']} frames, buf={buf_level/16:.0f}ms, under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
+                # Periodic log
+                if stats['sent'] > 0 and stats['sent'] % 500 == 0:
+                    print(f"[PACER] {stats['sent']} frames, buf={buf_level/16:.0f}ms, q={jitter_buffer.qsize()}, under={stats['underruns']}", flush=True)
         
         async def receiver():
             """
@@ -631,15 +580,13 @@ class AudioSocketSession:
             3. Apply normalization (target_rms=1400, max_gain=18dB)
             """
             nonlocal resample_state, attack_state
-            ready_event.set()
             first_chunk = True
             
-            # Use audioop.ratecv with state (EXACTLY like Asterisk-AI-Voice-Agent)
             print(f"[RECV] Using audioop.ratecv with state (matches Asterisk-AI-Voice-Agent)", flush=True)
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
-                    if not self.is_running or stop_event.is_set():
+                    if not self.is_running:
                         break
                     if not audio_24k or len(audio_24k) < 2:
                         continue
@@ -654,7 +601,6 @@ class AudioSocketSession:
                         attack_state = None
                     
                     # === Resample 24kHz → 8kHz (using audioop.ratecv with state) ===
-                    # This is EXACTLY what Asterisk-AI-Voice-Agent uses in google_live.py
                     audio_8k, resample_state = audioop.ratecv(
                         audio_24k, 2, 1, 24000, 8000, resample_state
                     )
@@ -667,47 +613,52 @@ class AudioSocketSession:
                     # === Normalize audio (target_rms=1400, max_gain=18dB) ===
                     audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
                     
-                    # Put in queue
+                    # Put in async jitter buffer
                     try:
-                        audio_queue.put_nowait(audio_8k)
+                        jitter_buffer.put_nowait(audio_8k)
                         stats['recv'] += 1
-                    except queue.Full:
-                        pass  # Drop if queue is full
+                    except asyncio.QueueFull:
+                        pass  # Drop if full
                     
                     # Log progress
                     if stats['recv'] <= 3 or stats['recv'] % 50 == 0:
-                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)}b, q={audio_queue.qsize()}", flush=True)
+                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)}b, q={jitter_buffer.qsize()}", flush=True)
                         
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 print(f"[RECV] Error: {e}", flush=True)
             
-            # Signal end
+            # Signal end with sentinel
             try:
-                audio_queue.put(None, timeout=2)
+                await jitter_buffer.put(None)
             except:
                 pass
             print(f"[RECV] Done: {stats['recv']} chunks", flush=True)
         
-        # Start sender thread first
-        sender_thread = threading.Thread(target=audio_sender_thread, daemon=True, name="AudioSender")
-        sender_thread.start()
+        # Run both async tasks concurrently (like Asterisk-AI-Voice-Agent)
+        pacer_task = asyncio.create_task(pacer_loop())
+        recv_task = asyncio.create_task(receiver())
         
         try:
-            await receiver()
-            sender_thread.join(timeout=10)
+            # Wait for receiver to finish (it completes when Gemini is done)
+            await recv_task
+            # Give pacer time to drain remaining audio
+            await asyncio.wait_for(pacer_task, timeout=10)
         except asyncio.CancelledError:
-            stop_event.set()
-            sender_thread.join(timeout=2)
+            pacer_task.cancel()
+            recv_task.cancel()
+        except asyncio.TimeoutError:
+            pacer_task.cancel()
         
         # Final summary
         print(f"\n[UNIFIED] === CALL SUMMARY ===", flush=True)
         print(f"[UNIFIED] Frames sent: {stats['sent']}", flush=True)
         print(f"[UNIFIED] Chunks received: {stats['recv']}", flush=True)
         print(f"[UNIFIED] Underruns: {stats['underruns']} (empty={stats['underrun_empty']}, partial={stats['underrun_partial']})", flush=True)
-        print(f"[UNIFIED] Wait recoveries: {stats['wait_recoveries']} (avoided underruns)", flush=True)
-        print(f"[UNIFIED] Min buffer: {stats['min_buffer']}b, Max queue: {stats['max_queue_size']}", flush=True)
+        print(f"[UNIFIED] Wait recoveries: {stats['wait_recoveries']} (backoffs)", flush=True)
+        min_buf = stats['min_buffer'] if stats['min_buffer'] < 999999 else 0
+        print(f"[UNIFIED] Min buffer: {min_buf}b", flush=True)
         if stats['first_audio_time'] and stats['playback_start_time']:
             latency = (stats['playback_start_time'] - stats['first_audio_time']) * 1000
             print(f"[UNIFIED] Pre-buffer latency: {latency:.0f}ms", flush=True)
