@@ -482,35 +482,71 @@ class AudioSocketSession:
         
         def audio_sender_thread():
             """
-            SIMPLE & ROBUST sender - Always send frames at steady 20ms.
+            Improved sender with proper buffering and timing.
             
-            Key principles (learned from Asterisk-AI-Voice-Agent analysis):
-            1. ALWAYS send a frame every 20ms - never skip
-            2. Use large buffer (600ms) to absorb Gemini's bursty output
-            3. When buffer is low, send silence (not nothing)
-            4. Maintain precise timing with immediate drift correction
+            Key fix: Wait for audio to accumulate BEFORE starting the tick loop.
             """
-            pending = b''  # Accumulated audio buffer
-            frame_time = 0.02  # 20ms per frame
-            started = False
-            next_tick = time.perf_counter()
+            pending = b''
+            frame_time = 0.02  # 20ms
             end_signal = False
             
-            # Wait for receiver
+            # Wait for receiver to be ready
             ready_event.wait(timeout=5)
-            print(f"[SEND] Started - Simple robust sender", flush=True)
+            print(f"[SEND] Waiting for {PRE_BUFFER_BYTES}b ({PRE_BUFFER_MS}ms) to buffer...", flush=True)
+            
+            # === PRE-BUFFER PHASE: Block until we have enough audio ===
+            buffer_start = time.perf_counter()
+            while not stop_event.is_set() and not end_signal:
+                # Try to get audio with short timeout
+                try:
+                    chunk = audio_queue.get(timeout=0.05)  # 50ms timeout
+                    if chunk is None:
+                        end_signal = True
+                        break
+                    pending += chunk
+                    
+                    # Check queue size BEFORE draining
+                    qsize = audio_queue.qsize()
+                    if qsize > stats['max_queue_size']:
+                        stats['max_queue_size'] = qsize
+                    
+                except queue.Empty:
+                    pass
+                
+                # Check if we have enough buffered
+                if len(pending) >= PRE_BUFFER_BYTES:
+                    break
+                
+                # Timeout after 10 seconds of waiting
+                if time.perf_counter() - buffer_start > 10.0:
+                    print(f"[SEND] Buffer timeout, only got {len(pending)}b", flush=True)
+                    break
+            
+            if len(pending) < FRAME_SIZE:
+                print(f"[SEND] Not enough audio to start: {len(pending)}b", flush=True)
+                return
+            
+            # Record playback start
+            stats['playback_start_time'] = time.perf_counter()
+            lat = 0
+            if stats['first_audio_time']:
+                lat = (stats['playback_start_time'] - stats['first_audio_time']) * 1000
+            print(f"[SEND] ▶ STARTED: buf={len(pending)}b ({len(pending)/16:.0f}ms), latency={lat:.0f}ms", flush=True)
+            
+            # === PLAYBACK PHASE: Send frames at precise 20ms intervals ===
+            next_tick = time.perf_counter()
             
             while not stop_event.is_set():
-                # === Precise timing ===
+                # Sleep until next tick
                 now = time.perf_counter()
                 sleep_for = next_tick - now
                 if sleep_for > 0:
                     time.sleep(sleep_for)
-                elif sleep_for < 0:
-                    # Behind schedule - reset immediately
+                elif sleep_for < -0.05:  # More than 50ms behind
                     next_tick = time.perf_counter()
                 
-                # === Drain queue ===
+                # Drain queue into pending (non-blocking)
+                drained = 0
                 while True:
                     try:
                         chunk = audio_queue.get_nowait()
@@ -518,41 +554,16 @@ class AudioSocketSession:
                             end_signal = True
                             break
                         pending += chunk
+                        drained += len(chunk)
                     except queue.Empty:
                         break
-                
-                # Track stats
-                qsize = audio_queue.qsize()
-                if qsize > stats['max_queue_size']:
-                    stats['max_queue_size'] = qsize
-                
-                # === Pre-buffer phase ===
-                if not started:
-                    if len(pending) >= PRE_BUFFER_BYTES:
-                        started = True
-                        stats['playback_start_time'] = time.perf_counter()
-                        lat = 0
-                        if stats['first_audio_time']:
-                            lat = (stats['playback_start_time'] - stats['first_audio_time']) * 1000
-                        print(f"[SEND] ▶ STARTED: buf={len(pending)}b, latency={lat:.0f}ms", flush=True)
-                        next_tick = time.perf_counter()
-                    else:
-                        # Still buffering - send silence
-                        try:
-                            transport.write(header + SILENCE_FRAME)
-                            stats['sent'] += 1
-                        except:
-                            return
-                        next_tick += frame_time
-                        continue
                 
                 # Track min buffer
                 if len(pending) < stats['min_buffer']:
                     stats['min_buffer'] = len(pending)
                 
-                # === Frame emission - ALWAYS send something ===
+                # Send frame
                 if len(pending) >= FRAME_SIZE:
-                    # Full frame available
                     frame = pending[:FRAME_SIZE]
                     pending = pending[FRAME_SIZE:]
                     try:
@@ -562,25 +573,20 @@ class AudioSocketSession:
                         return
                 
                 elif end_signal:
-                    # End of stream
+                    # End of stream - flush remaining
                     if pending:
-                        # Send remaining with padding
                         try:
                             transport.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
                             stats['sent'] += 1
                         except:
                             pass
-                        pending = b''
                     print(f"[SEND] Done: {stats['sent']} frames", flush=True)
                     return
                 
                 elif pending:
-                    # Partial frame - pad and send it immediately
-                    # (Don't wait/backoff - that causes gaps)
+                    # Partial - pad and send
                     stats['underruns'] += 1
                     stats['underrun_partial'] += 1
-                    if stats['underrun_partial'] <= 3:
-                        print(f"[SEND] Partial: {len(pending)}b", flush=True)
                     try:
                         transport.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
                         pending = b''
@@ -589,30 +595,41 @@ class AudioSocketSession:
                         return
                 
                 else:
-                    # Empty buffer - send silence
+                    # Empty - send silence
                     stats['underruns'] += 1
                     stats['underrun_empty'] += 1
-                    if stats['underrun_empty'] <= 3:
-                        print(f"[SEND] Empty buffer", flush=True)
                     try:
                         transport.write(header + SILENCE_FRAME)
                         stats['sent'] += 1
                     except:
                         return
                 
-                # Advance to next tick
                 next_tick += frame_time
                 
-                # Periodic stats (every 5 seconds)
-                if stats['sent'] % 250 == 0 and stats['sent'] > 0:
-                    print(f"[SEND] Stats: {stats['sent']} frames, buf={len(pending)}b, "
-                          f"underruns={stats['underruns']}, min={stats['min_buffer']}b", flush=True)
+                # Periodic stats
+                if stats['sent'] % 250 == 0:
+                    print(f"[SEND] {stats['sent']} frames, buf={len(pending)}b, underruns={stats['underruns']}", flush=True)
         
         async def receiver():
-            """Receive from Gemini, resample with audioop.ratecv, and normalize audio"""
+            """Receive from Gemini, resample with SOXR (high quality), and process audio"""
             nonlocal resample_state, attack_state
             ready_event.set()
             first_chunk = True
+            use_soxr = False
+            soxr_resampler = None
+            
+            # Try to use soxr for better quality resampling
+            try:
+                import soxr
+                import numpy as np
+                # Create soxr resampler with VHQ (Very High Quality)
+                soxr_resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.int16, quality=soxr.VHQ)
+                use_soxr = True
+                print(f"[RECV] Using SOXR VHQ resampling (24kHz→8kHz)", flush=True)
+            except ImportError:
+                print(f"[RECV] SOXR not available, using audioop", flush=True)
+            except Exception as e:
+                print(f"[RECV] SOXR init failed: {e}, using audioop", flush=True)
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -626,26 +643,35 @@ class AudioSocketSession:
                     # Track first audio timing
                     if first_chunk:
                         stats['first_audio_time'] = time.perf_counter()
-                        print(f"[RECV] ▶ FIRST AUDIO from Gemini: {len(audio_24k)} bytes", flush=True)
+                        print(f"[RECV] ▶ FIRST AUDIO: {len(audio_24k)} bytes", flush=True)
                         first_chunk = False
-                        # Apply attack envelope ONLY at the very start of the call
-                        # (NOT on every gap - that causes mid-word fade-ins)
                         attack_state = None
                     
-                    # === Audio Processing Pipeline ===
-                    # SIMPLIFIED: Asterisk-AI-Voice-Agent disabled DC block ("was corrupting audio")
-                    # So we keep it minimal - just resample and normalize
+                    # === Resample 24kHz → 8kHz ===
+                    if use_soxr and soxr_resampler:
+                        try:
+                            import numpy as np
+                            # Convert bytes to numpy array
+                            samples_24k = np.frombuffer(audio_24k, dtype=np.int16)
+                            # Resample with soxr (high quality)
+                            samples_8k = soxr_resampler.resample_chunk(samples_24k)
+                            # Convert back to bytes
+                            audio_8k = samples_8k.tobytes()
+                        except Exception as e:
+                            # Fallback to audioop if soxr fails
+                            audio_8k, resample_state = audioop.ratecv(
+                                audio_24k, 2, 1, 24000, 8000, resample_state
+                            )
+                    else:
+                        # Use audioop with state for continuity
+                        audio_8k, resample_state = audioop.ratecv(
+                            audio_24k, 2, 1, 24000, 8000, resample_state
+                        )
                     
-                    # Step 1: Resample 24k -> 8k using audioop.ratecv with state
-                    # The state parameter maintains continuity between chunks for seamless audio
-                    audio_8k, resample_state = audioop.ratecv(
-                        audio_24k, 2, 1, 24000, 8000, resample_state
-                    )
-                    
-                    # Step 2: Apply attack envelope ONLY at start (prevents pops/clicks)
+                    # Apply attack envelope at start only
                     audio_8k, attack_state = apply_attack_envelope(audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state)
                     
-                    # Step 3: Apply audio normalization to boost quiet audio
+                    # Normalize audio levels
                     audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
                     
                     # Put in queue
@@ -653,11 +679,11 @@ class AudioSocketSession:
                         audio_queue.put_nowait(audio_8k)
                         stats['recv'] += 1
                     except queue.Full:
-                        print(f"[RECV] ⚠ Queue full, dropping {len(audio_8k)} bytes", flush=True)
+                        print(f"[RECV] ⚠ Queue full!", flush=True)
                     
-                    # Log with chunk timing info
-                    if stats['recv'] <= 10 or stats['recv'] % 100 == 0:
-                        chunk_ms = len(audio_8k) / 16  # 16 bytes per ms at 8kHz 16-bit
+                    # Log progress
+                    if stats['recv'] <= 5 or stats['recv'] % 50 == 0:
+                        chunk_ms = len(audio_8k) / 16
                         print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)}b ({chunk_ms:.0f}ms), q={audio_queue.qsize()}", flush=True)
                         
             except asyncio.CancelledError:
@@ -672,7 +698,7 @@ class AudioSocketSession:
                 audio_queue.put(None, timeout=2)
             except:
                 pass
-            print(f"[RECV] Done: {stats['recv']} chunks received", flush=True)
+            print(f"[RECV] Done: {stats['recv']} chunks", flush=True)
         
         # Start sender thread first
         sender_thread = threading.Thread(target=audio_sender_thread, daemon=True, name="AudioSender")
