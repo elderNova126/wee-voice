@@ -485,79 +485,72 @@ class AudioSocketSession:
         
         def audio_sender_thread():
             """
-            Robust sender for Gemini's BURSTY output.
+            Adaptive sender for Gemini's phrase-by-phrase bursty output.
             
-            Gemini sends audio in large bursts with gaps between.
-            We need to buffer aggressively to smooth this out.
+            Key insight: Gemini sends audio in small bursts (per phrase/word),
+            not one big 2-second burst. We need to:
+            1. Start with a smaller initial buffer
+            2. Slow down playback when buffer gets low (rate adaptation)
+            3. Speed back up when buffer recovers
             """
             pending = b''
-            frame_time = 0.02  # 20ms
+            frame_time_base = 0.02  # 20ms base
+            frame_time = frame_time_base
             end_signal = False
-            low_buffer_warned = False
             
-            # Wait for receiver
+            # Adaptive rate control
+            SLOW_RATE = 0.025  # 25ms per frame when buffer low (20% slower)
+            NORMAL_RATE = 0.02  # 20ms per frame normally
+            CRITICAL_BUFFER = FRAME_SIZE * 5  # 100ms - switch to slow mode
+            RECOVER_BUFFER = FRAME_SIZE * 15  # 300ms - switch to normal mode
+            
             ready_event.wait(timeout=5)
-            print(f"[SEND] Buffering {PRE_BUFFER_MS}ms ({PRE_BUFFER_BYTES}b) before starting...", flush=True)
+            print(f"[SEND] Adaptive sender starting (slow={SLOW_RATE*1000:.0f}ms, normal={NORMAL_RATE*1000:.0f}ms)", flush=True)
             
-            # === PRE-BUFFER PHASE ===
-            # Keep buffering until we have PRE_BUFFER_BYTES OR we've waited long enough
-            # with some audio available
+            # === INITIAL BUFFER: Wait for reasonable amount ===
+            # Don't wait for full 2s - just get enough to start smoothly
+            INITIAL_BUFFER = FRAME_SIZE * 25  # 500ms worth (8000 bytes)
             buffer_start = time.perf_counter()
-            last_progress = 0
             
             while not stop_event.is_set() and not end_signal:
                 try:
-                    chunk = audio_queue.get(timeout=0.1)  # 100ms timeout
+                    chunk = audio_queue.get(timeout=0.1)
                     if chunk is None:
                         end_signal = True
                         break
                     pending += chunk
-                    
-                    # Log buffering progress
-                    progress_pct = int(len(pending) * 100 / PRE_BUFFER_BYTES)
-                    if progress_pct >= last_progress + 20:  # Log every 20%
-                        print(f"[SEND] Buffering: {len(pending)}b ({len(pending)/16:.0f}ms) - {progress_pct}%", flush=True)
-                        last_progress = progress_pct
-                    
                 except queue.Empty:
                     pass
                 
                 elapsed = time.perf_counter() - buffer_start
                 
-                # Exit conditions:
-                # 1. Have enough buffer
-                if len(pending) >= PRE_BUFFER_BYTES:
-                    print(f"[SEND] Buffer full: {len(pending)}b", flush=True)
+                # Start when we have 500ms OR waited 1 second with some audio
+                if len(pending) >= INITIAL_BUFFER:
+                    print(f"[SEND] Initial buffer ready: {len(pending)/16:.0f}ms", flush=True)
                     break
-                
-                # 2. Have some audio and waited a reasonable time (for short responses)
-                if len(pending) >= FRAME_SIZE * 10 and elapsed > 2.0:
-                    print(f"[SEND] Starting with partial buffer: {len(pending)}b after {elapsed:.1f}s", flush=True)
+                if len(pending) >= FRAME_SIZE * 5 and elapsed > 1.0:
+                    print(f"[SEND] Starting early: {len(pending)/16:.0f}ms after {elapsed:.1f}s", flush=True)
                     break
-                
-                # 3. Timeout
-                if elapsed > 15.0:
-                    print(f"[SEND] Timeout after {elapsed:.1f}s, got {len(pending)}b", flush=True)
+                if elapsed > 10.0:
+                    print(f"[SEND] Timeout: {len(pending)/16:.0f}ms", flush=True)
                     break
             
             if len(pending) < FRAME_SIZE:
-                print(f"[SEND] No audio to play: {len(pending)}b", flush=True)
+                print(f"[SEND] No audio", flush=True)
                 return
             
-            # Record timing
             stats['playback_start_time'] = time.perf_counter()
-            buffer_ms = len(pending) / 16
             lat_ms = 0
             if stats['first_audio_time']:
                 lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000
-            print(f"[SEND] ▶ PLAYING: buffer={buffer_ms:.0f}ms, latency={lat_ms:.0f}ms", flush=True)
+            print(f"[SEND] ▶ PLAYING: buffer={len(pending)/16:.0f}ms, latency={lat_ms:.0f}ms", flush=True)
             
-            # === PLAYBACK PHASE ===
+            # === PLAYBACK with rate adaptation ===
             next_tick = time.perf_counter()
-            last_log = time.perf_counter()
+            slow_mode = False
+            slow_frames = 0
             
             while not stop_event.is_set():
-                # Precise timing
                 now = time.perf_counter()
                 sleep_for = next_tick - now
                 if sleep_for > 0:
@@ -565,7 +558,7 @@ class AudioSocketSession:
                 elif sleep_for < -0.05:
                     next_tick = time.perf_counter()
                 
-                # Collect any new audio
+                # Drain queue
                 while True:
                     try:
                         chunk = audio_queue.get_nowait()
@@ -576,17 +569,23 @@ class AudioSocketSession:
                     except queue.Empty:
                         break
                 
-                # Track stats
                 buf_level = len(pending)
                 if buf_level < stats['min_buffer']:
                     stats['min_buffer'] = buf_level
                 
-                # Warn on low buffer
-                if buf_level < LOW_BUFFER_BYTES and not low_buffer_warned and stats['sent'] > 10:
-                    print(f"[SEND] ⚠ LOW BUFFER: {buf_level}b ({buf_level/16:.0f}ms)", flush=True)
-                    low_buffer_warned = True
-                elif buf_level >= LOW_BUFFER_BYTES:
-                    low_buffer_warned = False
+                # Adaptive rate control
+                if buf_level < CRITICAL_BUFFER and not slow_mode and not end_signal:
+                    slow_mode = True
+                    frame_time = SLOW_RATE
+                    print(f"[SEND] ⚡ SLOW MODE: buf={buf_level/16:.0f}ms", flush=True)
+                elif buf_level >= RECOVER_BUFFER and slow_mode:
+                    slow_mode = False
+                    frame_time = NORMAL_RATE
+                    print(f"[SEND] ✓ NORMAL MODE: buf={buf_level/16:.0f}ms (was slow for {slow_frames} frames)", flush=True)
+                    slow_frames = 0
+                
+                if slow_mode:
+                    slow_frames += 1
                 
                 # Send frame
                 if buf_level >= FRAME_SIZE:
@@ -604,7 +603,7 @@ class AudioSocketSession:
                             stats['sent'] += 1
                         except:
                             pass
-                    print(f"[SEND] Complete: {stats['sent']} frames", flush=True)
+                    print(f"[SEND] Done: {stats['sent']} frames, slow_frames={slow_frames}", flush=True)
                     return
                 
                 elif pending:
@@ -628,11 +627,10 @@ class AudioSocketSession:
                 
                 next_tick += frame_time
                 
-                # Periodic logging
-                now = time.perf_counter()
-                if now - last_log > 3.0:
-                    last_log = now
-                    print(f"[SEND] {stats['sent']} frames, buf={len(pending)/16:.0f}ms, underruns={stats['underruns']}", flush=True)
+                # Log every 250 frames
+                if stats['sent'] % 250 == 0:
+                    mode = "SLOW" if slow_mode else "NORMAL"
+                    print(f"[SEND] {stats['sent']} frames [{mode}], buf={buf_level/16:.0f}ms, underruns={stats['underruns']}", flush=True)
         
         async def receiver():
             """Receive from Gemini, resample with SOXR (high quality), and process audio"""
