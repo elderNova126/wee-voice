@@ -291,6 +291,15 @@ if [ "$USE_APACHE" = true ]; then
         RewriteRule ^ index.html [L]
     </Directory>
 
+    # Admin UI proxy (must come before main frontend and API)
+    # Note: Admin-ui app should be configured with base="/admin-ui/" in vite.config.ts
+    <Location /admin-ui>
+        ProxyPreserveHost On
+        ProxyPass http://127.0.0.1:3003/
+        ProxyPassReverse http://127.0.0.1:3003/
+        RequestHeader set X-Forwarded-Proto "https"
+    </Location>
+
     # WebSocket FIRST (before regular API proxy)
     RewriteEngine On
     RewriteCond %{HTTP:Upgrade} =websocket [NC]
@@ -326,6 +335,14 @@ EOF
         RewriteCond %{REQUEST_URI} !^/api
         RewriteRule ^ index.html [L]
     </Directory>
+
+    # Admin UI proxy (must come before main frontend and API)
+    # Note: Admin-ui app should be configured with base="/admin-ui/" in vite.config.ts
+    <Location /admin-ui>
+        ProxyPreserveHost On
+        ProxyPass http://127.0.0.1:3003/
+        ProxyPassReverse http://127.0.0.1:3003/
+    </Location>
 
     # WebSocket FIRST (before regular API proxy)
     RewriteEngine On
@@ -376,6 +393,19 @@ server {
     root /opt/weevoice/frontend/dist;
     index index.html;
 
+    # Admin UI application (must come before main location /)
+    location /admin-ui/ {
+        proxy_pass http://127.0.0.1:3003/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }
@@ -415,6 +445,19 @@ server {
     # Serve frontend static files
     root /opt/weevoice/frontend/dist;
     index index.html;
+
+    # Admin UI application (must come before main location /)
+    location /admin-ui/ {
+        proxy_pass http://127.0.0.1:3003/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+    }
 
     location / {
         try_files \$uri \$uri/ /index.html;
@@ -500,10 +543,14 @@ echo "============================================"
 echo ""
 echo "URLs:"
 echo "  Frontend: $PROTOCOL://$DOMAIN"
+echo "  Admin UI: $PROTOCOL://$DOMAIN/admin-ui (requires app on port 3003)"
 echo "  API:      $PROTOCOL://$DOMAIN/api"
 echo "  API Docs: $PROTOCOL://$DOMAIN/api/docs"
 echo ""
 echo "AudioSocket: 127.0.0.1:9092"
+echo ""
+echo "Note: Admin-UI app must be running on port 3003 and configured"
+echo "      with base path '/admin-ui/' in vite.config.ts"
 echo ""
 echo "Commands:"
 echo "  Status:  supervisorctl status"
