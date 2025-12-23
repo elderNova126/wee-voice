@@ -505,69 +505,78 @@ class AudioSocketSession:
             RECOVER_BUFFER = FRAME_SIZE * 25  # 500ms - switch to normal mode (higher threshold)
             
             ready_event.wait(timeout=5)
-            print(f"[SEND] Adaptive sender starting (slow={SLOW_RATE*1000:.0f}ms, normal={NORMAL_RATE*1000:.0f}ms)", flush=True)
+            print(f"[SEND] === PRE-BUFFER PHASE ===", flush=True)
             
             # === INITIAL BUFFER: Wait for reasonable amount ===
-            # Gemini sends in bursts - first burst may be large but next burst delayed
-            # We MUST wait a minimum time to see if more bursts are coming
+            # Gemini sends in bursts - we MUST wait minimum time to accumulate buffer
             INITIAL_BUFFER = FRAME_SIZE * 50  # 1000ms worth (16000 bytes)
-            MIN_WAIT_SEC = 0.5  # ALWAYS wait at least 500ms to catch multiple bursts
+            MIN_WAIT_SEC = 0.8  # ALWAYS wait at least 800ms
             MAX_WAIT_SEC = 5.0  # Give up after 5 seconds
             
             buffer_start = time.perf_counter()
-            last_log = 0
+            last_log_time = buffer_start
+            loop_count = 0
             
             # Phase 1: Collect audio until we have enough OR minimum wait time passed
             while not stop_event.is_set():
+                loop_count += 1
+                
                 try:
-                    chunk = audio_queue.get(timeout=0.05)  # 50ms poll
+                    chunk = audio_queue.get(timeout=0.1)  # 100ms poll
                     if chunk is None:
                         end_signal = True
+                        print(f"[SEND] Got END signal at loop {loop_count}", flush=True)
                         # DON'T break! Keep waiting to accumulate buffered audio
                     else:
                         pending += chunk
-                        
-                        # Log progress every 200ms of audio
-                        buf_ms = len(pending) / 16
-                        if buf_ms >= last_log + 200:
-                            print(f"[SEND] Buffering: {buf_ms:.0f}ms", flush=True)
-                            last_log = buf_ms
                         
                 except queue.Empty:
                     pass
                 
                 elapsed = time.perf_counter() - buffer_start
                 buf_ms = len(pending) / 16
+                now = time.perf_counter()
+                
+                # Log every 200ms of wall time
+                if now - last_log_time >= 0.2:
+                    print(f"[SEND] Loop {loop_count}: buf={buf_ms:.0f}ms, elapsed={elapsed:.2f}s, end={end_signal}", flush=True)
+                    last_log_time = now
                 
                 # Exit conditions - ALWAYS enforce MIN_WAIT to let buffer accumulate!
                 # 1. Have 1 second buffer AND waited minimum time
                 if len(pending) >= INITIAL_BUFFER and elapsed >= MIN_WAIT_SEC:
-                    print(f"[SEND] Buffer ready: {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
+                    print(f"[SEND] EXIT: Buffer ready {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
                     break
                 
                 # 2. End signal received AND waited minimum time (short response)
                 if end_signal and elapsed >= MIN_WAIT_SEC:
-                    print(f"[SEND] End signal + min wait: {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
+                    print(f"[SEND] EXIT: End signal + min wait {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
                     break
                 
-                # 3. End signal AND buffer is substantial (no need to wait full time)
-                if end_signal and len(pending) >= FRAME_SIZE * 20:  # 400ms
-                    print(f"[SEND] End signal + good buffer: {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
+                # 3. End signal AND buffer is substantial AND waited some time
+                if end_signal and len(pending) >= FRAME_SIZE * 25 and elapsed >= 0.3:  # 500ms buffer, 300ms wait
+                    print(f"[SEND] EXIT: End signal + good buffer {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
                     break
                 
                 # 4. Have some audio and waited past max time
                 if len(pending) >= FRAME_SIZE * 5 and elapsed > MAX_WAIT_SEC:
-                    print(f"[SEND] Max wait reached: {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
+                    print(f"[SEND] EXIT: Max wait {buf_ms:.0f}ms after {elapsed:.1f}s", flush=True)
                     break
                 
                 # 5. Hard timeout
                 if elapsed > 15.0:
-                    print(f"[SEND] Timeout: {buf_ms:.0f}ms", flush=True)
+                    print(f"[SEND] EXIT: Timeout {buf_ms:.0f}ms", flush=True)
                     break
             
+            # Check why we exited
+            if stop_event.is_set():
+                print(f"[SEND] EXIT: stop_event was set!", flush=True)
+            
             if len(pending) < FRAME_SIZE:
-                print(f"[SEND] No audio", flush=True)
+                print(f"[SEND] No audio to play", flush=True)
                 return
+            
+            print(f"[SEND] === END PRE-BUFFER: {len(pending)/16:.0f}ms in {loop_count} loops ===", flush=True)
             
             stats['playback_start_time'] = time.perf_counter()
             lat_ms = 0
