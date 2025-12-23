@@ -4,12 +4,15 @@ Fast TTS Greeting Service
 Pre-generates greeting audio using edge-tts for IMMEDIATE playback.
 Greetings are generated at server startup or when agents are updated.
 During calls, only cached greetings are used (instant read, <50ms).
+
+Uses miniaudio for pure-Python MP3 decoding (no ffmpeg required).
 """
 import asyncio
 import os
 import hashlib
 import logging
 import tempfile
+import audioop
 from pathlib import Path
 from typing import Optional, Dict
 import struct
@@ -31,6 +34,25 @@ try:
 except ImportError:
     EDGE_TTS_AVAILABLE = False
     print("[TTS] ⚠ edge-tts not available, will use Gemini for greetings", flush=True)
+
+# Try miniaudio for pure-Python MP3 decoding (no ffmpeg required)
+try:
+    import miniaudio
+    MINIAUDIO_AVAILABLE = True
+    print("[TTS] ✅ miniaudio available for MP3 decoding (no ffmpeg needed)", flush=True)
+except ImportError:
+    MINIAUDIO_AVAILABLE = False
+    print("[TTS] ⚠ miniaudio not available, trying pydub...", flush=True)
+
+# Fallback to pydub if miniaudio not available
+PYDUB_AVAILABLE = False
+if not MINIAUDIO_AVAILABLE:
+    try:
+        from pydub import AudioSegment
+        PYDUB_AVAILABLE = True
+        print("[TTS] ✅ pydub available for audio conversion", flush=True)
+    except ImportError:
+        print("[TTS] ⚠ pydub not available", flush=True)
 
 
 def get_greeting_cache_path(greeting_text: str, voice: str = "fr-FR-HenriNeural") -> Path:
@@ -161,43 +183,72 @@ async def generate_greeting_audio_background(
 
 
 async def convert_mp3_to_pcm(mp3_data: bytes) -> Optional[bytes]:
-    """Convert MP3 audio to 8kHz mono PCM using ffmpeg"""
+    """
+    Convert MP3 audio to 8kHz mono PCM.
+    Uses miniaudio (pure Python, no ffmpeg required).
+    Falls back to pydub if miniaudio not available.
+    """
+    if MINIAUDIO_AVAILABLE:
+        return await _convert_with_miniaudio(mp3_data)
+    elif PYDUB_AVAILABLE:
+        return await _convert_with_pydub(mp3_data)
+    else:
+        print("[TTS] ❌ No MP3 decoder available (install miniaudio or pydub)", flush=True)
+        return None
+
+
+async def _convert_with_miniaudio(mp3_data: bytes) -> Optional[bytes]:
+    """Convert MP3 to 8kHz PCM using miniaudio (pure Python, no ffmpeg)"""
     try:
-        # Write MP3 to temp file
-        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as mp3_file:
-            mp3_file.write(mp3_data)
-            mp3_path = mp3_file.name
+        import numpy as np
         
-        pcm_path = mp3_path.replace('.mp3', '.pcm')
+        # Decode MP3 to raw PCM
+        decoded = miniaudio.decode(mp3_data, output_format=miniaudio.SampleFormat.SIGNED16)
         
-        try:
-            result = await asyncio.create_subprocess_exec(
-                'ffmpeg', '-y', '-i', mp3_path,
-                '-ar', '8000', '-ac', '1', '-f', 's16le',
-                pcm_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+        # Get the raw samples
+        samples = np.frombuffer(decoded.samples, dtype=np.int16)
+        
+        # Convert to mono if stereo
+        if decoded.nchannels == 2:
+            samples = samples.reshape(-1, 2).mean(axis=1).astype(np.int16)
+        
+        # Resample to 8kHz if needed
+        if decoded.sample_rate != TARGET_SAMPLE_RATE:
+            # Use audioop for resampling
+            pcm_bytes = samples.tobytes()
+            resampled, _ = audioop.ratecv(
+                pcm_bytes, 2, 1, 
+                decoded.sample_rate, TARGET_SAMPLE_RATE, 
+                None
             )
-            await result.communicate()
-            
-            if result.returncode != 0:
-                return None
-            
-            with open(pcm_path, 'rb') as f:
-                return f.read()
-            
-        finally:
-            try:
-                os.unlink(mp3_path)
-            except:
-                pass
-            try:
-                os.unlink(pcm_path)
-            except:
-                pass
-                
+            return resampled
+        
+        return samples.tobytes()
+        
     except Exception as e:
-        print(f"[TTS] MP3→PCM conversion failed: {e}", flush=True)
+        print(f"[TTS] miniaudio conversion failed: {e}", flush=True)
+        return None
+
+
+async def _convert_with_pydub(mp3_data: bytes) -> Optional[bytes]:
+    """Convert MP3 to 8kHz PCM using pydub (may require ffmpeg)"""
+    try:
+        import io
+        from pydub import AudioSegment
+        
+        # Load MP3 from bytes
+        audio = AudioSegment.from_mp3(io.BytesIO(mp3_data))
+        
+        # Convert to mono, 8kHz, 16-bit
+        audio = audio.set_channels(1)
+        audio = audio.set_frame_rate(TARGET_SAMPLE_RATE)
+        audio = audio.set_sample_width(2)  # 16-bit
+        
+        # Get raw PCM data
+        return audio.raw_data
+        
+    except Exception as e:
+        print(f"[TTS] pydub conversion failed: {e}", flush=True)
         return None
 
 

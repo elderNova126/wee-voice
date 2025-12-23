@@ -66,6 +66,7 @@ soxr==0.3.7  # High-quality audio resampler (better than scipy/audioop)
 
 # Fast TTS for immediate greeting playback (eliminates 5-10s Gemini delay)
 edge-tts==6.1.12
+miniaudio==1.61  # Pure Python MP3 decoder (no ffmpeg required)
 
 # Text Processing (optional)
 
