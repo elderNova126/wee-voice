@@ -446,12 +446,11 @@ class AudioSocketSession:
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
         # Configuration - Buffer settings for Gemini's bursty output
-        # Based on Asterisk-AI-Voice-Agent: Gemini is "bursty" (high variance in chunk timing)
-        PRE_BUFFER_MS = 400   # REDUCED from 800 - faster start, less latency
-        LOW_BUFFER_MS = 120   # Rebuild threshold - if below this, accumulate before sending
+        # Asterisk-AI-Voice-Agent uses 950ms jitter buffer for Google Live (bursty)
+        # We use slightly less since we're simpler, but still need significant buffering
+        PRE_BUFFER_MS = 600   # Initial buffer before starting playback
         
-        PRE_BUFFER_BYTES = int(PRE_BUFFER_MS * 16)   # 6400 bytes = 400ms at 8kHz 16-bit
-        LOW_BUFFER_BYTES = int(LOW_BUFFER_MS * 16)   # 1920 bytes = 120ms at 8kHz 16-bit
+        PRE_BUFFER_BYTES = int(PRE_BUFFER_MS * 16)   # 9600 bytes at 8kHz 16-bit
         
         # Thread-safe queue with larger capacity for bursty audio
         audio_queue = queue.Queue(maxsize=3000)  # Increased from 2000
@@ -473,7 +472,7 @@ class AudioSocketSession:
             'max_queue_size': 0,
         }
         
-        print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms ({PRE_BUFFER_BYTES}b), low_buffer={LOW_BUFFER_MS}ms", flush=True)
+        print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms ({PRE_BUFFER_BYTES}b)", flush=True)
         
         # Use audioop.ratecv with state for resampling (same as Asterisk-AI-Voice-Agent)
         # This maintains continuity between chunks for seamless telephony audio
@@ -483,171 +482,131 @@ class AudioSocketSession:
         
         def audio_sender_thread():
             """
-            STEADY-CADENCE sender with strict 20ms timing.
+            SIMPLE & ROBUST sender - Always send frames at steady 20ms.
             
-            Key principles:
-            - NEVER block on queue operations (non-blocking get_nowait only)
-            - ALWAYS send a frame every 20ms (real audio, padded, or silence)
-            - NEVER skip frames (skipping causes audible gaps/choppiness)
-            
-            This ensures smooth, continuous audio without gaps.
+            Key principles (learned from Asterisk-AI-Voice-Agent analysis):
+            1. ALWAYS send a frame every 20ms - never skip
+            2. Use large buffer (600ms) to absorb Gemini's bursty output
+            3. When buffer is low, send silence (not nothing)
+            4. Maintain precise timing with immediate drift correction
             """
-            audio_buffer = b''
-            frame_time = 0.02  # 20ms
+            pending = b''  # Accumulated audio buffer
+            frame_time = 0.02  # 20ms per frame
             started = False
-            last_audio_time = time.perf_counter()
-            next_frame_time = time.perf_counter()
-            last_real_frame_time = time.perf_counter()  # For underrun tracking
+            next_tick = time.perf_counter()
+            end_signal = False
             
-            # Wait for receiver to start
+            # Wait for receiver
             ready_event.wait(timeout=5)
-            print(f"[SEND-THREAD] Started with STEADY-CADENCE pattern (never skip frames)", flush=True)
+            print(f"[SEND] Started - Simple robust sender", flush=True)
             
             while not stop_event.is_set():
-                # === STEP 1: Sleep until next tick (maintain steady 20ms cadence) ===
+                # === Precise timing ===
                 now = time.perf_counter()
-                sleep_for = next_frame_time - now
+                sleep_for = next_tick - now
                 if sleep_for > 0:
                     time.sleep(sleep_for)
-                elif sleep_for < -0.1:
-                    # Reset if severely behind (> 100ms)
-                    next_frame_time = time.perf_counter()
+                elif sleep_for < 0:
+                    # Behind schedule - reset immediately
+                    next_tick = time.perf_counter()
                 
-                # === STEP 2: Collect all available audio (NON-BLOCKING only!) ===
-                collected = 0
+                # === Drain queue ===
                 while True:
                     try:
-                        chunk = audio_queue.get_nowait()  # NEVER blocks
+                        chunk = audio_queue.get_nowait()
                         if chunk is None:
-                            # End signal - drain buffer
-                            print(f"[SEND] End signal, draining {len(audio_buffer)} bytes", flush=True)
-                            while len(audio_buffer) >= FRAME_SIZE:
-                                try:
-                                    transport.write(header + audio_buffer[:FRAME_SIZE])
-                                    audio_buffer = audio_buffer[FRAME_SIZE:]
-                                    stats['sent'] += 1
-                                except:
-                                    pass
-                                next_frame_time += frame_time
-                                drain_sleep = next_frame_time - time.perf_counter()
-                                if drain_sleep > 0:
-                                    time.sleep(drain_sleep)
-                            if audio_buffer:
-                                try:
-                                    transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
-                                    stats['sent'] += 1
-                                except:
-                                    pass
-                            return
-                        audio_buffer += chunk
-                        collected += len(chunk)
-                        last_audio_time = time.perf_counter()
+                            end_signal = True
+                            break
+                        pending += chunk
                     except queue.Empty:
                         break
                 
-                # Track queue stats
-                current_queue_size = audio_queue.qsize()
-                if current_queue_size > stats['max_queue_size']:
-                    stats['max_queue_size'] = current_queue_size
+                # Track stats
+                qsize = audio_queue.qsize()
+                if qsize > stats['max_queue_size']:
+                    stats['max_queue_size'] = qsize
                 
-                # === STEP 3: Pre-buffer phase ===
+                # === Pre-buffer phase ===
                 if not started:
-                    if len(audio_buffer) >= PRE_BUFFER_BYTES:
+                    if len(pending) >= PRE_BUFFER_BYTES:
                         started = True
                         stats['playback_start_time'] = time.perf_counter()
-                        latency = 0
+                        lat = 0
                         if stats['first_audio_time']:
-                            latency = (stats['playback_start_time'] - stats['first_audio_time']) * 1000
-                        print(f"[SEND] ▶ PLAYBACK STARTED: buf={len(audio_buffer)}b, pre-buffer latency={latency:.0f}ms", flush=True)
-                        next_frame_time = time.perf_counter()
-                        last_real_frame_time = time.perf_counter()
+                            lat = (stats['playback_start_time'] - stats['first_audio_time']) * 1000
+                        print(f"[SEND] ▶ STARTED: buf={len(pending)}b, latency={lat:.0f}ms", flush=True)
+                        next_tick = time.perf_counter()
                     else:
-                        # Send silence while buffering
+                        # Still buffering - send silence
                         try:
                             transport.write(header + SILENCE_FRAME)
                             stats['sent'] += 1
                         except:
                             return
-                        next_frame_time += frame_time
+                        next_tick += frame_time
                         continue
                 
-                # Track min buffer level
-                if len(audio_buffer) < stats['min_buffer']:
-                    stats['min_buffer'] = len(audio_buffer)
+                # Track min buffer
+                if len(pending) < stats['min_buffer']:
+                    stats['min_buffer'] = len(pending)
                 
-                # === STEP 4: Smart Playback ===
-                # Key insight: When buffer runs low, we have two choices:
-                # 1. Send partial/silence and risk choppiness from padding
-                # 2. Pause briefly and accumulate, risking a tiny gap but getting smooth audio
-                #
-                # Strategy: Check idle time to distinguish between:
-                # - "Gemini is still sending" (recent audio) -> wait briefly for more
-                # - "Gemini finished this burst" (no recent audio) -> send what we have
-                
-                idle_ms = (time.perf_counter() - last_audio_time) * 1000
-                
-                if len(audio_buffer) >= FRAME_SIZE:
-                    # Have full frame - send it
+                # === Frame emission - ALWAYS send something ===
+                if len(pending) >= FRAME_SIZE:
+                    # Full frame available
+                    frame = pending[:FRAME_SIZE]
+                    pending = pending[FRAME_SIZE:]
                     try:
-                        transport.write(header + audio_buffer[:FRAME_SIZE])
-                        audio_buffer = audio_buffer[FRAME_SIZE:]
+                        transport.write(header + frame)
                         stats['sent'] += 1
-                        last_real_frame_time = time.perf_counter()
-                    except Exception as e:
-                        print(f"[SEND] Write error: {e}", flush=True)
+                    except:
                         return
-                        
-                elif len(audio_buffer) > 0:
-                    # Partial frame
-                    if idle_ms < 60:
-                        # Recent audio - Gemini might be sending more
-                        # Send silence for now, keep the partial in buffer for next tick
+                
+                elif end_signal:
+                    # End of stream
+                    if pending:
+                        # Send remaining with padding
                         try:
-                            transport.write(header + SILENCE_FRAME)
+                            transport.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
                             stats['sent'] += 1
                         except:
-                            return
-                    else:
-                        # No recent audio - this is likely end of a phrase
-                        # Pad and send the partial audio
-                        stats['underruns'] += 1
-                        stats['underrun_partial'] += 1
-                        if stats['underrun_partial'] <= 5:
-                            print(f"[SEND] PARTIAL: buf={len(audio_buffer)}b, idle={idle_ms:.0f}ms", flush=True)
-                        
-                        try:
-                            transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
-                            audio_buffer = b''
-                            stats['sent'] += 1
-                            last_real_frame_time = time.perf_counter()
-                        except:
-                            return
-                        
+                            pass
+                        pending = b''
+                    print(f"[SEND] Done: {stats['sent']} frames", flush=True)
+                    return
+                
+                elif pending:
+                    # Partial frame - pad and send it immediately
+                    # (Don't wait/backoff - that causes gaps)
+                    stats['underruns'] += 1
+                    stats['underrun_partial'] += 1
+                    if stats['underrun_partial'] <= 3:
+                        print(f"[SEND] Partial: {len(pending)}b", flush=True)
+                    try:
+                        transport.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
+                        pending = b''
+                        stats['sent'] += 1
+                    except:
+                        return
+                
                 else:
-                    # Buffer empty - send silence
-                    if idle_ms < 300:
-                        stats['underruns'] += 1
-                        stats['underrun_empty'] += 1
-                        if stats['underrun_empty'] <= 5:
-                            print(f"[SEND] ⚠ UNDERRUN(empty): idle={idle_ms:.0f}ms, frame#{stats['sent']}", flush=True)
-                    
+                    # Empty buffer - send silence
+                    stats['underruns'] += 1
+                    stats['underrun_empty'] += 1
+                    if stats['underrun_empty'] <= 3:
+                        print(f"[SEND] Empty buffer", flush=True)
                     try:
                         transport.write(header + SILENCE_FRAME)
                         stats['sent'] += 1
                     except:
                         return
                 
-                # === STEP 5: Advance to next tick ===
-                next_frame_time += frame_time
+                # Advance to next tick
+                next_tick += frame_time
                 
-                # Periodic stats
-                if stats['sent'] % 100 == 0 and stats['sent'] > 0:
-                    now = time.perf_counter()
-                    if now - stats['last_buffer_log'] > 2.0:
-                        stats['last_buffer_log'] = now
-                        print(f"[SEND] Stats: frames={stats['sent']}, buf={len(audio_buffer)}b, "
-                              f"underruns={stats['underruns']}(empty={stats['underrun_empty']},partial={stats['underrun_partial']}), "
-                              f"min_buf={stats['min_buffer']}b, max_q={stats['max_queue_size']}", flush=True)
+                # Periodic stats (every 5 seconds)
+                if stats['sent'] % 250 == 0 and stats['sent'] > 0:
+                    print(f"[SEND] Stats: {stats['sent']} frames, buf={len(pending)}b, "
+                          f"underruns={stats['underruns']}, min={stats['min_buffer']}b", flush=True)
         
         async def receiver():
             """Receive from Gemini, resample with audioop.ratecv, and normalize audio"""
@@ -696,9 +655,10 @@ class AudioSocketSession:
                     except queue.Full:
                         print(f"[RECV] ⚠ Queue full, dropping {len(audio_8k)} bytes", flush=True)
                     
-                    # Log periodically
-                    if stats['recv'] <= 5 or stats['recv'] % 50 == 0:
-                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)} bytes (normalized), q={audio_queue.qsize()}", flush=True)
+                    # Log with chunk timing info
+                    if stats['recv'] <= 10 or stats['recv'] % 100 == 0:
+                        chunk_ms = len(audio_8k) / 16  # 16 bytes per ms at 8kHz 16-bit
+                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)}b ({chunk_ms:.0f}ms), q={audio_queue.qsize()}", flush=True)
                         
             except asyncio.CancelledError:
                 pass
