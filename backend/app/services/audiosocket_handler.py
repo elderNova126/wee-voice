@@ -136,7 +136,8 @@ def normalize_audio(pcm_bytes: bytes, target_rms: int = AUDIO_TARGET_RMS, max_ga
         gain = min(desired, max_lin)
         
         # Skip if gain is too small (avoid unnecessary processing)
-        if gain <= 1.02:
+        # Use 1.01 threshold like Asterisk-AI-Voice-Agent for consistency
+        if gain <= 1.01:
             return pcm_bytes
         
         # Apply gain and clip to int16 range
@@ -475,20 +476,11 @@ class AudioSocketSession:
         
         print(f"[UNIFIED] Config: pre_buffer={PRE_BUFFER_MS}ms ({PRE_BUFFER_BYTES}b), min_buffer={MIN_BUFFER_MS}ms", flush=True)
         
-        # Streaming resampler for seamless audio with VHQ (Very High Quality)
-        if SOXR_AVAILABLE:
-            try:
-                # Use VHQ (Very High Quality) for best audio quality
-                resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.float32, quality=soxr.VHQ)
-                print(f"[UNIFIED] Using soxr VHQ streaming resampler (24kHz→8kHz)", flush=True)
-            except Exception as e:
-                print(f"[UNIFIED] soxr VHQ failed, using default: {e}", flush=True)
-                resampler = soxr.ResampleStream(24000, 8000, 1, dtype=np.float32)
-        else:
-            resampler = None
-            print(f"[UNIFIED] WARNING: Using audioop fallback", flush=True)
-        resample_state = None
+        # Use audioop.ratecv with state for resampling (same as Asterisk-AI-Voice-Agent)
+        # This maintains continuity between chunks for seamless telephony audio
+        resample_state = None  # audioop.ratecv state for continuous resampling
         attack_state = None  # For attack envelope
+        print(f"[UNIFIED] Using audioop.ratecv with state for resampling (24kHz→8kHz)", flush=True)
         
         def audio_sender_thread():
             """
@@ -648,7 +640,7 @@ class AudioSocketSession:
                               f"min_buf={stats['min_buffer']}b, max_q={stats['max_queue_size']}", flush=True)
         
         async def receiver():
-            """Receive from Gemini, resample with VHQ quality, and normalize audio"""
+            """Receive from Gemini, resample with audioop.ratecv, and normalize audio"""
             nonlocal resample_state, attack_state
             ready_event.set()
             first_chunk = True
@@ -669,21 +661,17 @@ class AudioSocketSession:
                         first_chunk = False
                         attack_state = None  # Reset attack envelope for new audio stream
                     
-                    # === Audio Processing Pipeline (based on Asterisk-AI-Voice-Agent) ===
+                    # === Audio Processing Pipeline (matches Asterisk-AI-Voice-Agent) ===
                     # Step 1: Remove DC offset from source audio BEFORE resampling
                     # (DC offset causes clicks/pops at chunk boundaries)
                     audio_24k = remove_dc_offset(audio_24k, threshold=256)
                     
-                    # Step 2: Resample 24k -> 8k using VHQ streaming resampler
-                    if SOXR_AVAILABLE and resampler:
-                        audio_np = np.frombuffer(audio_24k, dtype=np.int16)
-                        audio_float = audio_np.astype(np.float32) / 32768.0
-                        resampled = resampler.resample_chunk(audio_float)
-                        audio_8k = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16).tobytes()
-                    else:
-                        audio_8k, resample_state = audioop.ratecv(
-                            audio_24k, 2, 1, 24000, 8000, resample_state
-                        )
+                    # Step 2: Resample 24k -> 8k using audioop.ratecv with state
+                    # (Asterisk-AI-Voice-Agent uses audioop exclusively - proven for telephony)
+                    # The state parameter maintains continuity between chunks for seamless audio
+                    audio_8k, resample_state = audioop.ratecv(
+                        audio_24k, 2, 1, 24000, 8000, resample_state
+                    )
                     
                     # Step 3: Remove DC offset AFTER resampling (resampling can introduce bias)
                     audio_8k = remove_dc_offset(audio_8k, threshold=128)
