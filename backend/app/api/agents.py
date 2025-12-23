@@ -1,5 +1,6 @@
 from typing import List, Optional, Any
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
@@ -138,9 +139,28 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
     )
 
 
+def _regenerate_greeting_background(greeting: str, language: str, gender: str):
+    """Background task to regenerate TTS greeting"""
+    try:
+        from app.services.greeting_tts_service import generate_greeting_audio_background, EDGE_TTS_AVAILABLE
+        if EDGE_TTS_AVAILABLE and greeting:
+            # Run async function in sync context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    generate_greeting_audio_background(greeting, language, gender)
+                )
+            finally:
+                loop.close()
+    except Exception as e:
+        print(f"[TTS] Background greeting regeneration failed: {e}", flush=True)
+
+
 @router.post("/", response_model=AgentResponse)
 def create_agent(
     agent_data: AgentCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -153,6 +173,15 @@ def create_agent(
     db.add(agent)
     db.commit()
     db.refresh(agent)
+    
+    # Pre-generate TTS greeting in background for instant playback
+    if agent.greeting:
+        background_tasks.add_task(
+            _regenerate_greeting_background,
+            agent.greeting,
+            agent.language or "fr-FR",
+            agent.voice_gender or "male"
+        )
     
     return _serialize_agent(agent, current_user.id, db)
 
@@ -212,6 +241,7 @@ def get_agent(
 def update_agent(
     agent_id: int,
     agent_data: AgentUpdate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -221,6 +251,9 @@ def update_agent(
     if not has_access or not agent:
         raise HTTPException(status_code=404, detail="Agent not found or insufficient permissions")
     
+    # Check if greeting changed
+    old_greeting = agent.greeting
+    
     # Update fields
     update_data = agent_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -228,6 +261,16 @@ def update_agent(
     
     db.commit()
     db.refresh(agent)
+    
+    # Regenerate TTS greeting if it changed
+    new_greeting = agent.greeting
+    if new_greeting and new_greeting != old_greeting:
+        background_tasks.add_task(
+            _regenerate_greeting_background,
+            new_greeting,
+            agent.language or "fr-FR",
+            agent.voice_gender or "male"
+        )
     
     return _serialize_agent(agent, current_user.id, db)
 

@@ -35,7 +35,7 @@ from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
 from app.models.database import SessionLocal
 from app.services.agent_service import FrenchVoiceAgentService
 from app.api.websocket import auto_summarize_call
-from app.services.greeting_tts_service import get_greeting_tts_service, EDGE_TTS_AVAILABLE
+from app.services.greeting_tts_service import get_greeting_tts_service, get_cached_greeting_sync, EDGE_TTS_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -378,35 +378,41 @@ class AudioSocketSession:
             logger.info(f"Call UUID: {self.call_uuid}")
             
             # OPTIMIZATION: Pipeline greeting and Gemini connection
-            # Phase 1: Quick DB setup (agent lookup, busy/block check)
+            # Phase 1: Quick DB setup (agent lookup, busy/block check) + cache lookup
             # Phase 2: Start TTS greeting playback IMMEDIATELY (parallel with Gemini)
             # Phase 3: Connect to Gemini (happens while greeting plays)
-            print(f"[HANDLE] Starting _setup_call...", flush=True)
+            print(f"{ts()} [HANDLE] Starting _setup_call_quick...", flush=True)
+            setup_start = time.time()
             if not await self._setup_call_quick():
-                print(f"[HANDLE] _setup_call_quick FAILED", flush=True)
-                
-                print(f"[HANDLE] Preparing busy response", flush=True)
+                print(f"{ts()} [HANDLE] _setup_call_quick FAILED", flush=True)
                 
                 # Check if this was due to busy line or blocked call
                 if self.is_busy_response:
-                    print(f"[HANDLE] Playing BUSY message...", flush=True)
+                    print(f"{ts()} [HANDLE] Playing BUSY message...", flush=True)
                     await self._play_busy_message()
                 return
+            setup_time = (time.time() - setup_start) * 1000
+            print(f"{ts()} [HANDLE] Setup complete in {setup_time:.0f}ms", flush=True)
             
             # Start TTS greeting playback IMMEDIATELY (if available)
             # This happens BEFORE Gemini connects, eliminating 5-10s delay
             greeting_task = None
             if self.greeting_audio:
-                print(f"{ts()} 🎤 Starting IMMEDIATE TTS greeting playback ({len(self.greeting_audio)} bytes)", flush=True)
+                print(f"{ts()} 🎤 IMMEDIATE GREETING START ({len(self.greeting_audio)} bytes)", flush=True)
                 greeting_task = asyncio.create_task(self._play_tts_greeting())
+            else:
+                print(f"{ts()} ⚠ No cached greeting - Gemini will generate (slower)", flush=True)
             
-            # Connect to Gemini (happens in parallel with greeting playback)
-            print(f"{ts()} Connecting to Gemini...", flush=True)
+            # Connect to Gemini IN PARALLEL with greeting playback
+            print(f"{ts()} Connecting to Gemini (parallel)...", flush=True)
+            gemini_start = time.time()
             if not await self._connect_gemini():
-                print(f"[HANDLE] Gemini connection FAILED", flush=True)
+                print(f"{ts()} [HANDLE] Gemini connection FAILED", flush=True)
                 if greeting_task:
                     greeting_task.cancel()
                 return
+            gemini_time = (time.time() - gemini_start) * 1000
+            print(f"{ts()} Gemini connected in {gemini_time:.0f}ms", flush=True)
             
             # Wait for greeting to finish if it's still playing
             if greeting_task:
@@ -1281,28 +1287,30 @@ class AudioSocketSession:
             
             logger.info(f"Created call {self.call.id}")
             
-            # Generate TTS greeting for IMMEDIATE playback (eliminates 5-10s delay!)
+            # Get CACHED TTS greeting INSTANTLY (no generation during call!)
+            # Greetings are pre-generated at server startup or when agent is updated
             if self.agent.greeting and EDGE_TTS_AVAILABLE:
-                print(f"[SETUP] Generating TTS greeting...", flush=True)
-                try:
+                language = getattr(self.agent, 'language', 'fr-FR')
+                gender = getattr(self.agent, 'voice_gender', 'male')
+                
+                # INSTANT cache lookup (no await, no blocking!)
+                self.greeting_audio = get_cached_greeting_sync(
+                    self.agent.greeting,
+                    language=language,
+                    gender=gender
+                )
+                
+                if self.greeting_audio:
+                    print(f"[SETUP] ✅ TTS greeting from cache: {len(self.greeting_audio)} bytes (INSTANT!)", flush=True)
+                else:
+                    print(f"[SETUP] ⚠ No cached greeting, using Gemini (trigger background gen)", flush=True)
+                    # Trigger background generation for NEXT call (non-blocking)
                     tts_service = get_greeting_tts_service()
-                    language = getattr(self.agent, 'language', 'fr-FR')
-                    gender = getattr(self.agent, 'voice_gender', 'male')
-                    
-                    # Get or generate greeting audio
-                    self.greeting_audio = await tts_service.get_greeting_audio(
+                    tts_service.trigger_background_generation(
                         self.agent.greeting,
                         language=language,
                         gender=gender
                     )
-                    
-                    if self.greeting_audio:
-                        print(f"[SETUP] ✅ TTS greeting ready: {len(self.greeting_audio)} bytes", flush=True)
-                    else:
-                        print(f"[SETUP] ⚠ TTS greeting generation failed, will use Gemini", flush=True)
-                except Exception as e:
-                    print(f"[SETUP] ⚠ TTS greeting error: {e}, will use Gemini", flush=True)
-                    self.greeting_audio = None
             
             print(f"[SETUP] _setup_call_quick() DONE", flush=True)
             return True
@@ -1767,6 +1775,7 @@ class AudioSocketServer:
         self.host = host
         self.port = port
         self.server = None
+        self._greetings_prewarmed = False
     
     async def start(self):
         self.server = await asyncio.start_server(
@@ -1775,7 +1784,21 @@ class AudioSocketServer:
         logger.info(f"AudioSocket on {self.host}:{self.port}")
         print(f"[AudioSocket] Starting AudioSocket server...")
         print(f"[AudioSocket] ✅ AudioSocket server started on port {self.port}")
+        
+        # Pre-warm greeting cache for INSTANT playback on first call
+        if not self._greetings_prewarmed:
+            asyncio.create_task(self._prewarm_greetings())
+        
         asyncio.create_task(self._serve())
+    
+    async def _prewarm_greetings(self):
+        """Pre-generate TTS greetings for all agents at startup"""
+        try:
+            from app.services.greeting_tts_service import prewarm_all_agent_greetings
+            await prewarm_all_agent_greetings()
+            self._greetings_prewarmed = True
+        except Exception as e:
+            print(f"[AudioSocket] ⚠ Greeting pre-warm failed: {e}", flush=True)
     
     async def _serve(self):
         try:

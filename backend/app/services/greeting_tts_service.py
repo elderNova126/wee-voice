@@ -1,23 +1,23 @@
 """
 Fast TTS Greeting Service
 
-Pre-generates greeting audio using edge-tts for immediate playback.
-This eliminates the 5-10 second delay waiting for Gemini to generate greetings.
+Pre-generates greeting audio using edge-tts for IMMEDIATE playback.
+Greetings are generated at server startup or when agents are updated.
+During calls, only cached greetings are used (instant read, <50ms).
 """
 import asyncio
 import os
-import io
 import hashlib
 import logging
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Dict
 import struct
 
 logger = logging.getLogger(__name__)
 
-# Cache directory for pre-generated greetings
-GREETING_CACHE_DIR = Path(tempfile.gettempdir()) / "weedoo_greetings"
+# Cache directory for pre-generated greetings - use persistent location
+GREETING_CACHE_DIR = Path("/tmp/weedoo_greetings")
 GREETING_CACHE_DIR.mkdir(exist_ok=True)
 
 # Audio format: 8kHz mono PCM (for Asterisk)
@@ -27,22 +27,20 @@ FRAME_SIZE = 320  # 20ms at 8kHz
 try:
     import edge_tts
     EDGE_TTS_AVAILABLE = True
-    logger.info("[TTS] edge-tts available for fast greeting generation")
+    print("[TTS] ✅ edge-tts available for fast greeting generation", flush=True)
 except ImportError:
     EDGE_TTS_AVAILABLE = False
-    logger.warning("[TTS] edge-tts not available, will use Gemini for greetings (slower)")
+    print("[TTS] ⚠ edge-tts not available, will use Gemini for greetings", flush=True)
 
 
 def get_greeting_cache_path(greeting_text: str, voice: str = "fr-FR-HenriNeural") -> Path:
     """Get cache file path for a greeting"""
-    # Create hash of greeting + voice for cache key
     cache_key = hashlib.md5(f"{greeting_text}:{voice}".encode()).hexdigest()
     return GREETING_CACHE_DIR / f"greeting_{cache_key}.pcm"
 
 
 def get_voice_for_language(language: str, gender: str = "male") -> str:
     """Get appropriate edge-tts voice for language"""
-    # Map language codes to edge-tts voices
     voice_map = {
         "fr": {
             "male": "fr-FR-HenriNeural",
@@ -72,102 +70,107 @@ def get_voice_for_language(language: str, gender: str = "male") -> str:
     if lang_prefix in voice_map:
         return voice_map[lang_prefix].get(gender, voice_map[lang_prefix]["male"])
     
-    # Default to French
     return voice_map["fr"].get(gender, "fr-FR-HenriNeural")
 
 
-async def generate_greeting_audio(
-    greeting_text: str,
-    language: str = "fr-FR",
-    gender: str = "male",
-    force_regenerate: bool = False
-) -> Optional[bytes]:
+def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender: str = "male") -> Optional[bytes]:
     """
-    Generate greeting audio using edge-tts.
-    
-    Returns PCM audio at 8kHz mono, ready for Asterisk playback.
-    Caches result for future use.
+    Get cached greeting INSTANTLY (synchronous file read).
+    Returns None if not cached - caller should NOT wait for generation.
     """
-    if not EDGE_TTS_AVAILABLE:
-        logger.warning("[TTS] edge-tts not available, cannot generate greeting")
-        return None
-    
-    if not greeting_text or not greeting_text.strip():
+    if not greeting_text:
         return None
     
     voice = get_voice_for_language(language, gender)
     cache_path = get_greeting_cache_path(greeting_text, voice)
     
-    # Check cache first
-    if not force_regenerate and cache_path.exists():
+    if cache_path.exists():
         try:
             with open(cache_path, 'rb') as f:
-                audio_data = f.read()
-            if len(audio_data) > 0:
-                logger.info(f"[TTS] Using cached greeting ({len(audio_data)} bytes)")
-                return audio_data
-        except Exception as e:
-            logger.warning(f"[TTS] Cache read failed: {e}")
+                data = f.read()
+            if len(data) > 0:
+                return data
+        except Exception:
+            pass
+    
+    return None
+
+
+async def generate_greeting_audio_background(
+    greeting_text: str,
+    language: str = "fr-FR",
+    gender: str = "male"
+) -> bool:
+    """
+    Generate greeting audio in background (for pre-warming cache).
+    NOT to be called during active calls - only for pre-generation.
+    """
+    if not EDGE_TTS_AVAILABLE:
+        return False
+    
+    if not greeting_text or not greeting_text.strip():
+        return False
+    
+    voice = get_voice_for_language(language, gender)
+    cache_path = get_greeting_cache_path(greeting_text, voice)
+    
+    # Skip if already cached
+    if cache_path.exists() and cache_path.stat().st_size > 0:
+        print(f"[TTS] Greeting already cached: {cache_path.name}", flush=True)
+        return True
     
     try:
         import time
         start_time = time.perf_counter()
+        print(f"[TTS] Generating greeting for: '{greeting_text[:50]}...'", flush=True)
         
         # Generate audio with edge-tts
         communicate = edge_tts.Communicate(greeting_text, voice)
         
-        # Collect audio chunks
         audio_chunks = []
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_chunks.append(chunk["data"])
         
         if not audio_chunks:
-            logger.error("[TTS] No audio generated")
-            return None
+            print("[TTS] ❌ No audio generated", flush=True)
+            return False
         
         mp3_data = b''.join(audio_chunks)
         gen_time = (time.perf_counter() - start_time) * 1000
-        logger.info(f"[TTS] Generated MP3 in {gen_time:.0f}ms ({len(mp3_data)} bytes)")
+        print(f"[TTS] Generated MP3 in {gen_time:.0f}ms ({len(mp3_data)} bytes)", flush=True)
         
         # Convert MP3 to 8kHz PCM using ffmpeg
         pcm_data = await convert_mp3_to_pcm(mp3_data)
         
         if pcm_data:
-            # Cache for future use
             try:
                 with open(cache_path, 'wb') as f:
                     f.write(pcm_data)
-                logger.info(f"[TTS] Cached greeting to {cache_path}")
+                total_time = (time.perf_counter() - start_time) * 1000
+                print(f"[TTS] ✅ Greeting cached: {len(pcm_data)} bytes in {total_time:.0f}ms", flush=True)
+                return True
             except Exception as e:
-                logger.warning(f"[TTS] Cache write failed: {e}")
-            
-            total_time = (time.perf_counter() - start_time) * 1000
-            logger.info(f"[TTS] Total greeting generation: {total_time:.0f}ms, {len(pcm_data)} bytes PCM")
-            return pcm_data
+                print(f"[TTS] ❌ Cache write failed: {e}", flush=True)
         
-        return None
+        return False
         
     except Exception as e:
-        logger.error(f"[TTS] Greeting generation failed: {e}", exc_info=True)
-        return None
+        print(f"[TTS] ❌ Generation failed: {e}", flush=True)
+        return False
 
 
 async def convert_mp3_to_pcm(mp3_data: bytes) -> Optional[bytes]:
     """Convert MP3 audio to 8kHz mono PCM using ffmpeg"""
     try:
-        import subprocess
-        
         # Write MP3 to temp file
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as mp3_file:
             mp3_file.write(mp3_data)
             mp3_path = mp3_file.name
         
-        # Output PCM file
         pcm_path = mp3_path.replace('.mp3', '.pcm')
         
         try:
-            # Run ffmpeg to convert
             result = await asyncio.create_subprocess_exec(
                 'ffmpeg', '-y', '-i', mp3_path,
                 '-ar', '8000', '-ac', '1', '-f', 's16le',
@@ -178,17 +181,12 @@ async def convert_mp3_to_pcm(mp3_data: bytes) -> Optional[bytes]:
             await result.communicate()
             
             if result.returncode != 0:
-                logger.error(f"[TTS] ffmpeg conversion failed")
                 return None
             
-            # Read PCM data
             with open(pcm_path, 'rb') as f:
-                pcm_data = f.read()
-            
-            return pcm_data
+                return f.read()
             
         finally:
-            # Cleanup temp files
             try:
                 os.unlink(mp3_path)
             except:
@@ -199,87 +197,124 @@ async def convert_mp3_to_pcm(mp3_data: bytes) -> Optional[bytes]:
                 pass
                 
     except Exception as e:
-        logger.error(f"[TTS] MP3 to PCM conversion failed: {e}")
+        print(f"[TTS] MP3→PCM conversion failed: {e}", flush=True)
         return None
 
 
-def get_cached_greeting(greeting_text: str, language: str = "fr-FR", gender: str = "male") -> Optional[bytes]:
-    """Get cached greeting if available (synchronous)"""
-    if not greeting_text:
-        return None
-    
-    voice = get_voice_for_language(language, gender)
-    cache_path = get_greeting_cache_path(greeting_text, voice)
-    
-    if cache_path.exists():
-        try:
-            with open(cache_path, 'rb') as f:
-                return f.read()
-        except Exception:
-            pass
-    
-    return None
-
-
-async def pregenerate_agent_greeting(agent) -> bool:
+async def prewarm_all_agent_greetings():
     """
-    Pre-generate greeting audio for an agent.
-    Call this when agent is created/updated.
+    Pre-generate greetings for ALL agents at server startup.
+    This ensures instant greeting playback for all calls.
     """
-    if not agent.greeting:
-        return False
-    
     if not EDGE_TTS_AVAILABLE:
-        return False
+        print("[TTS] ⚠ edge-tts not available, skipping pre-warm", flush=True)
+        return
+    
+    print("[TTS] 🔥 Pre-warming greeting cache for all agents...", flush=True)
     
     try:
-        language = getattr(agent, 'language', 'fr-FR')
-        gender = getattr(agent, 'voice_gender', 'male')
+        from app.models.database import SessionLocal
+        from app.models import VoiceAgent
         
-        audio_data = await generate_greeting_audio(
-            agent.greeting,
-            language=language,
-            gender=gender,
-            force_regenerate=True
-        )
-        
-        return audio_data is not None
-        
+        db = SessionLocal()
+        try:
+            agents = db.query(VoiceAgent).filter(VoiceAgent.greeting.isnot(None)).all()
+            
+            if not agents:
+                print("[TTS] No agents with greetings found", flush=True)
+                return
+            
+            print(f"[TTS] Found {len(agents)} agents with greetings", flush=True)
+            
+            for agent in agents:
+                if agent.greeting:
+                    language = getattr(agent, 'language', 'fr-FR')
+                    gender = getattr(agent, 'voice_gender', 'male')
+                    
+                    success = await generate_greeting_audio_background(
+                        agent.greeting,
+                        language=language,
+                        gender=gender
+                    )
+                    
+                    if success:
+                        print(f"[TTS] ✅ Agent '{agent.name}' greeting ready", flush=True)
+                    else:
+                        print(f"[TTS] ⚠ Agent '{agent.name}' greeting failed", flush=True)
+            
+            print("[TTS] 🔥 Pre-warm complete!", flush=True)
+            
+        finally:
+            db.close()
+            
     except Exception as e:
-        logger.error(f"[TTS] Pre-generation failed: {e}")
-        return False
+        print(f"[TTS] ❌ Pre-warm error: {e}", flush=True)
 
 
-# Singleton service instance
 class GreetingTTSService:
-    """Service for managing TTS greetings"""
+    """
+    Service for managing TTS greetings.
+    
+    IMPORTANT: During calls, only returns cached greetings (instant).
+    If not cached, returns None - caller should use Gemini fallback.
+    Background generation is triggered for next call.
+    """
     
     def __init__(self):
-        self._generation_lock = asyncio.Lock()
+        self._pending_generation: Dict[str, asyncio.Task] = {}
     
-    async def get_greeting_audio(
+    def get_cached_greeting(
         self,
         greeting_text: str,
         language: str = "fr-FR",
         gender: str = "male"
     ) -> Optional[bytes]:
-        """Get greeting audio, generating if needed"""
-        # Check cache first
-        cached = get_cached_greeting(greeting_text, language, gender)
-        if cached:
-            return cached
+        """
+        Get cached greeting INSTANTLY.
+        Returns None if not cached - does NOT generate on-the-fly.
+        """
+        return get_cached_greeting_sync(greeting_text, language, gender)
+    
+    def trigger_background_generation(
+        self,
+        greeting_text: str,
+        language: str = "fr-FR", 
+        gender: str = "male"
+    ):
+        """
+        Trigger background generation for next call.
+        Non-blocking - returns immediately.
+        """
+        if not EDGE_TTS_AVAILABLE or not greeting_text:
+            return
         
-        # Generate with lock to prevent duplicate generation
-        async with self._generation_lock:
-            # Check cache again (may have been generated while waiting)
-            cached = get_cached_greeting(greeting_text, language, gender)
-            if cached:
-                return cached
-            
-            return await generate_greeting_audio(greeting_text, language, gender)
+        voice = get_voice_for_language(language, gender)
+        cache_key = f"{greeting_text}:{voice}"
+        
+        # Skip if already generating
+        if cache_key in self._pending_generation:
+            task = self._pending_generation[cache_key]
+            if not task.done():
+                return
+        
+        # Skip if already cached
+        cache_path = get_greeting_cache_path(greeting_text, voice)
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            return
+        
+        # Start background generation
+        async def generate():
+            try:
+                await generate_greeting_audio_background(greeting_text, language, gender)
+            except Exception as e:
+                print(f"[TTS] Background generation error: {e}", flush=True)
+            finally:
+                self._pending_generation.pop(cache_key, None)
+        
+        self._pending_generation[cache_key] = asyncio.create_task(generate())
+        print(f"[TTS] Triggered background generation for next call", flush=True)
     
     def is_available(self) -> bool:
-        """Check if TTS is available"""
         return EDGE_TTS_AVAILABLE
 
 
@@ -293,4 +328,3 @@ def get_greeting_tts_service() -> GreetingTTSService:
     if _greeting_service is None:
         _greeting_service = GreetingTTSService()
     return _greeting_service
-
