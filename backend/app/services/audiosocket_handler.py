@@ -458,22 +458,24 @@ class AudioSocketSession:
         """
         ASYNC implementation for smooth audio playback.
         
-        Uses asyncio.Queue and async pacer loop.
-        OPTIMIZED settings to reduce choppy audio:
-        - Larger pre-buffer for smooth start
-        - Longer grace period for Gemini's bursty output
-        - More backoff before sending silence
+        ROOT CAUSE OF CHOPPY AUDIO: Gemini sends audio in bursts with gaps.
+        
+        FIX: Large jitter buffer + long grace period to absorb Gemini's bursty output.
+        The greeting plays smoothly because it's a continuous file.
+        Conversation is choppy because Gemini generates in real-time with pauses.
         """
         import time
-        print(f"[UNIFIED] Starting ASYNC pacer (optimized for smooth audio)", flush=True)
+        print(f"[UNIFIED] Starting ASYNC pacer (large buffer for Gemini bursts)", flush=True)
         
-        # === OPTIMIZED settings to reduce choppy audio ===
-        CHUNK_SIZE_MS = 20           # chunk_size_ms: 20 (fixed)
-        MIN_START_MS = 200           # INCREASED: Buffer 200ms before starting (was 120)
-        JITTER_BUFFER_MS = 1200      # INCREASED: More buffer for Gemini bursts (was 950)
-        LOW_WATERMARK_MS = 100       # INCREASED: Higher threshold (was 80)
-        PROVIDER_GRACE_MS = 800      # INCREASED: Wait longer before silence (was 500)
-        EMPTY_BACKOFF_MAX = 10       # INCREASED: More backoff ticks (was 5)
+        # === LARGE BUFFER settings to fix choppy audio ===
+        # Gemini sends audio in bursts with 200-500ms gaps between phrases
+        # We need enough buffer to bridge these gaps smoothly
+        CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
+        MIN_START_MS = 300           # Buffer 300ms before starting playback (15 frames)
+        JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for Gemini's bursts
+        LOW_WATERMARK_MS = 200       # Refill when below 200ms
+        PROVIDER_GRACE_MS = 1500     # Wait 1.5s before sending silence (Gemini pause tolerance)
+        EMPTY_BACKOFF_MAX = 25       # Wait 500ms (25 * 20ms) before filler
         
         # Derived values
         MIN_START_CHUNKS = max(1, MIN_START_MS // CHUNK_SIZE_MS)  # 6 chunks
@@ -485,8 +487,9 @@ class AudioSocketSession:
         # AudioSocket frame header (type + length)
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Async jitter buffer (like Asterisk-AI-Voice-Agent)
-        jitter_buffer = asyncio.Queue(maxsize=500)
+        # Async jitter buffer - large enough for 10 seconds of audio
+        # Gemini can send large bursts, need buffer to absorb them
+        jitter_buffer = asyncio.Queue(maxsize=1000)
         
         # State
         resample_state = None
@@ -586,41 +589,41 @@ class AudioSocketSession:
                     break
                 
                 elif startup_ready and jitter_buffer.empty():
-                    # Buffer empty after startup - backoff logic (like _drain_next_frame)
+                    # Buffer empty after startup - use backoff to wait for more audio
+                    # ROOT CAUSE OF CHOPPY: We were sending silence too quickly during Gemini pauses
                     if empty_backoff < EMPTY_BACKOFF_MAX:
                         empty_backoff += 1
                         stats['wait_recoveries'] += 1
-                        # Return "wait" - skip this tick
+                        # Skip this tick - wait for more audio from Gemini
+                        # This is the key fix: WAIT instead of sending silence
                     else:
-                        # Backoff exhausted - check if should send filler
+                        # Backoff exhausted - check if we're within grace period
                         time_since_real = (time.perf_counter() - last_real_emit_ts) * 1000 if last_real_emit_ts else 0
                         
-                        # Suppress filler if prolonged idle (like max_filler_idle_ms in Asterisk-AI-Voice-Agent)
-                        MAX_FILLER_IDLE_MS = 400
-                        if time_since_real >= MAX_FILLER_IDLE_MS:
-                            # Don't send filler - just wait (prevents tail drift)
-                            pass
-                        elif time_since_real < PROVIDER_GRACE_MS:
-                            # Send filler - include any partial pending data (CRITICAL FIX)
+                        # During PROVIDER_GRACE_MS, keep connection alive with minimal audio
+                        # This bridges Gemini's pauses without causing choppy audio
+                        if time_since_real < PROVIDER_GRACE_MS:
+                            # Send any partial pending data or very quiet filler
                             if pending:
-                                # Pad partial data with silence
                                 frame = pending + (b'\x00' * (FRAME_SIZE - len(pending)))
                                 pending = b''
                                 stats['underrun_partial'] += 1
                             else:
+                                # Send silence to keep audio stream alive
                                 frame = SILENCE_FRAME
                                 stats['underrun_empty'] += 1
                             stats['underruns'] += 1
                             try:
                                 self.writer.write(header + frame)
-                                # Only drain if needed (consistent with regular frame sending)
                                 write_buf = self.writer.transport.get_write_buffer_size()
                                 if write_buf > 4096:
                                     await self.writer.drain()
                                 stats['sent'] += 1
                             except:
                                 break
-                        empty_backoff = 0  # Reset after backoff exhausted
+                        # After grace period, just wait - Gemini might be thinking
+                        # Don't reset backoff - keep waiting
+                        empty_backoff = EMPTY_BACKOFF_MAX  # Stay in wait mode
                 
                 next_tick += TICK_SECONDS
                 
@@ -642,8 +645,9 @@ class AudioSocketSession:
             """
             nonlocal resample_state, attack_state
             first_chunk = True
+            attack_done = False  # Only apply attack envelope once at start
             
-            print(f"[RECV] Using audioop.ratecv with state (matches Asterisk-AI-Voice-Agent)", flush=True)
+            print(f"[RECV] Using audioop.ratecv with state", flush=True)
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -659,19 +663,20 @@ class AudioSocketSession:
                         stats['first_audio_time'] = time.perf_counter()
                         print(f"[RECV] ▶ FIRST: {len(audio_24k)}b", flush=True)
                         first_chunk = False
-                        attack_state = None
                     
                     # === Resample 24kHz → 8kHz (using audioop.ratecv with state) ===
-                    # NOTE: DC offset removal DISABLED - Asterisk-AI-Voice-Agent also disabled _apply_dc_block
-                    # Only use audioop.ratecv for resampling (same as their resample_audio function)
                     audio_8k, resample_state = audioop.ratecv(
                         audio_24k, 2, 1, 24000, 8000, resample_state
                     )
                     
-                    # === Apply attack envelope (20ms) ===
-                    audio_8k, attack_state = apply_attack_envelope(
-                        audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state
-                    )
+                    # === Apply attack envelope ONLY at very start (prevents pop) ===
+                    # FIX: Don't reset attack_state for each phrase - causes choppy audio
+                    if not attack_done:
+                        audio_8k, attack_state = apply_attack_envelope(
+                            audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state
+                        )
+                        if attack_state and attack_state.get('bytes_remaining', 0) <= 0:
+                            attack_done = True  # Attack complete, don't apply again
                     
                     # === Normalize audio (target_rms=1400, max_gain=18dB) ===
                     audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
@@ -1374,6 +1379,14 @@ class AudioSocketSession:
         
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         frames_sent = 0
+        
+        # FIX: Send 150ms of silence BEFORE greeting to let Asterisk audio path initialize
+        # This prevents the first few words from being cut off
+        LEAD_IN_FRAMES = 8  # 160ms of silence (8 frames * 20ms)
+        print(f"[GREETING-PLAY] Sending {LEAD_IN_FRAMES} lead-in silence frames...", flush=True)
+        for _ in range(LEAD_IN_FRAMES):
+            self.writer.write(header + SILENCE_FRAME)
+        await self.writer.drain()
         
         # Apply normalization for consistent volume
         audio_data = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
