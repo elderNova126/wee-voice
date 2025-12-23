@@ -53,7 +53,43 @@ SILENCE_FRAME = b'\x00' * FRAME_SIZE
 # These values are tuned for telephony audio
 AUDIO_TARGET_RMS = 1400  # Target RMS level for normalization
 AUDIO_MAX_GAIN_DB = 18.0  # Maximum gain to apply (prevents excessive amplification)
-AUDIO_ATTACK_MS = 10  # Attack envelope to smooth audio starts
+AUDIO_ATTACK_MS = 20  # Attack envelope (20ms like Asterisk-AI-Voice-Agent, was 10ms)
+
+
+def remove_dc_offset(pcm_bytes: bytes, threshold: int = 256) -> bytes:
+    """
+    Remove DC offset from PCM16 audio to prevent clicks and pops.
+    
+    Based on Asterisk-AI-Voice-Agent's DC offset handling.
+    DC offset causes:
+    - Clicks/pops at chunk boundaries
+    - Interference with normalization
+    - Asymmetric clipping
+    
+    Args:
+        pcm_bytes: Raw PCM16 audio bytes (little-endian)
+        threshold: Only correct if DC offset exceeds this (default 256)
+        
+    Returns:
+        DC-corrected PCM16 audio bytes
+    """
+    if not pcm_bytes or len(pcm_bytes) < 4:
+        return pcm_bytes
+    
+    try:
+        # Use audioop to measure and correct DC offset
+        dc = audioop.avg(pcm_bytes, 2)
+        
+        # Only correct if DC offset is significant
+        if abs(dc) >= threshold:
+            corrected = audioop.bias(pcm_bytes, 2, -int(dc))
+            return corrected
+        
+        return pcm_bytes
+        
+    except Exception as e:
+        print(f"[DC_OFFSET] Error: {e}", flush=True)
+        return pcm_bytes
 
 
 def normalize_audio(pcm_bytes: bytes, target_rms: int = AUDIO_TARGET_RMS, max_gain_db: float = AUDIO_MAX_GAIN_DB) -> bytes:
@@ -456,30 +492,25 @@ class AudioSocketSession:
         
         def audio_sender_thread():
             """
-            PACER-BASED sender with strict 20ms timing.
+            STEADY-CADENCE sender with strict 20ms timing.
             
-            Based on Asterisk-AI-Voice-Agent's streaming_playback_manager pattern:
+            Key principles:
             - NEVER block on queue operations (non-blocking get_nowait only)
-            - Maintain strict 20ms frame cadence
-            - Use backoff ticks for low-buffer situations instead of blocking
+            - ALWAYS send a frame every 20ms (real audio, padded, or silence)
+            - NEVER skip frames (skipping causes audible gaps/choppiness)
             
-            This prevents choppy audio caused by timing jitter from blocking waits.
+            This ensures smooth, continuous audio without gaps.
             """
             audio_buffer = b''
             frame_time = 0.02  # 20ms
             started = False
             last_audio_time = time.perf_counter()
             next_frame_time = time.perf_counter()
-            
-            # Backoff tracking for low-buffer situations (like Asterisk-AI-Voice-Agent)
-            empty_backoff_ticks = 0
-            EMPTY_BACKOFF_MAX = 3  # Skip up to 3 ticks (60ms) waiting for audio
-            last_real_frame_time = time.perf_counter()
-            MAX_FILLER_IDLE_MS = 300  # Stop sending filler after 300ms of no real audio
+            last_real_frame_time = time.perf_counter()  # For underrun tracking
             
             # Wait for receiver to start
             ready_event.wait(timeout=5)
-            print(f"[SEND-THREAD] Started with PACER pattern (no blocking waits)", flush=True)
+            print(f"[SEND-THREAD] Started with STEADY-CADENCE pattern (never skip frames)", flush=True)
             
             while not stop_event.is_set():
                 # === STEP 1: Sleep until next tick (maintain steady 20ms cadence) ===
@@ -520,7 +551,6 @@ class AudioSocketSession:
                         audio_buffer += chunk
                         collected += len(chunk)
                         last_audio_time = time.perf_counter()
-                        empty_backoff_ticks = 0  # Reset backoff on new audio
                     except queue.Empty:
                         break
                 
@@ -554,7 +584,9 @@ class AudioSocketSession:
                 if len(audio_buffer) < stats['min_buffer']:
                     stats['min_buffer'] = len(audio_buffer)
                 
-                # === STEP 4: Playback - strict frame emission ===
+                # === STEP 4: Playback - ALWAYS send a frame every 20ms ===
+                # CRITICAL: Never skip frames! Skipping causes audio gaps/choppiness.
+                # Always send: real audio, padded audio, or silence.
                 
                 if len(audio_buffer) >= FRAME_SIZE:
                     # Have full frame - send it
@@ -563,57 +595,40 @@ class AudioSocketSession:
                         audio_buffer = audio_buffer[FRAME_SIZE:]
                         stats['sent'] += 1
                         last_real_frame_time = time.perf_counter()
-                        empty_backoff_ticks = 0
                     except Exception as e:
                         print(f"[SEND] Write error: {e}", flush=True)
                         return
                         
                 elif len(audio_buffer) > 0:
-                    # Partial frame - use backoff pattern before padding
+                    # Partial frame - pad with silence and send immediately
+                    # (Don't skip - that causes gaps!)
                     idle_ms = (time.perf_counter() - last_audio_time) * 1000
                     
-                    if idle_ms < 60 and empty_backoff_ticks < EMPTY_BACKOFF_MAX:
-                        # Recently had audio - skip this tick (wait for more)
-                        empty_backoff_ticks += 1
-                        next_frame_time += frame_time
-                        continue  # Skip frame emission, maintain timing
-                    
-                    # Backoff exhausted or idle too long - send padded frame
                     stats['underruns'] += 1
                     stats['underrun_partial'] += 1
                     if stats['underrun_partial'] <= 5:
                         print(f"[SEND] ⚠ UNDERRUN(partial): buf={len(audio_buffer)}b, frame#{stats['sent']}", flush=True)
                     try:
+                        # Pad remaining bytes with silence
                         transport.write(header + audio_buffer.ljust(FRAME_SIZE, b'\x00'))
                         audio_buffer = b''
                         stats['sent'] += 1
                         last_real_frame_time = time.perf_counter()
-                        empty_backoff_ticks = 0
                     except:
                         return
                         
                 else:
-                    # Buffer empty
+                    # Buffer empty - send silence (don't skip!)
                     idle_ms = (time.perf_counter() - last_audio_time) * 1000
-                    filler_idle_ms = (time.perf_counter() - last_real_frame_time) * 1000
                     
-                    # Backoff: skip tick if recently had audio (wait for bursty Gemini)
-                    if idle_ms < 80 and empty_backoff_ticks < EMPTY_BACKOFF_MAX:
-                        empty_backoff_ticks += 1
-                        next_frame_time += frame_time
-                        continue  # Skip, maintain timing
-                    
-                    # Stop sending filler after prolonged idle (prevents tail drift)
-                    if filler_idle_ms > MAX_FILLER_IDLE_MS:
-                        next_frame_time += frame_time
-                        continue
-                    
-                    # Send silence/filler
+                    # Track underrun only if recently had audio
                     if idle_ms < 300:
                         stats['underruns'] += 1
                         stats['underrun_empty'] += 1
                         if stats['underrun_empty'] <= 5:
                             print(f"[SEND] ⚠ UNDERRUN(empty): idle={idle_ms:.0f}ms, frame#{stats['sent']}", flush=True)
+                    
+                    # ALWAYS send silence - never skip frames
                     try:
                         transport.write(header + SILENCE_FRAME)
                         stats['sent'] += 1
@@ -654,7 +669,12 @@ class AudioSocketSession:
                         first_chunk = False
                         attack_state = None  # Reset attack envelope for new audio stream
                     
-                    # Resample 24k -> 8k using VHQ streaming resampler
+                    # === Audio Processing Pipeline (based on Asterisk-AI-Voice-Agent) ===
+                    # Step 1: Remove DC offset from source audio BEFORE resampling
+                    # (DC offset causes clicks/pops at chunk boundaries)
+                    audio_24k = remove_dc_offset(audio_24k, threshold=256)
+                    
+                    # Step 2: Resample 24k -> 8k using VHQ streaming resampler
                     if SOXR_AVAILABLE and resampler:
                         audio_np = np.frombuffer(audio_24k, dtype=np.int16)
                         audio_float = audio_np.astype(np.float32) / 32768.0
@@ -665,11 +685,13 @@ class AudioSocketSession:
                             audio_24k, 2, 1, 24000, 8000, resample_state
                         )
                     
-                    # Apply audio quality improvements (based on Asterisk-AI-Voice-Agent)
-                    # 1. Apply attack envelope to smooth audio starts (prevents pops/clicks)
+                    # Step 3: Remove DC offset AFTER resampling (resampling can introduce bias)
+                    audio_8k = remove_dc_offset(audio_8k, threshold=128)
+                    
+                    # Step 4: Apply attack envelope to smooth audio starts (prevents pops/clicks)
                     audio_8k, attack_state = apply_attack_envelope(audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state)
                     
-                    # 2. Apply audio normalization to boost quiet audio
+                    # Step 5: Apply audio normalization to boost quiet audio
                     audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
                     
                     # Put in queue
