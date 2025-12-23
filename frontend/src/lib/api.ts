@@ -466,6 +466,32 @@ export const adminAPI = {
     api.patch(`/admin/support/tickets/${ticketId}`, data),
 }
 
+// Avatar API
+export const avatarAPI = {
+  uploadPhoto: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/avatars/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+  
+  selectPhoto: (photoUrl: string, photoType: 'upload' | 'sample') =>
+    api.post('/avatars/select', { photo_url: photoUrl, photo_type: photoType }),
+  
+  getCurrentAvatar: () => api.get('/avatars/current'),
+  
+  removeAvatar: () => api.delete('/avatars/remove'),
+  
+  toggleAvatar: (enabled: boolean) => {
+    const formData = new FormData()
+    formData.append('enabled', enabled.toString())
+    return api.put('/avatars/toggle', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  }
+}
+
 // Default export for backward compatibility
 export default api
 

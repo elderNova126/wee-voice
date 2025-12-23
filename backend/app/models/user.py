@@ -36,6 +36,11 @@ class User(Base):
     monthly_minutes_used = Column(Float, default=0.0)
     last_reset_date = Column(DateTime, default=datetime.utcnow)
     
+    # Avatar settings
+    avatar_photo_url = Column(String, nullable=True)  # URL or base64 data
+    avatar_photo_type = Column(String, nullable=True)  # 'upload' or 'sample'
+    avatar_enabled = Column(Boolean, default=False)  # Enable/disable avatar in calls
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

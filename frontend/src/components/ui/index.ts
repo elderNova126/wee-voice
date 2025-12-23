@@ -6,4 +6,6 @@ export { Input } from './Input'
 export { Table, TableHead, TableBody, TableRow, TableHeader, TableCell } from './Table'
 export { EmptyState } from './EmptyState'
 export { default as LoadingSpinner } from './LoadingSpinner'
+export { default as AvatarPhotoSelector } from './AvatarPhotoSelector'
+export { default as VideoAvatar } from './VideoAvatar'
 

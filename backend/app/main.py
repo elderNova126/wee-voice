@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, performance
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, performance, avatars
 from app.middleware.rate_limit import RateLimitMiddleware, cleanup_rate_limits
 
 # Set up logging
@@ -183,6 +183,7 @@ app.include_router(admin.router, prefix=f"{settings.API_V1_STR}/admin", tags=["A
 app.include_router(libraries.router, prefix=f"{settings.API_V1_STR}/libraries", tags=["Agent Libraries"])
 app.include_router(collaborators.router, prefix=f"{settings.API_V1_STR}", tags=["Collaborators"])
 app.include_router(performance.router, prefix=f"{settings.API_V1_STR}/performance", tags=["Performance"])
+app.include_router(avatars.router, prefix=f"{settings.API_V1_STR}/avatars", tags=["Avatars"])
 
 
 # Global exception handler
