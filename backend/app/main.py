@@ -160,7 +160,6 @@ if static_path.exists():
 else:
     logger.warning(f"Static files directory not found: {static_path}")
 
-
 # Root endpoint
 @app.get("/")
 async def root():

@@ -257,25 +257,45 @@ def _generate_token() -> str:
 
 def _load_email_template(template_name: str, **kwargs) -> tuple[str, str]:
     """Load HTML and text email templates"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     template_dir = Path(__file__).parent.parent / "templates"
     
-    # Load HTML template
-    html_path = template_dir / f"{template_name}.html"
-    with open(html_path, 'r', encoding='utf-8') as f:
-        html_content = f.read()
-    
-    # Load text template
-    txt_path = template_dir / f"{template_name}.txt"
-    with open(txt_path, 'r', encoding='utf-8') as f:
-        txt_content = f.read()
-    
-    # Replace placeholders
-    for key, value in kwargs.items():
-        placeholder = "{{" + key + "}}"
-        html_content = html_content.replace(placeholder, str(value))
-        txt_content = txt_content.replace(placeholder, str(value))
-    
-    return txt_content, html_content
+    try:
+        # Load HTML template
+        html_path = template_dir / f"{template_name}.html"
+        if not html_path.exists():
+            logger.error(f"HTML template not found: {html_path}")
+            raise FileNotFoundError(f"Template {template_name}.html not found")
+        
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        # Load text template
+        txt_path = template_dir / f"{template_name}.txt"
+        if not txt_path.exists():
+            logger.warning(f"Text template not found: {txt_path}, using HTML as fallback")
+            txt_content = html_content  # Fallback to HTML if text template missing
+        else:
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                txt_content = f.read()
+        
+        # Replace placeholders
+        for key, value in kwargs.items():
+            placeholder = "{{" + key + "}}"
+            html_content = html_content.replace(placeholder, str(value))
+            txt_content = txt_content.replace(placeholder, str(value))
+        
+        logger.debug(f"Template {template_name} loaded and processed successfully")
+        return txt_content, html_content
+        
+    except Exception as e:
+        logger.error(f"Error loading email template {template_name}: {e}", exc_info=True)
+        # Return simple fallback template
+        fallback_text = f"Please visit: {kwargs.get('reset_url', kwargs.get('verification_url', 'the link'))}"
+        fallback_html = f"<html><body><p>Please visit: <a href='{kwargs.get('reset_url', kwargs.get('verification_url', '#'))}'>Click here</a></p></body></html>"
+        return fallback_text, fallback_html
 
 
 @router.post("/request-verification")
