@@ -1,0 +1,18 @@
+Welcome to WeeVoice!
+
+Hi {{full_name}},
+
+Thank you for signing up! We're excited to have you on board. To get started with your AI voice agents, please verify your email address.
+
+Verify your email by clicking this link:
+{{verification_url}}
+
+⏰ IMPORTANT: This verification link will expire in 24 hours for security reasons.
+
+If you didn't create an account with WeeVoice, you can safely ignore this email.
+
+---
+WeeVoice - AI Voice Agent Platform
+Need help? Contact us at support@weedoo.be
+© 2025 WeeVoice. All rights reserved.
+

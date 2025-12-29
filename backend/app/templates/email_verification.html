@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Your Email - WeeVoice</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #ffffff;
+            padding: 40px 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
+        }
+        .content {
+            padding: 40px 30px;
+        }
+        .content h2 {
+            color: #333;
+            font-size: 24px;
+            margin-top: 0;
+            margin-bottom: 20px;
+        }
+        .content p {
+            color: #666;
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+        .button {
+            display: inline-block;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #ffffff !important;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .button:hover {
+            opacity: 0.9;
+        }
+        .token-box {
+            background-color: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .token-box code {
+            font-family: 'Courier New', monospace;
+            font-size: 18px;
+            color: #495057;
+            font-weight: 600;
+            letter-spacing: 2px;
+        }
+        .footer {
+            background-color: #f8f9fa;
+            padding: 30px;
+            text-align: center;
+            color: #6c757d;
+            font-size: 14px;
+            border-top: 1px solid #e9ecef;
+        }
+        .footer p {
+            margin: 5px 0;
+        }
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .divider {
+            border-top: 1px solid #e9ecef;
+            margin: 30px 0;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .warning p {
+            margin: 0;
+            color: #856404;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 WeeVoice</h1>
+        </div>
+        
+        <div class="content">
+            <h2>Welcome to WeeVoice!</h2>
+            
+            <p>Hi {{full_name}},</p>
+            
+            <p>Thank you for signing up! We're excited to have you on board. To get started with your AI voice agents, please verify your email address.</p>
+            
+            <div style="text-align: center;">
+                <a href="{{verification_url}}" class="button">Verify Email Address</a>
+            </div>
+            
+            <div class="divider"></div>
+            
+            <p style="font-size: 14px; color: #6c757d;">If the button doesn't work, copy and paste this link into your browser:</p>
+            
+            <div class="token-box">
+                <code>{{verification_url}}</code>
+            </div>
+            
+            <div class="warning">
+                <p><strong>⏰ Important:</strong> This verification link will expire in 24 hours for security reasons.</p>
+            </div>
+            
+            <div class="divider"></div>
+            
+            <p style="font-size: 14px; color: #6c757d;">If you didn't create an account with WeeVoice, you can safely ignore this email.</p>
+        </div>
+        
+        <div class="footer">
+            <p><strong>WeeVoice</strong> - AI Voice Agent Platform</p>
+            <p>Need help? Contact us at <a href="mailto:support@weedoo.be">support@weedoo.be</a></p>
+            <p style="margin-top: 15px;">© 2025 WeeVoice. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+
