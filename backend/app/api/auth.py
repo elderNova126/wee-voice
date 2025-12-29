@@ -175,7 +175,8 @@ def login(
     if not user.email_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please verify your email address before logging in. Check your inbox for the verification link."
+            detail="EMAIL_NOT_VERIFIED",
+            headers={"X-Error-Code": "EMAIL_NOT_VERIFIED", "X-User-Email": user.email}
         )
     
     # Check if user is approved by admin
