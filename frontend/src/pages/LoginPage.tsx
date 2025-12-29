@@ -36,7 +36,22 @@ export default function LoginPage() {
       navigate('/dashboard')
     } catch (error: any) {
       console.error('Login error:', error)
-      toast.error(error.response?.data?.detail || t.auth.loginError)
+      const errorMsg = error.response?.data?.detail || t.auth.loginError
+      
+      // Show specific error messages with helpful links
+      if (errorMsg.toLowerCase().includes('not verified') || errorMsg.toLowerCase().includes('verify')) {
+        toast.error(
+          'Please verify your email address before logging in.',
+          { duration: 5000 }
+        )
+      } else if (errorMsg.toLowerCase().includes('not approved')) {
+        toast.error(
+          'Your account is pending admin approval. You will receive an email once approved.',
+          { duration: 5000 }
+        )
+      } else {
+        toast.error(errorMsg)
+      }
     } finally {
       setIsLoading(false)
     }
@@ -74,9 +89,17 @@ export default function LoginPage() {
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                {t.auth.password}
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.auth.password}
+                </label>
+                <Link 
+                  to="/forgot-password" 
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 type="password"
                 required

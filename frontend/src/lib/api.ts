@@ -49,6 +49,20 @@ export const authAPI = {
   listApiKeys: () => api.get('/auth/api-keys'),
   
   deleteApiKey: (keyId: number) => api.delete(`/auth/api-keys/${keyId}`),
+  
+  // Email verification
+  requestVerification: (email: string) =>
+    api.post('/auth/request-verification', { email }),
+  
+  verifyEmail: (token: string) =>
+    api.get(`/auth/verify-email?token=${token}`),
+  
+  // Password reset
+  forgotPassword: (email: string) =>
+    api.post('/auth/forgot-password', { email }),
+  
+  resetPassword: (token: string, newPassword: string) =>
+    api.post('/auth/reset-password', { token, new_password: newPassword }),
 }
 
 // Agents API
