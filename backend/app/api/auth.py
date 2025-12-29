@@ -133,15 +133,22 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             verification_url=verification_url
         )
         
-        EmailService.send_email(
+        success = EmailService.send_email(
             to_email=user.email,
             subject="Verify Your Email - WeeVoice",
             body_text=text_body,
             body_html=html_body
         )
+        
+        if not success:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send verification email to {user.email}")
     except Exception as e:
         # Log error but don't fail registration
-        print(f"Failed to send verification email: {e}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending verification email to {user.email}: {str(e)}")
     
     return user
 
@@ -305,12 +312,22 @@ def request_verification_email(
         verification_url=verification_url
     )
     
-    EmailService.send_email(
-        to_email=user.email,
-        subject="Verify Your Email - WeeVoice",
-        body_text=text_body,
-        body_html=html_body
-    )
+    try:
+        success = EmailService.send_email(
+            to_email=user.email,
+            subject="Verify Your Email - WeeVoice",
+            body_text=text_body,
+            body_html=html_body
+        )
+        
+        if not success:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send verification email to {user.email}")
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending verification email: {str(e)}")
     
     return {"message": "Verification email sent"}
 
@@ -380,12 +397,24 @@ def forgot_password(
         reset_url=reset_url
     )
     
-    EmailService.send_email(
-        to_email=user.email,
-        subject="Reset Your Password - WeeVoice",
-        body_text=text_body,
-        body_html=html_body
-    )
+    try:
+        success = EmailService.send_email(
+            to_email=user.email,
+            subject="Reset Your Password - WeeVoice",
+            body_text=text_body,
+            body_html=html_body
+        )
+        
+        if not success:
+            # Log the error but don't reveal to user
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send password reset email to {user.email}")
+    except Exception as e:
+        # Log the error but don't reveal to user
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending password reset email: {str(e)}")
     
     return {"message": "Password reset email sent"}
 
