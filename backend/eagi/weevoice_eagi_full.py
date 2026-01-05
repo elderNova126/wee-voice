@@ -68,6 +68,15 @@ class EAGIHandler:
         logger.info("WeeVoice EAGI Starting (WebSocket API Mode)")
         logger.info(f"Backend: {WS_URL}")
         logger.info("=" * 60)
+        
+        # CRITICAL: Open FD3 immediately (before async loop)
+        # Asterisk provides FD3 for audio input - must open it right away
+        try:
+            self._audio_fd = os.fdopen(3, 'rb', buffering=0)
+            logger.info("Audio FD3 opened successfully")
+        except Exception as e:
+            logger.error(f"Failed to open FD3: {e}")
+            self._audio_fd = None
     
     # ========================================================================
     # AGI PROTOCOL
@@ -182,10 +191,8 @@ class EAGIHandler:
         """Capture audio from FD3 and send to backend"""
         logger.info("Starting audio capture")
         
-        try:
-            self._audio_fd = os.fdopen(3, 'rb', buffering=0)
-        except Exception as e:
-            logger.error(f"Failed to open FD3: {e}")
+        if not self._audio_fd:
+            logger.error("Audio FD3 not available")
             return
         
         frame_count = 0

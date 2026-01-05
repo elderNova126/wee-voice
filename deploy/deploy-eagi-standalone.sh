@@ -1,7 +1,7 @@
 #!/bin/bash
 #===============================================================================
 # WeeVoice EAGI Deployment Script
-# Uses EXISTING web backend database (Neon) - no new DB needed
+# Deploys EAGI that uses backend WebSocket API for voice streaming
 #===============================================================================
 
 set -e
@@ -30,14 +30,14 @@ SOURCE_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "=============================================="
 echo "  WeeVoice EAGI Deployment"
-echo "  (Uses existing web backend database)"
+echo "  (Uses backend WebSocket API)"
 echo "=============================================="
 echo ""
 
 #===============================================================================
 # Step 1: Check prerequisites
 #===============================================================================
-log_step "1/7: Checking prerequisites..."
+log_step "1/8: Checking prerequisites..."
 
 if [ "$EUID" -ne 0 ]; then
     log_error "Please run as root (sudo)"
@@ -50,19 +50,10 @@ if ! command -v asterisk &> /dev/null; then
 fi
 log_info "✓ Asterisk found"
 
-# Check for existing backend .env
-if [ -f "${BACKEND_DIR}/.env" ]; then
-    log_info "✓ Found existing backend .env"
-elif [ -f "${SOURCE_DIR}/backend/.env" ]; then
-    log_info "✓ Found source backend .env"
-else
-    log_warn "⚠ No .env found - you'll need to configure it"
-fi
-
 #===============================================================================
 # Step 2: Create directories
 #===============================================================================
-log_step "2/7: Creating directories..."
+log_step "2/8: Creating directories..."
 
 mkdir -p "$WEEVOICE_DIR"
 mkdir -p "$BACKEND_DIR"
@@ -78,7 +69,7 @@ log_info "✓ Directories created"
 #===============================================================================
 # Step 3: Setup Python virtual environment
 #===============================================================================
-log_step "3/7: Setting up Python virtual environment..."
+log_step "3/8: Setting up Python virtual environment..."
 
 if [ ! -d "$VENV_DIR" ]; then
     log_info "Creating virtual environment..."
@@ -94,76 +85,71 @@ pip install -q websockets
 log_info "✓ Virtual environment ready"
 
 #===============================================================================
-# Step 4: Copy EAGI scripts ONLY (not the full app - avoids pydantic issues)
+# Step 4: Copy EAGI scripts
 #===============================================================================
-log_step "4/7: Copying EAGI scripts..."
+log_step "4/8: Copying EAGI scripts..."
 
-# IMPORTANT: Remove old app directory if it exists (causes pydantic issues)
+# Remove old app directory if it exists (causes pydantic issues)
 if [ -d "${BACKEND_DIR}/app" ]; then
     rm -rf "${BACKEND_DIR}/app"
     log_info "✓ Removed old app directory"
 fi
 
-# IMPORTANT: Remove cached Python files (cause stale imports)
+# Clear Python cache
 find "${BACKEND_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "${BACKEND_DIR}" -name "*.pyc" -delete 2>/dev/null || true
-log_info "✓ Cleared Python cache files"
+log_info "✓ Cleared Python cache"
 
-# ONLY copy EAGI scripts - NOT the app directory
+# Copy EAGI scripts
 if [ -d "${SOURCE_DIR}/backend/eagi" ]; then
     cp -r "${SOURCE_DIR}/backend/eagi" "${BACKEND_DIR}/"
     log_info "✓ Copied EAGI scripts"
 fi
 
-# Copy .env if not exists
-if [ ! -f "${BACKEND_DIR}/.env" ] && [ -f "${SOURCE_DIR}/backend/.env" ]; then
-    cp "${SOURCE_DIR}/backend/.env" "${BACKEND_DIR}/.env"
-    log_info "✓ Copied .env from source"
+#===============================================================================
+# Step 5: Copy API endpoint to running backend
+#===============================================================================
+log_step "5/8: Installing EAGI API endpoint..."
+
+# Copy eagi.py to the running backend's API directory
+if [ -f "${SOURCE_DIR}/backend/app/api/eagi.py" ]; then
+    if [ -d "${BACKEND_DIR}/app/api" ]; then
+        cp "${SOURCE_DIR}/backend/app/api/eagi.py" "${BACKEND_DIR}/app/api/"
+        log_info "✓ Copied eagi.py to backend"
+    else
+        log_warn "Backend app/api directory not found - API may need manual setup"
+    fi
 fi
 
-#===============================================================================
-# Step 5: Verify .env has required settings
-#===============================================================================
-log_step "5/7: Verifying environment configuration..."
-
-ENV_FILE="${BACKEND_DIR}/.env"
-
-if [ -f "$ENV_FILE" ]; then
-    # Check for required variables
-    if grep -q "^DATABASE_URL=" "$ENV_FILE"; then
-        log_info "✓ DATABASE_URL configured (Neon)"
+# Check if main.py needs eagi import
+if [ -f "${BACKEND_DIR}/app/main.py" ]; then
+    if ! grep -q "eagi" "${BACKEND_DIR}/app/main.py"; then
+        log_warn "⚠ main.py doesn't have eagi import - adding it..."
+        
+        # Add eagi to imports
+        sed -i 's/phone_debug, performance$/phone_debug, performance, eagi/' "${BACKEND_DIR}/app/main.py"
+        
+        # Add router (only if not already there)
+        if ! grep -q "eagi.router" "${BACKEND_DIR}/app/main.py"; then
+            sed -i '/performance.router/a app.include_router(eagi.router, prefix=f"{settings.API_V1_STR}/eagi", tags=["EAGI"])' "${BACKEND_DIR}/app/main.py"
+        fi
+        
+        log_info "✓ Added eagi to main.py"
     else
-        log_error "DATABASE_URL not found in .env!"
-        log_error "Add your Neon database URL to ${ENV_FILE}"
+        log_info "✓ eagi already in main.py"
     fi
-    
-    if grep -q "^GOOGLE_API_KEY=" "$ENV_FILE"; then
-        log_info "✓ GOOGLE_API_KEY configured"
-    else
-        log_warn "⚠ GOOGLE_API_KEY not found - add it to ${ENV_FILE}"
-    fi
-    
-    # Ensure BACKEND_CORS_ORIGINS exists (prevents pydantic error)
-    if ! grep -q "^BACKEND_CORS_ORIGINS=" "$ENV_FILE"; then
-        echo 'BACKEND_CORS_ORIGINS=["http://localhost:3000"]' >> "$ENV_FILE"
-        log_info "✓ Added BACKEND_CORS_ORIGINS"
-    fi
-else
-    log_error "No .env file found at ${ENV_FILE}"
-    log_error "Copy your web backend .env file there"
-    exit 1
 fi
 
 #===============================================================================
 # Step 6: Create AGI wrapper script
 #===============================================================================
-log_step "6/7: Creating AGI wrapper script..."
+log_step "6/8: Creating AGI wrapper script..."
 
 cat > "${AGI_BIN}/weevoice_eagi_realtime.py" << 'WRAPPER_EOF'
 #!/bin/bash
 #===============================================================================
-# WeeVoice EAGI Wrapper (API Mode)
-# Uses backend API for configuration - same settings as web agent
+# WeeVoice EAGI Wrapper
+# Connects to backend WebSocket API for AI voice streaming
 #===============================================================================
 
 export HOME="/opt/weevoice"
@@ -171,7 +157,7 @@ export HOME="/opt/weevoice"
 # Backend API URL (same server)
 export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8000}"
 
-# Run EAGI script (gets config from API, no local imports needed)
+# Run EAGI script
 exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_full.py "$@"
 WRAPPER_EOF
 
@@ -181,9 +167,9 @@ chown asterisk:asterisk "${AGI_BIN}/weevoice_eagi_realtime.py"
 log_info "✓ Wrapper script created"
 
 #===============================================================================
-# Step 7: Deploy Asterisk dialplan & set permissions
+# Step 7: Deploy Asterisk dialplan
 #===============================================================================
-log_step "7/7: Deploying Asterisk dialplan..."
+log_step "7/8: Deploying Asterisk dialplan..."
 
 if [ -f "/etc/asterisk/extensions.conf" ]; then
     cp "/etc/asterisk/extensions.conf" "/etc/asterisk/extensions.conf.backup.$(date +%Y%m%d%H%M%S)"
@@ -198,34 +184,51 @@ fi
 asterisk -rx "dialplan reload" > /dev/null 2>&1 || true
 log_info "✓ Asterisk dialplan reloaded"
 
+#===============================================================================
+# Step 8: Set permissions and restart services
+#===============================================================================
+log_step "8/8: Finalizing..."
+
 # Set permissions
 chown -R asterisk:asterisk "$WEEVOICE_DIR"
 chmod +x "${EAGI_DIR}"/*.py 2>/dev/null || true
 
-# Final cleanup - ensure no stale cache
-find "${BACKEND_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find "${BACKEND_DIR}" -name "*.pyc" -delete 2>/dev/null || true
-
-# Clear EAGI log for fresh start
+# Clear log for fresh start
 truncate -s 0 "${LOG_DIR}/eagi.log" 2>/dev/null || true
 
+# Restart backend if using supervisor
+if command -v supervisorctl &> /dev/null; then
+    if supervisorctl status weevoice-backend &> /dev/null; then
+        log_info "Restarting backend via supervisor..."
+        supervisorctl restart weevoice-backend
+        sleep 3
+    fi
+fi
+
 #===============================================================================
-# Summary
+# Verify
 #===============================================================================
 echo ""
 echo "=============================================="
 echo "  Deployment Complete!"
 echo "=============================================="
 echo ""
+
+# Check backend
+if curl -s "http://127.0.0.1:8000/api/v1/eagi/config" > /dev/null 2>&1; then
+    log_info "✓ Backend API is responding"
+else
+    log_warn "⚠ Backend API not responding - make sure it's running"
+    log_warn "  Try: sudo supervisorctl restart weevoice-backend"
+fi
+
+echo ""
 log_info "EAGI Script:  ${EAGI_DIR}/weevoice_eagi_full.py"
 log_info "AGI Wrapper:  ${AGI_BIN}/weevoice_eagi_realtime.py"
-log_info "Config File:  ${ENV_FILE}"
 log_info "Log File:     ${LOG_DIR}/eagi.log"
 echo ""
-echo "The EAGI uses your EXISTING Neon database."
-echo "Same agents and settings as your web UI."
-echo ""
 echo "To test:"
-echo "  1. Call your phone number"
-echo "  2. Watch logs: tail -f ${LOG_DIR}/eagi.log"
+echo "  1. Make sure backend is running: curl http://127.0.0.1:8000/api/v1/eagi/config"
+echo "  2. Call your phone number"
+echo "  3. Watch logs: tail -f ${LOG_DIR}/eagi.log"
 echo ""
