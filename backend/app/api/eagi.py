@@ -192,7 +192,7 @@ async def eagi_stream(websocket: WebSocket):
             else:
                 print(f"[EAGI-WS] ⚠ No cached greeting found, Gemini will generate it", flush=True)
                 # Trigger background generation for next call
-                _greeting_service.trigger_background_generation(agent.greeting, language, gender)
+                _greeting_service.trigger_background_generation(agent.greeting, language, gender, voice_id)
         
         # Create call record (can be done while Gemini is starting)
         call = Call(

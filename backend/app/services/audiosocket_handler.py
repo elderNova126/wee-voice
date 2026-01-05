@@ -1336,7 +1336,8 @@ class AudioSocketSession:
                     tts_service.trigger_background_generation(
                         self.agent.greeting,
                         language=language,
-                        gender=gender
+                        gender=gender,
+                        voice_id=voice_id  # Pass voice_id for correct voice
                     )
             else:
                 print(f"[SETUP] No greeting configured for agent", flush=True)
