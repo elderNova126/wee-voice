@@ -942,9 +942,9 @@ VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
         logger.info(f"Starting audio input for call {self.call.session_id}")
         audio_sent_count = 0
         
-        # Batch audio for VAD - smaller batches = faster response
-        # 16kHz * 2 bytes * 0.03s = 960 bytes minimum batch (30ms)
-        MIN_BATCH_SIZE = 960  # ~30ms at 16kHz - reduced for faster response
+        # Batch audio for VAD - minimum batches for fastest response
+        # 16kHz * 2 bytes * 0.02s = 640 bytes minimum batch (20ms)
+        MIN_BATCH_SIZE = 640  # ~20ms at 16kHz - ultra-fast for quick VAD
         audio_buffer = b''
         
         try:

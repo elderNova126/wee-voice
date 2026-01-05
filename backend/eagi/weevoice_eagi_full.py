@@ -239,6 +239,9 @@ class EAGIHandler:
         # Track last audio time for timeout detection
         self._last_audio_time = time.time()
         
+        # Pending greeting to play in background
+        self._pending_greeting = None
+        
         log("=" * 60)
         log("WeeVoice EAGI Starting (WebSocket API Mode)")
         log(f"Backend: {WS_URL}")
@@ -439,11 +442,12 @@ class EAGIHandler:
                     continue
                 
                 if msg_type == "greeting_end":
-                    # All chunks received - play greeting
+                    # All chunks received - DON'T wait for greeting to finish!
+                    # Store greeting and continue - we'll play it async
                     if greeting_chunks:
                         full_audio = b''.join(greeting_chunks)
-                        log(f"Greeting complete: {len(full_audio)} bytes - playing IMMEDIATELY!")
-                        await self._play_greeting_audio(full_audio)
+                        log(f"Greeting complete: {len(full_audio)} bytes - will play in background")
+                        self._pending_greeting = full_audio
                         greeting_chunks = []
                     continue
                 
@@ -534,11 +538,11 @@ class EAGIHandler:
         empty_read_count = 0
         MAX_EMPTY_READS = 50  # ~1 second of no audio = call ended
         
-        # Batch size for sending - 60ms at 16kHz = 1920 bytes
-        # This reduces WebSocket overhead while keeping latency low
-        SEND_BATCH_SIZE = 1920  # ~60ms at 16kHz
+        # Batch size for sending - 40ms at 16kHz = 1280 bytes
+        # Smaller batches = faster audio to Gemini = faster VAD detection
+        SEND_BATCH_SIZE = 1280  # ~40ms at 16kHz
         last_send_time = time.time()
-        MAX_SEND_DELAY = 0.04  # Force send every 40ms even if buffer not full
+        MAX_SEND_DELAY = 0.025  # Force send every 25ms even if buffer not full
         
         while self.running and self.ws:
             try:
@@ -631,20 +635,19 @@ class EAGIHandler:
         file_id = 0
         audio_accumulator = b''
         
-        # === OPTIMIZED BUFFER for fast response + good quality ===
-        # FIRST response: Play quickly (500ms) for fast perceived response
-        # SUBSEQUENT: Use larger buffer (1.2s) for smooth continuous speech
-        FIRST_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 0.5)   # 500ms for first chunk (fast!)
-        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 1.0)     # 1.0 second for rest
-        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.2)       # 200ms minimum for flush
+        # === ULTRA-LOW LATENCY buffer settings ===
+        # Trade-off: May have tiny gaps, but MUCH faster response
+        FIRST_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 0.25)  # 250ms for first chunk (FAST!)
+        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 0.5)     # 500ms for rest
+        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.15)      # 150ms minimum for flush
         
-        # Track silence for smart flushing - flush quickly when speech pauses
+        # Track silence for smart flushing
         last_audio_time = time.time()
-        SILENCE_FLUSH_MS = 120  # Flush after 120ms of silence (very quick response)
+        SILENCE_FLUSH_MS = 80  # Flush after 80ms of silence (immediate!)
         
         is_first_chunk = True  # Track if this is the first response
         
-        log(f"RECEIVE: Buffer config: first={FIRST_PLAYBACK_SIZE}b (500ms), normal={MIN_PLAYBACK_SIZE}b (1s), flush={FLUSH_THRESHOLD}b")
+        log(f"RECEIVE: Buffer config: first={FIRST_PLAYBACK_SIZE}b (250ms), normal={MIN_PLAYBACK_SIZE}b (500ms), flush={FLUSH_THRESHOLD}b (150ms)")
         
         try:
             while self.running and self.ws:
@@ -817,7 +820,7 @@ class EAGIHandler:
         self._read_agi_env()
         self._verbose("WeeVoice: Starting")
         
-        # Connect to backend
+        # Connect to backend (greeting stored in self._pending_greeting)
         if not await self._connect_websocket():
             self._verbose("WeeVoice: Connection Error")
             return
@@ -829,9 +832,19 @@ class EAGIHandler:
         try:
             # Create tasks
             log("Creating async tasks...")
+            
+            # Start all tasks including greeting (greeting runs in parallel!)
             capture_task = asyncio.create_task(self._capture_and_send())
             receive_task = asyncio.create_task(self._receive_and_buffer())
             playback_task = asyncio.create_task(self._playback_worker())
+            
+            # Greeting task - runs in background while other tasks also run
+            greeting_task = None
+            if self._pending_greeting:
+                log("Starting greeting playback task (parallel with capture)...")
+                greeting_task = asyncio.create_task(self._play_greeting_audio(self._pending_greeting))
+                self._pending_greeting = None
+            
             log("All tasks created")
             
             # Wait for capture task to complete (it detects call end)
@@ -843,8 +856,12 @@ class EAGIHandler:
             # Give receive/playback tasks a moment to finish gracefully
             await asyncio.sleep(0.5)
             
-            # Cancel pending tasks
-            for task in [receive_task, playback_task]:
+            # Cancel pending tasks (including greeting if still running)
+            tasks_to_cancel = [receive_task, playback_task]
+            if greeting_task and not greeting_task.done():
+                tasks_to_cancel.append(greeting_task)
+            
+            for task in tasks_to_cancel:
                 if not task.done():
                     task.cancel()
                     try:
