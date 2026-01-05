@@ -3,9 +3,13 @@ EAGI API Endpoints
 
 Provides WebSocket-based real-time voice streaming for EAGI.
 Uses the same FrenchVoiceAgentService as the web agent.
+
+OPTIMIZATION: Pre-cached greeting is sent IMMEDIATELY on WebSocket connect,
+while Gemini session starts in parallel. This reduces initial delay from 5+ seconds to <1 second.
 """
 
 import asyncio
+import audioop
 import base64
 import json
 import logging
@@ -20,10 +24,14 @@ from app.models.database import get_db, SessionLocal
 from app.models import VoiceAgent, PhoneNumber, Call, CallStatus
 from app.core.config import settings
 from app.services.agent_service import FrenchVoiceAgentService
+from app.services.greeting_tts_service import get_cached_greeting_sync, get_gemini_voice_name, GreetingTTSService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["eagi"])
+
+# Greeting TTS service instance for background generation
+_greeting_service = GreetingTTSService()
 
 
 class AgentConfigResponse(BaseModel):
@@ -67,6 +75,8 @@ async def eagi_stream(websocket: WebSocket):
     
     Protocol:
     - Client sends: {"type": "start", "caller_id": "...", "session_id": "..."}
+    - Server sends: {"type": "greeting", "data": "<base64 PCM 8kHz>"}  # IMMEDIATE - before Gemini ready
+    - Server sends: {"type": "ready", "agent": "..."}  # After Gemini connected
     - Client sends: {"type": "audio", "data": "<base64 PCM 16kHz>"}
     - Server sends: {"type": "audio", "data": "<base64 PCM 24kHz>"}
     - Server sends: {"type": "transcript", "role": "user|assistant", "text": "..."}
@@ -82,6 +92,7 @@ async def eagi_stream(websocket: WebSocket):
     agent_service = None
     audio_task = None
     receive_task = None
+    greeting_audio = None
     
     try:
         # Wait for start message
@@ -97,7 +108,7 @@ async def eagi_stream(websocket: WebSocket):
         print(f"[EAGI-WS] Session starting: {session_id}, caller: {caller_id}", flush=True)
         logger.info(f"[EAGI-WS] Session starting: {session_id}, caller: {caller_id}")
         
-        # Get agent
+        # Get agent IMMEDIATELY
         phone = db.query(PhoneNumber).filter(
             PhoneNumber.agent_id.isnot(None),
             PhoneNumber.sip_username.isnot(None)
@@ -116,7 +127,47 @@ async def eagi_stream(websocket: WebSocket):
         print(f"[EAGI-WS] Using agent: {agent.name} (ID: {agent.id})", flush=True)
         logger.info(f"[EAGI-WS] Using agent: {agent.name} (ID: {agent.id})")
         
-        # Create call record
+        # =====================================================================
+        # OPTIMIZATION: Send pre-cached greeting IMMEDIATELY before Gemini starts
+        # This eliminates the 5+ second delay!
+        # =====================================================================
+        if agent.greeting:
+            import time
+            t0 = time.perf_counter()
+            
+            language = getattr(agent, 'language', 'fr-FR') or 'fr-FR'
+            gender = getattr(agent, 'voice_gender', 'male') or 'male'
+            
+            print(f"[EAGI-WS] Looking for cached greeting (lang={language}, gender={gender})", flush=True)
+            
+            # Get cached greeting (instant - just a file read)
+            greeting_audio = get_cached_greeting_sync(agent.greeting, language, gender)
+            
+            if greeting_audio:
+                # The cached greeting is 8kHz PCM16 - convert to 24kHz for EAGI
+                # (EAGI expects 24kHz from backend for playback)
+                try:
+                    greeting_24k, _ = audioop.ratecv(greeting_audio, 2, 1, 8000, 24000, None)
+                    greeting_b64 = base64.b64encode(greeting_24k).decode()
+                    
+                    # Send greeting IMMEDIATELY - before Gemini session starts!
+                    await websocket.send_json({
+                        "type": "greeting",
+                        "data": greeting_b64
+                    })
+                    
+                    elapsed_ms = (time.perf_counter() - t0) * 1000
+                    print(f"[EAGI-WS] ✅ Greeting sent in {elapsed_ms:.0f}ms ({len(greeting_24k)} bytes)", flush=True)
+                    logger.info(f"[EAGI-WS] Greeting sent in {elapsed_ms:.0f}ms")
+                except Exception as e:
+                    print(f"[EAGI-WS] ⚠ Greeting conversion error: {e}", flush=True)
+                    greeting_audio = None
+            else:
+                print(f"[EAGI-WS] ⚠ No cached greeting found, Gemini will generate it", flush=True)
+                # Trigger background generation for next call
+                _greeting_service.trigger_background_generation(agent.greeting, language, gender)
+        
+        # Create call record (can be done while Gemini is starting)
         call = Call(
             user_id=agent.user_id,
             agent_id=agent.id,
@@ -134,14 +185,15 @@ async def eagi_stream(websocket: WebSocket):
         print(f"[EAGI-WS] Call record created: {call.id}", flush=True)
         logger.info(f"[EAGI-WS] Call record created: {call.id}")
         
-        # Create agent service (same as web agent)
+        # Create agent service - skip greeting trigger if we already sent cached greeting
         agent_service = FrenchVoiceAgentService(
             agent,
             call,
-            skip_greeting_trigger=False
+            skip_greeting_trigger=bool(greeting_audio)  # Skip Gemini greeting if cached was sent
         )
         
-        # Start Gemini session
+        # Start Gemini session (this is the slow part - 2-4 seconds)
+        # But the caller is already hearing the greeting!
         print("[EAGI-WS] Starting Gemini session...", flush=True)
         logger.info("[EAGI-WS] Starting Gemini session...")
         if not await agent_service.start_session():

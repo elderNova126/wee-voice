@@ -226,7 +226,12 @@ class EAGIHandler:
     # ========================================================================
     
     async def _connect_websocket(self) -> bool:
-        """Connect to backend WebSocket API"""
+        """
+        Connect to backend WebSocket API.
+        
+        OPTIMIZATION: Backend may send pre-cached greeting IMMEDIATELY 
+        before Gemini is ready. We play it while waiting for "ready".
+        """
         try:
             import websockets
             
@@ -240,20 +245,28 @@ class EAGIHandler:
                 "session_id": self.session_id
             }))
             
-            # Wait for ready
-            response = await asyncio.wait_for(self.ws.recv(), timeout=30)
-            msg = json.loads(response)
-            
-            if msg.get("type") == "error":
-                log(f"Backend error: {msg.get('message')}")
-                return False
-            
-            if msg.get("type") == "ready":
-                log(f"Connected! Agent: {msg.get('agent')}")
-                return True
-            
-            log(f"Unexpected response: {msg}")
-            return False
+            # Wait for ready - but handle greeting message first if sent
+            while True:
+                response = await asyncio.wait_for(self.ws.recv(), timeout=30)
+                msg = json.loads(response)
+                
+                if msg.get("type") == "error":
+                    log(f"Backend error: {msg.get('message')}")
+                    return False
+                
+                if msg.get("type") == "greeting":
+                    # Play cached greeting IMMEDIATELY while Gemini starts
+                    log("Received pre-cached greeting - playing IMMEDIATELY!")
+                    await self._play_greeting_immediately(msg.get("data"))
+                    # Continue waiting for "ready"
+                    continue
+                
+                if msg.get("type") == "ready":
+                    log(f"Connected! Agent: {msg.get('agent')}")
+                    return True
+                
+                log(f"Unexpected response: {msg}")
+                # Don't fail on unexpected messages, keep waiting for ready
             
         except ImportError:
             log("websockets package not installed!")
@@ -264,6 +277,49 @@ class EAGIHandler:
         except Exception as e:
             log(f"WebSocket connection error: {e}")
             return False
+    
+    async def _play_greeting_immediately(self, audio_b64: str):
+        """
+        Play pre-cached greeting IMMEDIATELY.
+        This runs before Gemini session is ready, eliminating the 5+ second delay.
+        """
+        if not audio_b64:
+            log("No greeting audio data")
+            return
+        
+        try:
+            import time
+            t0 = time.perf_counter()
+            
+            # Decode base64 audio (24kHz PCM from backend)
+            audio_24k = base64.b64decode(audio_b64)
+            log(f"Greeting received: {len(audio_24k)} bytes (24kHz)")
+            
+            # Resample 24kHz -> 8kHz for Asterisk
+            audio_8k = self._resample_24k_to_8k(audio_24k)
+            log(f"Greeting resampled to 8kHz: {len(audio_8k)} bytes")
+            
+            # Write to file
+            greeting_file = f"{AUDIO_TMP_DIR}/{self.session_id}_greeting"
+            ulaw_data = self._pcm_to_ulaw(audio_8k)
+            
+            with open(f"{greeting_file}.ulaw", 'wb') as f:
+                f.write(ulaw_data)
+            
+            # Play via STREAM FILE (blocking but quick for greeting)
+            log(f"Playing greeting via STREAM FILE...")
+            
+            # Run in executor to not block event loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, self._stream_file, greeting_file
+            )
+            
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            log(f"✅ Greeting played in {elapsed_ms:.0f}ms total")
+            
+        except Exception as e:
+            log(f"Error playing greeting: {e}")
     
     # ========================================================================
     # AUDIO LOOPS (NON-BLOCKING)
@@ -361,7 +417,9 @@ class EAGIHandler:
         chunk_count = 0
         file_id = 0
         audio_accumulator = b''
-        MIN_PLAYBACK_SIZE = ASTERISK_RATE * 2 * 1  # 1 second of audio minimum
+        # Reduced buffer for faster response - 400ms instead of 1 second
+        # This improves perceived latency after the initial greeting
+        MIN_PLAYBACK_SIZE = ASTERISK_RATE * 2 * 0.4  # 400ms of audio minimum
         
         try:
             while self.running and self.ws:
