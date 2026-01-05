@@ -1,41 +1,20 @@
 #!/usr/bin/env python3
 """
 WeeVoice EAGI Full Implementation
-Uses the same FrenchVoiceAgentService as the web/AudioSocket handler.
-Supports database-driven agent configuration with all features:
-- Custom system prompts
-- Voice selection
-- Greeting
-- RAG (document search)
-- Tools
-- Call logging
+Connects directly to database WITHOUT using app.core.config (avoids pydantic issues)
+Uses same agent logic as web backend.
 """
 
 import os
 import sys
-
-# ============================================================================
-# FIX PYDANTIC SETTINGS - Set env vars BEFORE any app imports
-# ============================================================================
-# BACKEND_CORS_ORIGINS must be a valid JSON array for pydantic-settings
-if 'BACKEND_CORS_ORIGINS' not in os.environ or not os.environ['BACKEND_CORS_ORIGINS'].startswith('['):
-    os.environ['BACKEND_CORS_ORIGINS'] = '["http://localhost:3000"]'
-
-# Ensure other required settings have defaults
-if 'SECRET_KEY' not in os.environ:
-    os.environ['SECRET_KEY'] = 'eagi-default-key'
-
-# ============================================================================
-# Now safe to import other modules
-# ============================================================================
 import asyncio
 import audioop
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 
 # ============================================================================
-# LOGGING SETUP
+# LOGGING SETUP - Before any other imports
 # ============================================================================
 LOG_DIR = "/var/log/weevoice"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -53,42 +32,83 @@ logger = logging.getLogger("weevoice_eagi")
 # ============================================================================
 # AUDIO CONFIGURATION
 # ============================================================================
-# Audio rates (matching audiosocket_handler.py)
-INPUT_SAMPLE_RATE = 8000    # From Asterisk (PSTN native)
-GEMINI_INPUT_RATE = 16000   # Gemini expects 16kHz input
+INPUT_SAMPLE_RATE = 8000    # From Asterisk
+GEMINI_INPUT_RATE = 16000   # Gemini expects 16kHz
 GEMINI_OUTPUT_RATE = 24000  # Gemini outputs 24kHz
+INPUT_FRAME_SIZE = 320      # 20ms at 8kHz
 
-# Frame sizes (20ms frames)
-INPUT_FRAME_SIZE = 320      # 20ms at 8kHz = 160 samples * 2 bytes
-OUTPUT_FRAME_SIZE = 960     # 20ms at 24kHz
-
-# High quality mode sends 24kHz directly (for SIP/WebRTC)
 HIGH_QUALITY_MODE = os.environ.get('WEEVOICE_HIGH_QUALITY', 'false').lower() == 'true'
+
+
+class DirectDatabaseConnection:
+    """
+    Direct database connection that bypasses app.core.config
+    Avoids pydantic-settings parsing issues
+    """
+    
+    def __init__(self):
+        self.engine = None
+        self.Session = None
+        
+    def connect(self) -> bool:
+        """Connect to database using DATABASE_URL from environment"""
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            
+            database_url = os.environ.get('DATABASE_URL', '')
+            if not database_url:
+                logger.error("DATABASE_URL not set!")
+                return False
+            
+            logger.info(f"Connecting to database: {database_url[:50]}...")
+            
+            self.engine = create_engine(database_url)
+            self.Session = sessionmaker(bind=self.engine)
+            
+            # Test connection
+            with self.engine.connect() as conn:
+                conn.execute("SELECT 1")
+            
+            logger.info("Database connected successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Database connection failed: {e}")
+            return False
+    
+    def get_session(self):
+        """Get a new database session"""
+        if self.Session:
+            return self.Session()
+        return None
 
 
 class EAGIHandler:
     """
-    Full-featured EAGI handler that uses FrenchVoiceAgentService.
-    Same as AudioSocket handler but for EAGI.
+    Full-featured EAGI handler with direct database access
     """
     
     def __init__(self):
         self.env = {}
         self.running = False
+        self.db_connection = DirectDatabaseConnection()
         self.db = None
         self.agent = None
         self.call = None
-        self.agent_service = None
+        self.gemini_session = None
+        self.gemini_client = None
         self._audio_fd = None
         self._resample_state_in = None
         self._resample_state_out = None
+        self.audio_queue = asyncio.Queue(maxsize=10)
         
-        # Caller info (from AGI env)
+        # Caller info
         self.caller_id = "unknown"
         self.call_id = None
         
         logger.info("=" * 60)
-        logger.info("WeeVoice EAGI Full - Starting")
+        logger.info("WeeVoice EAGI Starting (Direct DB Mode)")
         logger.info(f"High Quality Mode: {HIGH_QUALITY_MODE}")
         logger.info("=" * 60)
     
@@ -97,7 +117,7 @@ class EAGIHandler:
     # ========================================================================
     
     def _read_agi_env(self):
-        """Read AGI environment variables from stdin"""
+        """Read AGI environment variables"""
         logger.info("Reading AGI environment...")
         while True:
             line = sys.stdin.readline().strip()
@@ -110,29 +130,24 @@ class EAGIHandler:
         self.caller_id = self.env.get('agi_callerid', 'unknown')
         self.call_id = self.env.get('agi_uniqueid', datetime.now().strftime('%Y%m%d%H%M%S'))
         
-        logger.info(f"AGI Call ID: {self.call_id}")
-        logger.info(f"AGI Caller ID: {self.caller_id}")
-        logger.info(f"AGI Channel: {self.env.get('agi_channel', 'unknown')}")
+        logger.info(f"Call ID: {self.call_id}, Caller: {self.caller_id}")
     
     def _agi_command(self, cmd: str) -> str:
-        """Send AGI command and get response"""
+        """Send AGI command"""
         sys.stdout.write(f"{cmd}\n")
         sys.stdout.flush()
         return sys.stdin.readline().strip()
     
     def _verbose(self, msg: str):
-        """Send verbose message to Asterisk CLI"""
+        """Send message to Asterisk CLI"""
         self._agi_command(f'VERBOSE "{msg}" 3')
     
     # ========================================================================
-    # AUDIO RESAMPLING (matching audiosocket_handler.py)
+    # AUDIO RESAMPLING
     # ========================================================================
     
     def _resample_for_gemini(self, audio_8k: bytes) -> bytes:
-        """
-        Convert 8kHz slin from Asterisk to 16kHz for Gemini input.
-        Matching audiosocket_handler.py logic.
-        """
+        """Convert 8kHz to 16kHz for Gemini"""
         if len(audio_8k) < 2:
             return b''
         try:
@@ -141,156 +156,206 @@ class EAGIHandler:
             )
             return result
         except Exception as e:
-            logger.error(f"Resample input error: {e}")
+            logger.error(f"Resample in error: {e}")
             return audio_8k
     
     def _resample_from_gemini(self, audio_24k: bytes) -> bytes:
-        """
-        Convert 24kHz from Gemini to 8kHz for Asterisk output.
-        Matching audiosocket_handler.py logic.
-        """
+        """Convert 24kHz to 8kHz for Asterisk"""
         if len(audio_24k) < 2:
             return b''
         try:
-            if HIGH_QUALITY_MODE:
-                # For SIP/WebRTC: Keep at higher rate
-                target_rate = 16000
-            else:
-                # For PSTN: Downsample to 8kHz
-                target_rate = INPUT_SAMPLE_RATE
-            
+            target = 16000 if HIGH_QUALITY_MODE else INPUT_SAMPLE_RATE
             result, self._resample_state_out = audioop.ratecv(
-                audio_24k, 2, 1, GEMINI_OUTPUT_RATE, target_rate, self._resample_state_out
+                audio_24k, 2, 1, GEMINI_OUTPUT_RATE, target, self._resample_state_out
             )
             return result
         except Exception as e:
-            logger.error(f"Resample output error: {e}")
+            logger.error(f"Resample out error: {e}")
             return audio_24k
     
     # ========================================================================
-    # DATABASE SETUP (matching audiosocket_handler.py)
+    # DATABASE SETUP (Direct - no app.core.config)
     # ========================================================================
     
     def _setup_from_database(self) -> bool:
-        """
-        Load agent and create call from database.
-        EXACTLY like audiosocket_handler._setup_call_quick()
-        """
+        """Load agent from database directly"""
         try:
-            # Import models (this may fail if settings are wrong)
-            from app.models.database import SessionLocal
-            from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
+            if not self.db_connection.connect():
+                return False
             
-            logger.info("Connecting to database...")
-            self.db = SessionLocal()
+            self.db = self.db_connection.get_session()
+            if not self.db:
+                logger.error("Could not create database session")
+                return False
             
-            # Find phone number with SIP config (same as audiosocket_handler)
-            phone = self.db.query(PhoneNumber).filter(
-                PhoneNumber.agent_id.isnot(None),
-                PhoneNumber.sip_username.isnot(None)
-            ).first()
+            # Import models (these don't use Settings)
+            from sqlalchemy import text
             
-            if not phone:
-                logger.warning("No phone with SIP config found, trying first agent...")
-                self.agent = self.db.query(VoiceAgent).first()
-            else:
-                logger.info(f"Found phone: {phone.phone_number}, agent_id: {phone.agent_id}")
-                
-                # Get agent
-                self.agent = self.db.query(VoiceAgent).filter(
-                    VoiceAgent.id == phone.agent_id
-                ).first()
-                
-                if not self.agent:
-                    self.agent = self.db.query(VoiceAgent).first()
+            # Find phone with agent (raw SQL to avoid model dependencies)
+            result = self.db.execute(text("""
+                SELECT p.agent_id, a.id, a.user_id, a.name, a.system_prompt, 
+                       a.greeting, a.language, a.voice_id, a.voice_gender,
+                       a.model_name, a.temperature, a.rag_enabled
+                FROM phone_numbers p
+                JOIN voice_agents a ON p.agent_id = a.id
+                WHERE p.agent_id IS NOT NULL 
+                  AND p.sip_username IS NOT NULL
+                LIMIT 1
+            """)).fetchone()
             
-            if not self.agent:
+            if not result:
+                # Fallback: get first agent
+                result = self.db.execute(text("""
+                    SELECT id, id as agent_id, user_id, name, system_prompt,
+                           greeting, language, voice_id, voice_gender,
+                           model_name, temperature, rag_enabled
+                    FROM voice_agents
+                    WHERE is_active = true
+                    LIMIT 1
+                """)).fetchone()
+            
+            if not result:
                 logger.error("No agent found in database")
                 return False
             
-            logger.info(f"Using agent: {self.agent.name} (ID: {self.agent.id})")
-            logger.info(f"  Language: {self.agent.language}")
-            logger.info(f"  Voice: {getattr(self.agent, 'voice_id', 'default')}")
-            logger.info(f"  Greeting: {(self.agent.greeting or '')[:50]}...")
-            logger.info(f"  RAG Enabled: {self.agent.rag_enabled}")
+            # Create agent-like object
+            class AgentData:
+                pass
             
-            # Create call record (same as audiosocket_handler)
-            self.call = Call(
-                user_id=self.agent.user_id,
-                agent_id=self.agent.id,
-                caller_phone=self.caller_id,
-                caller_name=self.caller_id,
-                direction="inbound",
-                status=CallStatus.INITIATED,
-                session_id=f"eagi_{self.call_id}",
-                started_at=datetime.utcnow()
-            )
-            self.db.add(self.call)
+            self.agent = AgentData()
+            self.agent.id = result[1]
+            self.agent.user_id = result[2]
+            self.agent.name = result[3]
+            self.agent.system_prompt = result[4] or "You are a helpful phone assistant."
+            self.agent.greeting = result[5] or "Hello! How can I help you?"
+            self.agent.language = result[6] or "en-US"
+            self.agent.voice_id = result[7] or "Aoede"
+            self.agent.voice_gender = result[8] or "female"
+            self.agent.model_name = result[9] or "gemini-2.5-flash-preview-native-audio-dialog"
+            self.agent.temperature = float(result[10] or 0.7)
+            self.agent.rag_enabled = bool(result[11])
+            
+            logger.info(f"Loaded agent: {self.agent.name} (ID: {self.agent.id})")
+            logger.info(f"  Voice: {self.agent.voice_id}, Language: {self.agent.language}")
+            logger.info(f"  Greeting: {self.agent.greeting[:50]}...")
+            
+            # Create call record
+            self.db.execute(text("""
+                INSERT INTO calls (user_id, agent_id, caller_phone, caller_name, 
+                                   direction, status, session_id, started_at)
+                VALUES (:user_id, :agent_id, :caller_phone, :caller_name,
+                        'inbound', 'in_progress', :session_id, :started_at)
+            """), {
+                'user_id': self.agent.user_id,
+                'agent_id': self.agent.id,
+                'caller_phone': self.caller_id,
+                'caller_name': self.caller_id,
+                'session_id': f"eagi_{self.call_id}",
+                'started_at': datetime.utcnow()
+            })
             self.db.commit()
-            self.db.refresh(self.call)
             
-            logger.info(f"Created call record: {self.call.id}")
+            logger.info("Call record created")
             return True
             
         except Exception as e:
             logger.error(f"Database setup error: {e}", exc_info=True)
             return False
     
-    def _setup_agent_service(self) -> bool:
-        """
-        Create FrenchVoiceAgentService - SAME service as web/AudioSocket.
-        This gives us full agent features: voice, prompts, tools, RAG.
-        """
-        try:
-            from app.services.agent_service import FrenchVoiceAgentService
-            
-            logger.info("Creating FrenchVoiceAgentService...")
-            
-            # Create the SAME service used by web agent and AudioSocket
-            self.agent_service = FrenchVoiceAgentService(
-                self.agent,
-                self.call,
-                skip_greeting_trigger=False  # Let Gemini handle greeting naturally
-            )
-            
-            logger.info("Agent service created successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Agent service creation error: {e}", exc_info=True)
-            return False
+    # ========================================================================
+    # GEMINI CONNECTION (Direct - like FrenchVoiceAgentService)
+    # ========================================================================
     
-    async def _start_gemini_session(self) -> bool:
-        """Start Gemini session using agent service (like audiosocket_handler)"""
+    async def _connect_gemini(self) -> bool:
+        """Connect to Gemini Live API directly"""
         try:
-            logger.info("Starting Gemini session via agent_service...")
+            from google import genai
+            from google.genai import types
             
-            if not await self.agent_service.start_session():
-                logger.error("Failed to start Gemini session")
+            api_key = os.environ.get('GOOGLE_API_KEY', '')
+            if not api_key:
+                logger.error("GOOGLE_API_KEY not set!")
                 return False
             
-            # Update call status
-            from app.models import CallStatus
-            self.call.status = CallStatus.IN_PROGRESS
-            self.db.commit()
+            logger.info("Connecting to Gemini...")
             
-            logger.info("Gemini session started successfully")
+            # Create client
+            self.gemini_client = genai.Client(api_key=api_key)
+            
+            # Select voice based on agent config
+            voice_name = self.agent.voice_id
+            if self.agent.voice_gender == "female":
+                voice_name = "Kore"
+            elif self.agent.voice_gender == "male":
+                voice_name = "Charon"
+            
+            # Build system instruction (like FrenchVoiceAgentService)
+            system_instruction = f"""{self.agent.system_prompt}
+
+GREETING PROTOCOL:
+- When conversation starts, say: "{self.agent.greeting}"
+- Use natural, friendly tone
+- Keep responses concise for voice conversation
+
+VOICE INSTRUCTION:
+- Maintain consistent voice throughout
+- Speak clearly and naturally
+- Language: {self.agent.language}
+"""
+            
+            # Configure Gemini Live
+            config = types.LiveConnectConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name
+                        )
+                    )
+                ),
+                system_instruction=types.Content(
+                    parts=[types.Part(text=system_instruction)]
+                )
+            )
+            
+            # Connect
+            model = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash-preview-native-audio-dialog')
+            self.gemini_session = await self.gemini_client.aio.live.connect(
+                model=model,
+                config=config
+            ).__aenter__()
+            
+            logger.info(f"Gemini connected (model: {model}, voice: {voice_name})")
             return True
             
         except Exception as e:
-            logger.error(f"Gemini session error: {e}", exc_info=True)
+            logger.error(f"Gemini connection error: {e}", exc_info=True)
             return False
     
+    async def _send_greeting_trigger(self):
+        """Send greeting trigger to Gemini"""
+        try:
+            lang_prefix = "[Respond in English]"
+            if self.agent.language.startswith('fr'):
+                lang_prefix = "[Réponds en français]"
+            elif self.agent.language.startswith('es'):
+                lang_prefix = "[Responde en español]"
+            
+            await self.gemini_session.send(
+                input=f"<CALL_START> {lang_prefix}",
+                end_of_turn=True
+            )
+            logger.info("Greeting trigger sent")
+        except Exception as e:
+            logger.error(f"Greeting trigger error: {e}")
+    
     # ========================================================================
-    # AUDIO LOOPS (EAGI specific - FD3 for input, stdout for output)
+    # AUDIO LOOPS
     # ========================================================================
     
     async def _audio_capture_loop(self):
-        """
-        Capture audio from EAGI FD3 and send to Gemini via agent_service.
-        Uses the same format as audiosocket_handler.
-        """
-        logger.info("Starting audio capture from FD3")
+        """Capture audio from FD3 and send to Gemini"""
+        logger.info("Starting audio capture")
         
         try:
             self._audio_fd = os.fdopen(3, 'rb', buffering=0)
@@ -303,7 +368,6 @@ class EAGIHandler:
         
         while self.running:
             try:
-                # Read audio from Asterisk
                 data = self._audio_fd.read(INPUT_FRAME_SIZE)
                 if not data:
                     await asyncio.sleep(0.001)
@@ -311,195 +375,136 @@ class EAGIHandler:
                 
                 buffer += data
                 
-                # Process in frame-sized chunks
                 while len(buffer) >= INPUT_FRAME_SIZE:
                     chunk = buffer[:INPUT_FRAME_SIZE]
                     buffer = buffer[INPUT_FRAME_SIZE:]
                     
-                    # Resample 8kHz -> 16kHz for Gemini
                     audio_16k = self._resample_for_gemini(chunk)
                     
-                    if audio_16k and self.agent_service and self.agent_service.session:
+                    if audio_16k and self.gemini_session:
                         try:
-                            # Send via agent_service (same format as audiosocket)
-                            await self.agent_service.audio_out_queue.put({
-                                "data": audio_16k,
-                                "mime_type": "audio/pcm;rate=16000"
-                            })
+                            from google.genai import types
+                            await self.gemini_session.send(
+                                input=types.LiveClientRealtimeInput(
+                                    media_chunks=[
+                                        types.Blob(
+                                            data=audio_16k,
+                                            mime_type="audio/pcm;rate=16000"
+                                        )
+                                    ]
+                                ),
+                                end_of_turn=False
+                            )
                             frame_count += 1
                         except Exception as e:
                             if "closed" in str(e).lower():
-                                logger.info("Gemini session closed")
                                 self.running = False
                                 break
-                            logger.error(f"Audio send error: {e}")
-                
+                            
             except Exception as e:
                 if self.running:
-                    logger.error(f"Audio capture error: {e}")
+                    logger.error(f"Capture error: {e}")
                 break
         
-        logger.info(f"Audio capture ended. Sent {frame_count} frames")
+        logger.info(f"Capture ended. Frames: {frame_count}")
     
     async def _audio_playback_loop(self):
-        """
-        Receive audio from Gemini via agent_service and write to stdout.
-        """
-        logger.info("Starting audio playback loop")
+        """Receive audio from Gemini and write to stdout"""
+        logger.info("Starting playback")
         
         chunk_count = 0
         
         try:
-            # Receive from agent_service (same as audiosocket)
-            async for response in self.agent_service.session.receive():
+            async for response in self.gemini_session.receive():
                 if not self.running:
                     break
                 
-                # Handle audio data
                 if hasattr(response, 'data') and response.data:
-                    # Resample 24kHz -> 8kHz for Asterisk
                     audio_out = self._resample_from_gemini(response.data)
-                    
                     if audio_out:
-                        try:
-                            # Write to stdout (EAGI audio output)
-                            sys.stdout.buffer.write(audio_out)
-                            sys.stdout.buffer.flush()
-                            chunk_count += 1
-                        except Exception as e:
-                            logger.error(f"Audio write error: {e}")
+                        sys.stdout.buffer.write(audio_out)
+                        sys.stdout.buffer.flush()
+                        chunk_count += 1
                 
-                # Handle transcription (for logging)
+                # Log transcriptions
                 if hasattr(response, 'server_content'):
                     sc = response.server_content
-                    
-                    # Output transcription
                     if hasattr(sc, 'output_transcription') and sc.output_transcription:
                         text = getattr(sc.output_transcription, 'text', '')
                         if text:
-                            logger.info(f"AI: {text[:100]}...")
-                    
-                    # Input transcription
+                            logger.info(f"AI: {text[:80]}...")
                     if hasattr(sc, 'input_transcription') and sc.input_transcription:
                         text = getattr(sc.input_transcription, 'text', '')
                         if text:
-                            logger.info(f"User: {text[:100]}...")
-                    
-                    # Turn complete
-                    if hasattr(sc, 'turn_complete') and sc.turn_complete:
-                        logger.debug("Turn complete")
-                
+                            logger.info(f"User: {text[:80]}...")
+                            
         except Exception as e:
             if "closed" not in str(e).lower():
                 logger.error(f"Playback error: {e}")
         
-        logger.info(f"Playback ended. Received {chunk_count} chunks")
-    
-    async def _gemini_input_loop(self):
-        """Forward audio from queue to Gemini (same as agent_service.send_realtime_input)"""
-        try:
-            await self.agent_service.send_realtime_input()
-        except Exception as e:
-            if self.running:
-                logger.error(f"Gemini input loop error: {e}")
+        logger.info(f"Playback ended. Chunks: {chunk_count}")
     
     # ========================================================================
     # CLEANUP
     # ========================================================================
     
-    def _save_call_data(self):
-        """Save final call data to database"""
-        try:
-            if self.call and self.db:
-                from app.models import CallStatus
-                
-                self.call.status = CallStatus.COMPLETED
-                self.call.ended_at = datetime.utcnow()
-                
-                if self.call.started_at:
-                    duration = (self.call.ended_at - self.call.started_at).total_seconds()
-                    self.call.duration = int(duration)
-                
-                self.db.commit()
-                logger.info(f"Call {self.call.id} saved: duration={self.call.duration}s")
-                
-        except Exception as e:
-            logger.error(f"Failed to save call data: {e}")
-    
     async def _cleanup(self):
         """Clean up resources"""
         logger.info("Cleaning up...")
         
-        # Stop agent service session
-        if self.agent_service:
+        if self.gemini_session:
             try:
-                await self.agent_service.stop_session()
-            except Exception as e:
-                logger.warning(f"Error stopping agent service: {e}")
+                await self.gemini_session.__aexit__(None, None, None)
+            except:
+                pass
         
-        # Save call data
-        self._save_call_data()
-        
-        # Close database
         if self.db:
             try:
                 self.db.close()
             except:
                 pass
         
-        # Close audio FD
         if self._audio_fd:
             try:
                 self._audio_fd.close()
             except:
                 pass
-        
-        logger.info("Cleanup complete")
     
     # ========================================================================
-    # MAIN EXECUTION
+    # MAIN
     # ========================================================================
     
     async def run(self):
-        """Main EAGI execution"""
-        # Read AGI environment
+        """Main execution"""
         self._read_agi_env()
-        self._verbose("WeeVoice: Starting AI Agent")
+        self._verbose("WeeVoice: Starting")
         
-        # Setup from database
+        # Setup database
         if not self._setup_from_database():
-            self._verbose("WeeVoice: Database Error")
-            logger.error("Database setup failed")
+            self._verbose("WeeVoice: DB Error")
             return
         
-        # Create agent service (full features)
-        if not self._setup_agent_service():
-            self._verbose("WeeVoice: Agent Service Error")
-            logger.error("Agent service setup failed")
-            return
-        
-        # Start Gemini session
-        if not await self._start_gemini_session():
+        # Connect to Gemini
+        if not await self._connect_gemini():
             self._verbose("WeeVoice: Gemini Error")
-            logger.error("Gemini session start failed")
             return
         
         self._verbose("WeeVoice: Connected")
         self.running = True
         
         try:
-            # Create tasks
-            capture_task = asyncio.create_task(self._audio_capture_loop())
-            playback_task = asyncio.create_task(self._audio_playback_loop())
-            gemini_input_task = asyncio.create_task(self._gemini_input_loop())
+            # Send greeting trigger
+            await self._send_greeting_trigger()
             
-            # Wait for any task to complete (usually hangup)
+            # Run audio loops
+            capture = asyncio.create_task(self._audio_capture_loop())
+            playback = asyncio.create_task(self._audio_playback_loop())
+            
             done, pending = await asyncio.wait(
-                [capture_task, playback_task, gemini_input_task],
+                [capture, playback],
                 return_when=asyncio.FIRST_COMPLETED
             )
             
-            # Stop and cancel remaining
             self.running = False
             for task in pending:
                 task.cancel()
@@ -507,32 +512,28 @@ class EAGIHandler:
                     await task
                 except asyncio.CancelledError:
                     pass
-            
+                    
         except Exception as e:
             logger.error(f"Run error: {e}", exc_info=True)
         finally:
             self.running = False
             await self._cleanup()
         
-        self._verbose("WeeVoice: Call Ended")
-        logger.info("WeeVoice EAGI Ended")
+        self._verbose("WeeVoice: Ended")
+        logger.info("EAGI Ended")
 
 
 def main():
-    """Entry point"""
     handler = EAGIHandler()
-    
     try:
         asyncio.run(handler.run())
     except KeyboardInterrupt:
         logger.info("Interrupted")
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
-        # Send error to Asterisk
+        logger.error(f"Fatal: {e}", exc_info=True)
         sys.stdout.write('VERBOSE "WeeVoice: Fatal Error" 1\n')
         sys.stdout.flush()
 
 
 if __name__ == "__main__":
     main()
-
