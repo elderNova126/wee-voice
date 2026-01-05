@@ -102,7 +102,7 @@ AGI_BIN="/var/lib/asterisk/agi-bin"
 log_step "Step 1/10: Installing system dependencies..."
 
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip supervisor curl > /dev/null
+apt-get install -y -qq python3 python3-venv python3-pip supervisor curl libsndfile1 > /dev/null
 
 # Check if Apache2 is running (for Asterisk), use it instead of nginx
 if systemctl is-active --quiet apache2; then
@@ -148,6 +148,12 @@ python3 -m venv venv
 
 # Install websockets for EAGI
 ./venv/bin/pip install -q websockets
+
+# Install high-quality audio libraries for EAGI (soxr for VHQ resampling)
+log_info "Installing high-quality audio libraries for EAGI..."
+./venv/bin/pip install -q numpy soxr 2>/dev/null && \
+    log_info "✓ soxr VHQ audio resampler installed" || \
+    log_warn "⚠ Could not install soxr - EAGI will use audioop fallback (lower quality)"
 
 # Create production .env (preserving all original values + overriding URLs)
 cat > .env << EOF
@@ -647,6 +653,7 @@ echo "EAGI (Asterisk Voice Agent):"
 echo "  Script:   ${BACKEND_DIR}/eagi/weevoice_eagi_full.py"
 echo "  Wrapper:  ${AGI_BIN}/weevoice_eagi_realtime.py"
 echo "  Logs:     /var/log/weevoice/eagi.log"
+echo "  Audio:    soxr VHQ (high-quality) if installed, audioop fallback otherwise"
 echo ""
 echo "Commands:"
 echo "  Status:  supervisorctl status"

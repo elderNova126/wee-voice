@@ -43,6 +43,22 @@ if [ ! -d "$BACKEND_DIR" ]; then
 fi
 
 #===============================================================================
+# Install High-Quality Audio Dependencies
+#===============================================================================
+log_info "Ensuring high-quality audio libraries are installed..."
+
+# Install system dependencies for scipy/numpy
+apt-get update > /dev/null 2>&1 || true
+apt-get install -y libsndfile1 > /dev/null 2>&1 || true
+
+# Install Python audio libraries for EAGI (soxr for high-quality resampling)
+source "${BACKEND_DIR}/venv/bin/activate"
+pip install --quiet numpy soxr 2>/dev/null && \
+    log_info "✓ High-quality audio library installed (soxr VHQ mode)" || \
+    log_warn "⚠ Could not install soxr - using audioop fallback (lower quality)"
+deactivate
+
+#===============================================================================
 # Update EAGI Scripts
 #===============================================================================
 log_info "Updating EAGI scripts..."

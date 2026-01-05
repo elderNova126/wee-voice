@@ -4,6 +4,8 @@ WeeVoice EAGI - Uses Backend WebSocket API
 
 This script connects to the backend WebSocket API for voice streaming.
 Audio OUTPUT uses temporary files + STREAM FILE command (EAGI limitation).
+
+AUDIO QUALITY: Uses soxr/scipy for high-quality resampling when available.
 """
 
 import os
@@ -18,8 +20,26 @@ import struct
 import fcntl
 import select
 import time
+import math
+import array
 from datetime import datetime
 from pathlib import Path
+
+# Try to import high-quality resampling libraries
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+
+try:
+    import soxr
+    SOXR_AVAILABLE = True
+except ImportError:
+    SOXR_AVAILABLE = False
+
+# scipy not needed - soxr handles anti-aliasing internally
+SCIPY_AVAILABLE = False  # Not used for resampling
 
 # ============================================================================
 # LOGGING - Use print for immediate output
@@ -54,6 +74,136 @@ GEMINI_INPUT_RATE = 16000  # Backend expects 16kHz
 GEMINI_OUTPUT_RATE = 24000 # Backend sends 24kHz
 FRAME_SIZE = 320           # 20ms at 8kHz
 
+# Audio quality settings (same as AudioSocket handler)
+AUDIO_TARGET_RMS = 1400    # Target RMS level for normalization
+AUDIO_MAX_GAIN_DB = 18.0   # Maximum gain in dB
+
+
+# =============================================================================
+# HIGH-QUALITY AUDIO PROCESSING
+# =============================================================================
+
+class HighQualityResampler:
+    """
+    High-quality streaming resampler using soxr (VHQ mode).
+    Falls back to audioop if soxr not available.
+    
+    IMPORTANT: Uses stateful streaming for gap-free audio!
+    
+    This makes a HUGE difference in audio quality compared to audioop.ratecv!
+    - soxr VHQ: Best quality, proper anti-aliasing, stateful streaming
+    - audioop: Lower quality but always available, also stateful
+    
+    NOTE: scipy.signal.resample is NOT used because it's not stateful,
+    causing clicks/pops at chunk boundaries in real-time streaming.
+    """
+    def __init__(self, from_rate: int, to_rate: int):
+        self.from_rate = from_rate
+        self.to_rate = to_rate
+        self.resampler = None
+        self.audioop_state = None
+        self.method = "audioop"  # Default fallback
+        
+        if SOXR_AVAILABLE and NUMPY_AVAILABLE:
+            try:
+                self.resampler = soxr.ResampleStream(
+                    from_rate, to_rate,
+                    num_channels=1,
+                    dtype=np.float32,
+                    quality=soxr.VHQ  # Very High Quality!
+                )
+                self.method = "soxr_vhq"
+                log(f"Resampler: soxr VHQ {from_rate}Hz → {to_rate}Hz")
+            except Exception as e:
+                log(f"soxr init failed: {e}, using audioop fallback")
+        else:
+            log(f"Resampler: audioop {from_rate}Hz → {to_rate}Hz (install soxr for better quality)")
+    
+    def process(self, audio_bytes: bytes) -> bytes:
+        """Resample audio chunk with high quality (stateful streaming)."""
+        if len(audio_bytes) < 2:
+            return audio_bytes
+        
+        if self.method == "soxr_vhq" and self.resampler:
+            try:
+                # Convert to float32
+                audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
+                audio_float = audio_np.astype(np.float32) / 32768.0
+                
+                # Streaming resample (maintains state for gap-free audio!)
+                resampled = self.resampler.resample_chunk(audio_float)
+                
+                # Convert back to int16
+                resampled_int16 = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+                return resampled_int16.tobytes()
+            except Exception as e:
+                log(f"soxr error: {e}, falling back to audioop")
+        
+        # Fallback to audioop (stateful resampling)
+        result, self.audioop_state = audioop.ratecv(
+            audio_bytes, 2, 1, self.from_rate, self.to_rate, self.audioop_state
+        )
+        return result
+
+
+def remove_dc_offset(pcm_bytes: bytes, threshold: int = 256) -> bytes:
+    """Remove DC offset from audio to prevent clicks and pops."""
+    if not pcm_bytes or len(pcm_bytes) < 4:
+        return pcm_bytes
+    try:
+        dc = audioop.avg(pcm_bytes, 2)
+        if abs(dc) >= threshold:
+            return audioop.bias(pcm_bytes, 2, -int(dc))
+        return pcm_bytes
+    except:
+        return pcm_bytes
+
+
+def normalize_audio(pcm_bytes: bytes, target_rms: int = AUDIO_TARGET_RMS, 
+                    max_gain_db: float = AUDIO_MAX_GAIN_DB) -> bytes:
+    """Apply RMS-based normalization to ensure consistent audio levels."""
+    if not pcm_bytes or len(pcm_bytes) < 4:
+        return pcm_bytes
+    
+    try:
+        buf = array.array('h')
+        buf.frombytes(pcm_bytes)
+        
+        if len(buf) == 0:
+            return pcm_bytes
+        
+        # Compute RMS
+        acc = 0.0
+        for s in buf:
+            acc += float(s) * float(s)
+        rms = math.sqrt(acc / float(len(buf)))
+        
+        if rms < 1.0:
+            return pcm_bytes
+        
+        # Compute gain (limited by max_gain_db)
+        desired = float(target_rms) / rms
+        max_lin = math.pow(10.0, float(max_gain_db) / 20.0)
+        gain = min(desired, max_lin)
+        
+        if gain <= 1.01:
+            return pcm_bytes
+        
+        # Apply gain with clipping
+        for i, s in enumerate(buf):
+            y = float(s) * gain
+            if y > 32767.0:
+                y = 32767.0
+            elif y < -32768.0:
+                y = -32768.0
+            buf[i] = int(y)
+        
+        return buf.tobytes()
+    except:
+        return pcm_bytes
+
+
+
 # Audio output directory (for temporary files)
 AUDIO_TMP_DIR = "/tmp/weevoice_audio"
 os.makedirs(AUDIO_TMP_DIR, exist_ok=True)
@@ -74,8 +224,10 @@ class EAGIHandler:
         self.ws = None
         self._audio_fd = None
         self._audio_fd_num = None
-        self._resample_state_in = None
-        self._resample_state_out = None
+        
+        # HIGH-QUALITY resamplers (use soxr VHQ if available)
+        self._resampler_8k_to_16k = HighQualityResampler(ASTERISK_RATE, GEMINI_INPUT_RATE)
+        self._resampler_24k_to_8k = HighQualityResampler(GEMINI_OUTPUT_RATE, ASTERISK_RATE)
         
         self.caller_id = "unknown"
         self.call_id = None
@@ -90,6 +242,7 @@ class EAGIHandler:
         log("=" * 60)
         log("WeeVoice EAGI Starting (WebSocket API Mode)")
         log(f"Backend: {WS_URL}")
+        log(f"Audio: soxr={SOXR_AVAILABLE}, scipy={SCIPY_AVAILABLE}, numpy={NUMPY_AVAILABLE}")
         log("=" * 60)
         
         # Open FD3 for audio input from Asterisk (NON-BLOCKING)
@@ -159,26 +312,35 @@ class EAGIHandler:
     # ========================================================================
     
     def _resample_8k_to_16k(self, audio_8k: bytes) -> bytes:
-        """Convert 8kHz from Asterisk to 16kHz for backend"""
+        """Convert 8kHz from Asterisk to 16kHz for backend (HIGH QUALITY)"""
         if len(audio_8k) < 2:
             return b''
         try:
-            result, self._resample_state_in = audioop.ratecv(
-                audio_8k, 2, 1, ASTERISK_RATE, GEMINI_INPUT_RATE, self._resample_state_in
-            )
+            # Remove DC offset first (prevents clicks)
+            audio_8k = remove_dc_offset(audio_8k)
+            
+            # High-quality resample using soxr VHQ
+            result = self._resampler_8k_to_16k.process(audio_8k)
             return result
         except Exception as e:
             log(f"Resample 8k->16k error: {e}")
             return audio_8k
     
     def _resample_24k_to_8k(self, audio_24k: bytes) -> bytes:
-        """Convert 24kHz from backend to 8kHz for Asterisk"""
+        """Convert 24kHz from backend to 8kHz for Asterisk (HIGH QUALITY)"""
         if len(audio_24k) < 2:
             return b''
         try:
-            result, self._resample_state_out = audioop.ratecv(
-                audio_24k, 2, 1, GEMINI_OUTPUT_RATE, ASTERISK_RATE, self._resample_state_out
-            )
+            # High-quality resample using soxr VHQ
+            # soxr handles anti-aliasing internally, no need for separate lowpass
+            result = self._resampler_24k_to_8k.process(audio_24k)
+            
+            # Remove DC offset (prevents clicks at boundaries)
+            result = remove_dc_offset(result)
+            
+            # Normalize for consistent volume
+            result = normalize_audio(result)
+            
             return result
         except Exception as e:
             log(f"Resample 24k->8k error: {e}")
