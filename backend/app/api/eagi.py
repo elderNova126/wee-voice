@@ -92,7 +92,7 @@ async def eagi_stream(websocket: WebSocket):
     agent_service = None
     audio_task = None
     receive_task = None
-    greeting_audio = None
+    greeting_sent = False  # Track if pre-cached greeting was successfully sent
     
     try:
         # Wait for start message
@@ -176,6 +176,9 @@ async def eagi_stream(websocket: WebSocket):
                     # Send greeting end marker
                     await websocket.send_json({"type": "greeting_end"})
                     
+                    # Mark greeting as successfully sent - IMPORTANT!
+                    greeting_sent = True
+                    
                     elapsed_ms = (time.perf_counter() - t0) * 1000
                     print(f"[EAGI-WS] ✅ Greeting sent in {elapsed_ms:.0f}ms ({len(greeting_24k)} bytes)", flush=True)
                     logger.info(f"[EAGI-WS] Greeting sent in {elapsed_ms:.0f}ms")
@@ -183,7 +186,7 @@ async def eagi_stream(websocket: WebSocket):
                     print(f"[EAGI-WS] ⚠ Greeting conversion error: {e}", flush=True)
                     import traceback
                     traceback.print_exc()
-                    greeting_audio = None
+                    greeting_sent = False
             else:
                 print(f"[EAGI-WS] ⚠ No cached greeting found, Gemini will generate it", flush=True)
                 # Trigger background generation for next call
@@ -208,10 +211,11 @@ async def eagi_stream(websocket: WebSocket):
         logger.info(f"[EAGI-WS] Call record created: {call.id}")
         
         # Create agent service - skip greeting trigger if we already sent cached greeting
+        print(f"[EAGI-WS] Creating agent service (skip_greeting_trigger={greeting_sent})", flush=True)
         agent_service = FrenchVoiceAgentService(
             agent,
             call,
-            skip_greeting_trigger=bool(greeting_audio)  # Skip Gemini greeting if cached was sent
+            skip_greeting_trigger=greeting_sent  # Skip Gemini greeting if cached was sent
         )
         
         # Start Gemini session (this is the slow part - 2-4 seconds)
