@@ -446,20 +446,35 @@ class EAGIHandler:
         self.running = False  # Signal other tasks to stop
     
     async def _receive_and_buffer(self):
-        """Receive audio from backend and queue for playback"""
+        """
+        Receive audio from backend and queue for playback.
+        
+        Uses LARGE buffer to minimize gaps between files.
+        The key to smooth audio is fewer, larger files.
+        """
         log("RECEIVE: Starting audio receiver from backend")
         
         chunk_count = 0
         file_id = 0
         audio_accumulator = b''
-        # Reduced buffer for faster response - 400ms instead of 1 second
-        # This improves perceived latency after the initial greeting
-        MIN_PLAYBACK_SIZE = ASTERISK_RATE * 2 * 0.4  # 400ms of audio minimum
+        
+        # === LARGE BUFFER for smooth playback ===
+        # Small buffers (400ms) cause choppy audio due to gaps between files
+        # Large buffers (2-3 seconds) = fewer files = smoother playback
+        # Trade-off: More latency, but much better quality
+        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 2.5)  # 2.5 seconds of audio
+        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.5)   # 500ms minimum for flush
+        
+        # Track silence for smart flushing
+        last_audio_time = time.time()
+        SILENCE_FLUSH_MS = 300  # Flush after 300ms of silence (speech pause)
+        
+        log(f"RECEIVE: Buffer config: min={MIN_PLAYBACK_SIZE}b (2.5s), flush_threshold={FLUSH_THRESHOLD}b")
         
         try:
             while self.running and self.ws:
                 try:
-                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.1)
+                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.05)  # 50ms timeout
                     msg = json.loads(msg_str)
                     msg_type = msg.get("type")
                     
@@ -474,19 +489,21 @@ class EAGIHandler:
                             if audio_8k:
                                 audio_accumulator += audio_8k
                                 chunk_count += 1
+                                last_audio_time = time.time()
                                 
                                 if chunk_count == 1:
                                     log(f"RECEIVE: First audio from backend! ({len(audio_24k)} bytes)")
-                                elif chunk_count % 50 == 0:
-                                    log(f"RECEIVE: Got {chunk_count} chunks, buffer={len(audio_accumulator)}")
+                                elif chunk_count % 100 == 0:
+                                    log(f"RECEIVE: Got {chunk_count} chunks, buffer={len(audio_accumulator)}b")
                                 
-                                # When we have enough audio, queue it for playback
+                                # Queue when we have enough audio (2.5 seconds)
                                 if len(audio_accumulator) >= MIN_PLAYBACK_SIZE:
                                     file_id += 1
                                     filename = self._write_audio_file(audio_accumulator, file_id)
                                     if filename:
                                         await self._playback_queue.put(filename)
-                                        log(f"RECEIVE: Queued file #{file_id} ({len(audio_accumulator)} bytes)")
+                                        duration_ms = len(audio_accumulator) / (ASTERISK_RATE * 2) * 1000
+                                        log(f"RECEIVE: Queued file #{file_id} ({duration_ms:.0f}ms)")
                                     audio_accumulator = b''
                     
                     elif msg_type == "transcript":
@@ -504,16 +521,19 @@ class EAGIHandler:
                         break
                         
                 except asyncio.TimeoutError:
-                    # Check if call is still active
                     if not self.running:
                         break
-                    # Flush remaining audio if we have some
-                    if len(audio_accumulator) > 1000:
+                    
+                    # Smart flush: After speech pause, flush accumulated audio
+                    # This ensures we don't wait forever for buffer to fill
+                    silence_ms = (time.time() - last_audio_time) * 1000
+                    if len(audio_accumulator) >= FLUSH_THRESHOLD and silence_ms > SILENCE_FLUSH_MS:
                         file_id += 1
                         filename = self._write_audio_file(audio_accumulator, file_id)
                         if filename:
                             await self._playback_queue.put(filename)
-                            log(f"RECEIVE: Flushed file #{file_id} ({len(audio_accumulator)} bytes)")
+                            duration_ms = len(audio_accumulator) / (ASTERISK_RATE * 2) * 1000
+                            log(f"RECEIVE: Flushed file #{file_id} after {silence_ms:.0f}ms silence ({duration_ms:.0f}ms audio)")
                         audio_accumulator = b''
                     continue
                     
@@ -526,11 +546,12 @@ class EAGIHandler:
             log(f"RECEIVE: Loop error: {e}")
         
         # Flush any remaining audio
-        if audio_accumulator:
+        if audio_accumulator and len(audio_accumulator) > 100:
             file_id += 1
             filename = self._write_audio_file(audio_accumulator, file_id)
             if filename:
                 await self._playback_queue.put(filename)
+                log(f"RECEIVE: Final flush file #{file_id}")
         
         # Signal end of playback
         await self._playback_queue.put(None)
