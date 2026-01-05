@@ -14,13 +14,14 @@ import base64
 import json
 import logging
 import tempfile
-import wave
 import struct
+import fcntl
+import select
 from datetime import datetime
 from pathlib import Path
 
 # ============================================================================
-# LOGGING
+# LOGGING - Use print for immediate output
 # ============================================================================
 LOG_DIR = "/var/log/weevoice"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -34,6 +35,11 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("weevoice_eagi")
+
+def log(msg):
+    """Log with immediate flush"""
+    logger.info(msg)
+    print(f"[EAGI] {msg}", file=sys.stderr, flush=True)
 
 # ============================================================================
 # CONFIGURATION
@@ -63,6 +69,7 @@ class EAGIHandler:
         self.running = False
         self.ws = None
         self._audio_fd = None
+        self._audio_fd_num = None
         self._resample_state_in = None
         self._resample_state_out = None
         
@@ -71,21 +78,24 @@ class EAGIHandler:
         self.session_id = None
         
         # Audio output buffer
-        self._audio_buffer = b''
-        self._audio_buffer_lock = asyncio.Lock()
         self._playback_queue = asyncio.Queue()
         
-        logger.info("=" * 60)
-        logger.info("WeeVoice EAGI Starting (WebSocket API Mode)")
-        logger.info(f"Backend: {WS_URL}")
-        logger.info("=" * 60)
+        log("=" * 60)
+        log("WeeVoice EAGI Starting (WebSocket API Mode)")
+        log(f"Backend: {WS_URL}")
+        log("=" * 60)
         
-        # Open FD3 for audio input from Asterisk
+        # Open FD3 for audio input from Asterisk (NON-BLOCKING)
         try:
+            self._audio_fd_num = 3
             self._audio_fd = os.fdopen(3, 'rb', buffering=0)
-            logger.info("Audio FD3 opened successfully")
+            # Make FD3 non-blocking
+            fd = self._audio_fd.fileno()
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            log("Audio FD3 opened (non-blocking)")
         except Exception as e:
-            logger.error(f"Failed to open FD3: {e}")
+            log(f"Failed to open FD3: {e}")
             self._audio_fd = None
     
     # ========================================================================
@@ -94,7 +104,7 @@ class EAGIHandler:
     
     def _read_agi_env(self):
         """Read AGI environment"""
-        logger.info("Reading AGI environment...")
+        log("Reading AGI environment...")
         while True:
             line = sys.stdin.readline().strip()
             if not line:
@@ -107,14 +117,13 @@ class EAGIHandler:
         self.call_id = self.env.get('agi_uniqueid', datetime.now().strftime('%Y%m%d%H%M%S'))
         self.session_id = f"eagi_{self.call_id}"
         
-        logger.info(f"Call ID: {self.call_id}, Caller: {self.caller_id}")
+        log(f"Call ID: {self.call_id}, Caller: {self.caller_id}")
     
     def _agi_command(self, cmd: str) -> str:
         """Send AGI command and get response"""
         sys.stdout.write(f"{cmd}\n")
         sys.stdout.flush()
         response = sys.stdin.readline().strip()
-        logger.debug(f"AGI: {cmd} -> {response}")
         return response
     
     def _verbose(self, msg: str):
@@ -123,12 +132,7 @@ class EAGIHandler:
     
     def _stream_file(self, filename: str) -> str:
         """Play audio file using STREAM FILE (without extension)"""
-        # STREAM FILE plays until complete or digit pressed
         return self._agi_command(f'STREAM FILE "{filename}" ""')
-    
-    def _exec_playback(self, filename: str) -> str:
-        """Play audio file using Playback application"""
-        return self._agi_command(f'EXEC Playback "{filename}"')
     
     # ========================================================================
     # AUDIO RESAMPLING
@@ -144,7 +148,7 @@ class EAGIHandler:
             )
             return result
         except Exception as e:
-            logger.error(f"Resample 8k->16k error: {e}")
+            log(f"Resample 8k->16k error: {e}")
             return audio_8k
     
     def _resample_24k_to_8k(self, audio_24k: bytes) -> bytes:
@@ -157,7 +161,7 @@ class EAGIHandler:
             )
             return result
         except Exception as e:
-            logger.error(f"Resample 24k->8k error: {e}")
+            log(f"Resample 24k->8k error: {e}")
             return audio_24k
     
     def _pcm_to_ulaw(self, pcm_data: bytes) -> bytes:
@@ -165,7 +169,7 @@ class EAGIHandler:
         try:
             return audioop.lin2ulaw(pcm_data, 2)
         except Exception as e:
-            logger.error(f"PCM to ulaw error: {e}")
+            log(f"PCM to ulaw error: {e}")
             return pcm_data
     
     # ========================================================================
@@ -173,9 +177,8 @@ class EAGIHandler:
     # ========================================================================
     
     def _write_audio_file(self, audio_data: bytes, file_id: int) -> str:
-        """Write audio to WAV file for playback, return filename without extension"""
+        """Write audio to file for playback, return filename without extension"""
         filename = f"{AUDIO_TMP_DIR}/{self.session_id}_{file_id}"
-        wav_path = f"{filename}.wav"
         ulaw_path = f"{filename}.ulaw"
         
         try:
@@ -184,11 +187,10 @@ class EAGIHandler:
             with open(ulaw_path, 'wb') as f:
                 f.write(ulaw_data)
             
-            logger.debug(f"Wrote audio file: {ulaw_path} ({len(ulaw_data)} bytes)")
             return filename
             
         except Exception as e:
-            logger.error(f"Error writing audio file: {e}")
+            log(f"Error writing audio file: {e}")
             return None
     
     def _cleanup_audio_files(self):
@@ -197,7 +199,7 @@ class EAGIHandler:
             for f in Path(AUDIO_TMP_DIR).glob(f"{self.session_id}_*"):
                 f.unlink()
         except Exception as e:
-            logger.error(f"Cleanup error: {e}")
+            log(f"Cleanup error: {e}")
     
     # ========================================================================
     # WEBSOCKET CONNECTION
@@ -208,7 +210,7 @@ class EAGIHandler:
         try:
             import websockets
             
-            logger.info(f"Connecting to {WS_URL}...")
+            log(f"Connecting to {WS_URL}...")
             self.ws = await websockets.connect(WS_URL)
             
             # Send start message
@@ -223,58 +225,60 @@ class EAGIHandler:
             msg = json.loads(response)
             
             if msg.get("type") == "error":
-                logger.error(f"Backend error: {msg.get('message')}")
+                log(f"Backend error: {msg.get('message')}")
                 return False
             
             if msg.get("type") == "ready":
-                logger.info(f"Connected! Agent: {msg.get('agent')}")
+                log(f"Connected! Agent: {msg.get('agent')}")
                 return True
             
-            logger.error(f"Unexpected response: {msg}")
+            log(f"Unexpected response: {msg}")
             return False
             
         except ImportError:
-            logger.error("websockets package not installed!")
+            log("websockets package not installed!")
             return False
         except asyncio.TimeoutError:
-            logger.error("Timeout connecting to backend")
+            log("Timeout connecting to backend")
             return False
         except Exception as e:
-            logger.error(f"WebSocket connection error: {e}")
+            log(f"WebSocket connection error: {e}")
             return False
     
     # ========================================================================
-    # AUDIO LOOPS
+    # AUDIO LOOPS (NON-BLOCKING)
     # ========================================================================
     
     async def _capture_and_send(self):
-        """Capture audio from FD3 and send to backend"""
-        logger.info("Starting audio capture from Asterisk")
+        """Capture audio from FD3 (non-blocking) and send to backend"""
+        log("CAPTURE: Starting audio capture from Asterisk")
         
         if not self._audio_fd:
-            logger.error("Audio FD3 not available")
+            log("CAPTURE: Audio FD3 not available")
             return
         
         frame_count = 0
         buffer = b''
+        loop = asyncio.get_event_loop()
         
         while self.running and self.ws:
             try:
-                # Read from Asterisk (non-blocking with small timeout)
-                try:
-                    data = self._audio_fd.read(FRAME_SIZE)
-                except Exception as e:
-                    if self.running:
-                        logger.error(f"FD3 read error: {e}")
-                    break
+                # Non-blocking read using select
+                readable, _, _ = select.select([self._audio_fd], [], [], 0.02)  # 20ms timeout
                 
-                if not data:
-                    await asyncio.sleep(0.001)
-                    continue
+                if readable:
+                    try:
+                        data = self._audio_fd.read(FRAME_SIZE * 4)  # Read multiple frames
+                        if data:
+                            buffer += data
+                    except BlockingIOError:
+                        pass  # No data available
+                    except Exception as e:
+                        if self.running:
+                            log(f"CAPTURE: FD3 read error: {e}")
+                        break
                 
-                buffer += data
-                
-                # Process frames
+                # Process complete frames
                 while len(buffer) >= FRAME_SIZE:
                     chunk = buffer[:FRAME_SIZE]
                     buffer = buffer[FRAME_SIZE:]
@@ -283,7 +287,6 @@ class EAGIHandler:
                     audio_16k = self._resample_8k_to_16k(chunk)
                     
                     if audio_16k and self.ws:
-                        # Send to backend as base64
                         try:
                             await self.ws.send(json.dumps({
                                 "type": "audio",
@@ -291,24 +294,27 @@ class EAGIHandler:
                             }))
                             frame_count += 1
                             if frame_count == 1:
-                                logger.info("First audio chunk sent to backend")
+                                log("CAPTURE: First audio chunk sent to backend")
                             elif frame_count % 100 == 0:
-                                logger.info(f"Sent {frame_count} audio chunks to backend")
+                                log(f"CAPTURE: Sent {frame_count} chunks to backend")
                         except Exception as e:
                             if self.running:
-                                logger.error(f"WebSocket send error: {e}")
+                                log(f"CAPTURE: WebSocket send error: {e}")
                             break
+                
+                # Yield to other tasks
+                await asyncio.sleep(0.001)
                         
             except Exception as e:
                 if self.running:
-                    logger.error(f"Capture error: {e}")
+                    log(f"CAPTURE: Error: {e}")
                 break
         
-        logger.info(f"Audio capture ended. Total frames sent: {frame_count}")
+        log(f"CAPTURE: Ended, {frame_count} frames sent")
     
     async def _receive_and_buffer(self):
         """Receive audio from backend and queue for playback"""
-        logger.info("Starting audio receiver from backend")
+        log("RECEIVE: Starting audio receiver from backend")
         
         chunk_count = 0
         file_id = 0
@@ -318,7 +324,7 @@ class EAGIHandler:
         try:
             while self.running and self.ws:
                 try:
-                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.5)
+                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.1)
                     msg = json.loads(msg_str)
                     msg_type = msg.get("type")
                     
@@ -335,7 +341,9 @@ class EAGIHandler:
                                 chunk_count += 1
                                 
                                 if chunk_count == 1:
-                                    logger.info("First audio chunk received from backend!")
+                                    log(f"RECEIVE: First audio from backend! ({len(audio_24k)} bytes)")
+                                elif chunk_count % 50 == 0:
+                                    log(f"RECEIVE: Got {chunk_count} chunks, buffer={len(audio_accumulator)}")
                                 
                                 # When we have enough audio, queue it for playback
                                 if len(audio_accumulator) >= MIN_PLAYBACK_SIZE:
@@ -343,41 +351,41 @@ class EAGIHandler:
                                     filename = self._write_audio_file(audio_accumulator, file_id)
                                     if filename:
                                         await self._playback_queue.put(filename)
-                                        logger.info(f"Queued audio file #{file_id} for playback ({len(audio_accumulator)} bytes)")
+                                        log(f"RECEIVE: Queued file #{file_id} ({len(audio_accumulator)} bytes)")
                                     audio_accumulator = b''
                     
                     elif msg_type == "transcript":
                         role = msg.get("role", "")
                         text = msg.get("text", "")
                         if text:
-                            logger.info(f"[{role.upper()}]: {text[:80]}...")
+                            log(f"[{role.upper()}]: {text[:60]}...")
                     
                     elif msg_type == "error":
-                        logger.error(f"Backend error: {msg.get('message')}")
+                        log(f"RECEIVE: Backend error: {msg.get('message')}")
                         break
                     
                     elif msg_type == "end":
-                        logger.info("Backend signaled end")
+                        log("RECEIVE: Backend signaled end")
                         break
                         
                 except asyncio.TimeoutError:
                     # Flush remaining audio if we have some
-                    if len(audio_accumulator) > 1000:  # At least some data
+                    if len(audio_accumulator) > 1000:
                         file_id += 1
                         filename = self._write_audio_file(audio_accumulator, file_id)
                         if filename:
                             await self._playback_queue.put(filename)
-                            logger.info(f"Flushed audio file #{file_id} ({len(audio_accumulator)} bytes)")
+                            log(f"RECEIVE: Flushed file #{file_id} ({len(audio_accumulator)} bytes)")
                         audio_accumulator = b''
                     continue
                     
                 except Exception as e:
                     if self.running and "closed" not in str(e).lower():
-                        logger.error(f"Receive error: {e}")
+                        log(f"RECEIVE: Error: {e}")
                     break
                     
         except Exception as e:
-            logger.error(f"Receiver loop error: {e}")
+            log(f"RECEIVE: Loop error: {e}")
         
         # Flush any remaining audio
         if audio_accumulator:
@@ -389,41 +397,41 @@ class EAGIHandler:
         # Signal end of playback
         await self._playback_queue.put(None)
         
-        logger.info(f"Audio receiver ended. Total chunks received: {chunk_count}")
+        log(f"RECEIVE: Ended, got {chunk_count} chunks, wrote {file_id} files")
     
     async def _playback_worker(self):
         """Play queued audio files using Asterisk STREAM FILE"""
-        logger.info("Starting playback worker")
+        log("PLAYBACK: Starting playback worker")
         
         files_played = 0
+        loop = asyncio.get_event_loop()
         
         while self.running:
             try:
-                filename = await asyncio.wait_for(self._playback_queue.get(), timeout=1.0)
+                filename = await asyncio.wait_for(self._playback_queue.get(), timeout=0.5)
                 
                 if filename is None:
-                    logger.info("Playback worker received end signal")
+                    log("PLAYBACK: Received end signal")
                     break
                 
-                # Play the audio file
-                logger.info(f"Playing audio file: {filename}")
+                # Play the audio file (run in thread to not block)
+                log(f"PLAYBACK: Playing file: {filename}")
                 
-                # Use STREAM FILE (run in thread to not block)
-                result = await asyncio.get_event_loop().run_in_executor(
+                result = await loop.run_in_executor(
                     None, self._stream_file, filename
                 )
                 
                 files_played += 1
-                logger.info(f"Played file #{files_played}, result: {result}")
+                log(f"PLAYBACK: Played file #{files_played}, result: {result[:50] if result else 'none'}")
                 
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
                 if self.running:
-                    logger.error(f"Playback error: {e}")
+                    log(f"PLAYBACK: Error: {e}")
                 break
         
-        logger.info(f"Playback worker ended. Files played: {files_played}")
+        log(f"PLAYBACK: Ended, played {files_played} files")
     
     # ========================================================================
     # CLEANUP
@@ -431,7 +439,7 @@ class EAGIHandler:
     
     async def _cleanup(self):
         """Clean up resources"""
-        logger.info("Cleaning up...")
+        log("Cleaning up...")
         
         # Send end message
         if self.ws:
@@ -470,9 +478,11 @@ class EAGIHandler:
         
         try:
             # Create tasks
+            log("Creating async tasks...")
             capture_task = asyncio.create_task(self._capture_and_send())
             receive_task = asyncio.create_task(self._receive_and_buffer())
             playback_task = asyncio.create_task(self._playback_worker())
+            log("All tasks created")
             
             # Wait for any task to complete (usually means call ended)
             done, pending = await asyncio.wait(
@@ -480,7 +490,7 @@ class EAGIHandler:
                 return_when=asyncio.FIRST_COMPLETED
             )
             
-            logger.info("One task completed, stopping others...")
+            log("One task completed, stopping others...")
             self.running = False
             
             # Cancel pending tasks
@@ -492,13 +502,13 @@ class EAGIHandler:
                     pass
                     
         except Exception as e:
-            logger.error(f"Run error: {e}", exc_info=True)
+            log(f"Run error: {e}")
         finally:
             self.running = False
             await self._cleanup()
         
         self._verbose("WeeVoice: Ended")
-        logger.info("EAGI session ended")
+        log("EAGI session ended")
 
 
 def main():
@@ -506,9 +516,9 @@ def main():
     try:
         asyncio.run(handler.run())
     except KeyboardInterrupt:
-        logger.info("Interrupted")
+        log("Interrupted")
     except Exception as e:
-        logger.error(f"Fatal: {e}", exc_info=True)
+        log(f"Fatal: {e}")
         sys.stdout.write('VERBOSE "WeeVoice: Error" 1\n')
         sys.stdout.flush()
 
