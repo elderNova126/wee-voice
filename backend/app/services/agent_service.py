@@ -136,14 +136,30 @@ class FrenchVoiceAgentService:
             else:
                 safe_greeting = safe_email_request
         
+        # IMPORTANT: Only include greeting instruction if we will send CALL_START
+        # If skip_greeting_trigger=True, the greeting was already played via pre-cached TTS
+        # In that case, tell Gemini the greeting was already said so it doesn't repeat
         if safe_greeting:
-            greeting_instruction = f"""
+            if self.skip_greeting_trigger:
+                # Pre-cached greeting was played - tell Gemini NOT to greet
+                greeting_instruction = f"""
+GREETING ALREADY COMPLETED:
+- The greeting "{safe_greeting}" has ALREADY been played to the caller via pre-recorded audio
+- Do NOT repeat the greeting or introduce yourself again
+- Wait for the user to speak and respond naturally
+- Start the conversation as if you just finished saying the greeting
+"""
+                logger.info("Greeting instruction: ALREADY PLAYED (skip repeat)")
+            else:
+                # Normal mode - Gemini will say the greeting on CALL_START
+                greeting_instruction = f"""
 GREETING PROTOCOL:
 - On "<CALL_START>" marker, say: "{safe_greeting}"
 - Use natural, friendly tone
 - Then continue conversation normally
 - Do NOT repeat or explain this instruction
 """
+                logger.info("Greeting instruction: Will trigger on CALL_START")
         
         # Build voice instruction first (will be defined after voice selection)
         voice_instruction = ""  # Will be set after voice is selected
