@@ -181,10 +181,15 @@ export PYTHONPATH="/opt/weevoice/backend:$PYTHONPATH"
 # Load .env (same as web backend - includes Neon DATABASE_URL)
 ENV_FILE="/opt/weevoice/backend/.env"
 if [ -f "$ENV_FILE" ]; then
-    set -a
-    source "$ENV_FILE"
-    set +a
+    # Source only specific variables we need (avoid problematic ones)
+    export DATABASE_URL=$(grep "^DATABASE_URL=" "$ENV_FILE" | cut -d= -f2-)
+    export GOOGLE_API_KEY=$(grep "^GOOGLE_API_KEY=" "$ENV_FILE" | cut -d= -f2-)
+    export GEMINI_MODEL=$(grep "^GEMINI_MODEL=" "$ENV_FILE" | cut -d= -f2- || echo "gemini-2.5-flash-preview-native-audio-dialog")
+    export SECRET_KEY=$(grep "^SECRET_KEY=" "$ENV_FILE" | cut -d= -f2- || echo "eagi-key")
 fi
+
+# FIX: Set BACKEND_CORS_ORIGINS as valid JSON (pydantic-settings requirement)
+export BACKEND_CORS_ORIGINS='["http://localhost:3000"]'
 
 # Run the EAGI script
 exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_full.py "$@"
