@@ -137,11 +137,13 @@ async def eagi_stream(websocket: WebSocket):
             
             language = getattr(agent, 'language', 'fr-FR') or 'fr-FR'
             gender = getattr(agent, 'voice_gender', 'male') or 'male'
+            voice_id = getattr(agent, 'voice_id', None)  # Specific voice takes priority
             
-            print(f"[EAGI-WS] Looking for cached greeting (lang={language}, gender={gender})", flush=True)
+            print(f"[EAGI-WS] Looking for cached greeting (lang={language}, gender={gender}, voice_id={voice_id})", flush=True)
             
             # Get cached greeting (instant - just a file read)
-            greeting_audio = get_cached_greeting_sync(agent.greeting, language, gender)
+            # IMPORTANT: Pass voice_id to ensure greeting uses same voice as conversation
+            greeting_audio = get_cached_greeting_sync(agent.greeting, language, gender, voice_id)
             
             if greeting_audio:
                 # The cached greeting is 8kHz PCM16 - convert to 24kHz for EAGI

@@ -43,23 +43,42 @@ except ImportError:
     print("[GREETING] ⚠ google-genai not available", flush=True)
 
 
-def get_gemini_voice_name(language: str, gender: str) -> str:
-    """Get Gemini voice name matching agent settings"""
-    # Map gender to Gemini voices (same as in agent_service.py)
-    if gender == "female":
-        return "Kore"
-    elif gender == "male":
-        return "Charon"
-    elif gender == "neutral":
-        return "Puck"
-    else:
-        # Default by language
+def get_gemini_voice_name(language: str, gender: str, voice_id: str = None) -> str:
+    """
+    Get Gemini voice name matching agent settings.
+    
+    MUST match the logic in agent_service.py EXACTLY to ensure
+    greeting voice matches conversation voice!
+    
+    Priority (same as agent_service.py):
+    1. voice_gender preference (most important)
+    2. voice_id if it's a valid Gemini voice
+    3. Default by language
+    """
+    valid_voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
+    
+    # Priority 1: Use voice_gender preference (most important)
+    if gender:
+        if gender == "female":
+            return "Kore"
+        elif gender == "male":
+            return "Charon"
+        elif gender == "neutral":
+            return "Puck"
+        # If invalid gender value, fall through to voice_id check
+    
+    # Priority 2: Use voice_id if it's a valid Gemini voice
+    if voice_id and voice_id in valid_voices:
+        return voice_id
+    
+    # Priority 3: Default by language (matches agent_service.py)
+    if language:
         if language.startswith('fr'):
             return "Charon"
         elif language.startswith('es'):
             return "Kore"
-        else:
-            return "Puck"
+    
+    return "Puck"  # Default
 
 
 def get_greeting_cache_path(greeting_text: str, voice: str) -> Path:
@@ -68,16 +87,22 @@ def get_greeting_cache_path(greeting_text: str, voice: str) -> Path:
     return GREETING_CACHE_DIR / f"greeting_{cache_key}.pcm"
 
 
-def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender: str = "male") -> Optional[bytes]:
+def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender: str = "male", voice_id: str = None) -> Optional[bytes]:
     """
     Get cached greeting INSTANTLY (synchronous file read).
     Returns None if not cached - caller should NOT wait for generation.
+    
+    Args:
+        greeting_text: The greeting text to look up
+        language: Agent language (e.g., 'fr-FR', 'en-US')
+        gender: Voice gender ('male', 'female', 'neutral')
+        voice_id: Specific Gemini voice ID (e.g., 'Aoede', 'Fenrir') - takes priority
     """
     if not greeting_text:
         print(f"[GREETING-CACHE] No greeting text provided", flush=True)
         return None
     
-    voice = get_gemini_voice_name(language, gender)
+    voice = get_gemini_voice_name(language, gender, voice_id)
     cache_path = get_greeting_cache_path(greeting_text, voice)
     
     print(f"[GREETING-CACHE] Looking for: {cache_path.name}", flush=True)
@@ -111,11 +136,18 @@ def get_cached_greeting_sync(greeting_text: str, language: str = "fr-FR", gender
 async def generate_greeting_with_gemini(
     greeting_text: str,
     language: str = "fr-FR",
-    gender: str = "male"
+    gender: str = "male",
+    voice_id: str = None
 ) -> bool:
     """
     Generate greeting audio using GEMINI (same voice as conversation).
     This ensures voice consistency - greeting sounds the same as conversation.
+    
+    Args:
+        greeting_text: The greeting text to generate
+        language: Agent language (e.g., 'fr-FR', 'en-US')
+        gender: Voice gender ('male', 'female', 'neutral')
+        voice_id: Specific Gemini voice ID (e.g., 'Aoede', 'Fenrir') - takes priority
     """
     if not GEMINI_AVAILABLE:
         print("[GREETING] ❌ Gemini not available", flush=True)
@@ -124,7 +156,7 @@ async def generate_greeting_with_gemini(
     if not greeting_text or not greeting_text.strip():
         return False
     
-    voice = get_gemini_voice_name(language, gender)
+    voice = get_gemini_voice_name(language, gender, voice_id)
     cache_path = get_greeting_cache_path(greeting_text, voice)
     
     # Skip if already cached
@@ -234,15 +266,21 @@ async def prewarm_all_agent_greetings():
                 if agent.greeting:
                     language = getattr(agent, 'language', 'fr-FR')
                     gender = getattr(agent, 'voice_gender', 'male')
+                    voice_id = getattr(agent, 'voice_id', None)  # Specific voice takes priority
+                    
+                    # Use same voice selection as agent_service.py
+                    voice = get_gemini_voice_name(language, gender, voice_id)
+                    print(f"[GREETING] Generating for '{agent.name}' with voice={voice}", flush=True)
                     
                     success = await generate_greeting_with_gemini(
                         agent.greeting,
                         language=language,
-                        gender=gender
+                        gender=gender,
+                        voice_id=voice_id
                     )
                     
                     status = "✅" if success else "⚠"
-                    print(f"[GREETING] {status} Agent '{agent.name}'", flush=True)
+                    print(f"[GREETING] {status} Agent '{agent.name}' (voice={voice})", flush=True)
                     
                     # Small delay between agents to avoid rate limiting
                     await asyncio.sleep(0.5)
@@ -273,19 +311,21 @@ class GreetingTTSService:
         self,
         greeting_text: str,
         language: str = "fr-FR",
-        gender: str = "male"
+        gender: str = "male",
+        voice_id: str = None
     ) -> Optional[bytes]:
         """
         Get cached greeting INSTANTLY.
         Returns None if not cached - does NOT generate on-the-fly.
         """
-        return get_cached_greeting_sync(greeting_text, language, gender)
+        return get_cached_greeting_sync(greeting_text, language, gender, voice_id)
     
     def trigger_background_generation(
         self,
         greeting_text: str,
         language: str = "fr-FR", 
-        gender: str = "male"
+        gender: str = "male",
+        voice_id: str = None
     ):
         """
         Trigger background generation for next call.
@@ -294,7 +334,7 @@ class GreetingTTSService:
         if not GEMINI_AVAILABLE or not greeting_text:
             return
         
-        voice = get_gemini_voice_name(language, gender)
+        voice = get_gemini_voice_name(language, gender, voice_id)
         cache_key = f"{greeting_text}:{voice}"
         
         # Skip if already generating
@@ -311,7 +351,7 @@ class GreetingTTSService:
         # Start background generation
         async def generate():
             try:
-                await generate_greeting_with_gemini(greeting_text, language, gender)
+                await generate_greeting_with_gemini(greeting_text, language, gender, voice_id)
             except Exception as e:
                 print(f"[GREETING] Background generation error: {e}", flush=True)
             finally:

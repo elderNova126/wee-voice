@@ -1314,14 +1314,17 @@ class AudioSocketSession:
             if self.agent.greeting:
                 language = getattr(self.agent, 'language', 'fr-FR')
                 gender = getattr(self.agent, 'voice_gender', 'male')
+                voice_id = getattr(self.agent, 'voice_id', None)  # Specific voice takes priority
                 
-                print(f"[SETUP] Looking for cached greeting (lang={language}, gender={gender})...", flush=True)
+                print(f"[SETUP] Looking for cached greeting (lang={language}, gender={gender}, voice_id={voice_id})...", flush=True)
                 
                 # INSTANT cache lookup (no await, no blocking!)
+                # IMPORTANT: Pass voice_id to ensure greeting uses same voice as conversation
                 self.greeting_audio = get_cached_greeting_sync(
                     self.agent.greeting,
                     language=language,
-                    gender=gender
+                    gender=gender,
+                    voice_id=voice_id
                 )
                 
                 if self.greeting_audio:
