@@ -73,7 +73,8 @@ async def eagi_stream(websocket: WebSocket):
     - Client sends: {"type": "end"}
     """
     await websocket.accept()
-    logger.info("EAGI WebSocket connected")
+    print("[EAGI-WS] WebSocket connected", flush=True)
+    logger.info("[EAGI-WS] WebSocket connected")
     
     db = SessionLocal()
     agent = None
@@ -93,7 +94,8 @@ async def eagi_stream(websocket: WebSocket):
         caller_id = start_msg.get("caller_id", "unknown")
         session_id = start_msg.get("session_id", f"eagi_{datetime.now().strftime('%Y%m%d%H%M%S')}")
         
-        logger.info(f"EAGI session starting: {session_id}, caller: {caller_id}")
+        print(f"[EAGI-WS] Session starting: {session_id}, caller: {caller_id}", flush=True)
+        logger.info(f"[EAGI-WS] Session starting: {session_id}, caller: {caller_id}")
         
         # Get agent
         phone = db.query(PhoneNumber).filter(
@@ -111,7 +113,8 @@ async def eagi_stream(websocket: WebSocket):
             await websocket.send_json({"type": "error", "message": "No agent configured"})
             return
         
-        logger.info(f"Using agent: {agent.name} (ID: {agent.id})")
+        print(f"[EAGI-WS] Using agent: {agent.name} (ID: {agent.id})", flush=True)
+        logger.info(f"[EAGI-WS] Using agent: {agent.name} (ID: {agent.id})")
         
         # Create call record
         call = Call(
@@ -128,7 +131,8 @@ async def eagi_stream(websocket: WebSocket):
         db.commit()
         db.refresh(call)
         
-        logger.info(f"Call record created: {call.id}")
+        print(f"[EAGI-WS] Call record created: {call.id}", flush=True)
+        logger.info(f"[EAGI-WS] Call record created: {call.id}")
         
         # Create agent service (same as web agent)
         agent_service = FrenchVoiceAgentService(
@@ -138,75 +142,87 @@ async def eagi_stream(websocket: WebSocket):
         )
         
         # Start Gemini session
-        logger.info("Starting Gemini session...")
+        print("[EAGI-WS] Starting Gemini session...", flush=True)
+        logger.info("[EAGI-WS] Starting Gemini session...")
         if not await agent_service.start_session():
-            logger.error("Failed to start Gemini session")
+            print("[EAGI-WS] Failed to start Gemini session", flush=True)
+            logger.error("[EAGI-WS] Failed to start Gemini session")
             await websocket.send_json({"type": "error", "message": "Failed to start AI session"})
             return
         
-        logger.info(f"Gemini session started for agent {agent.name}")
+        print(f"[EAGI-WS] Gemini session started for agent {agent.name}", flush=True)
+        logger.info(f"[EAGI-WS] Gemini session started for agent {agent.name}")
+        
         await websocket.send_json({"type": "ready", "agent": agent.name})
         
-        # Task to send audio from Gemini to client
+        # Task to receive audio from Gemini and send to client
+        # Uses receive_audio() which is the proper method (same as audiosocket_handler uses)
         async def send_audio_to_client():
             audio_chunks_sent = 0
-            logger.info("Starting Gemini audio receiver task")
+            print("[EAGI-OUT] Starting Gemini audio receiver (using receive_audio)", flush=True)
+            logger.info("[EAGI-OUT] Starting Gemini audio receiver (using receive_audio)")
+            
             try:
-                async for response in agent_service.session.receive():
-                    # Audio data
-                    if hasattr(response, 'data') and response.data:
-                        audio_b64 = base64.b64encode(response.data).decode()
-                        await websocket.send_json({
-                            "type": "audio",
-                            "data": audio_b64
-                        })
-                        audio_chunks_sent += 1
-                        if audio_chunks_sent == 1:
-                            logger.info("First audio chunk from Gemini sent to EAGI")
+                # Use receive_audio() - the proper method that handles session.receive() internally
+                async for audio_data in agent_service.receive_audio():
+                    if not audio_data or len(audio_data) < 2:
+                        continue
                     
-                    # Transcriptions
-                    if hasattr(response, 'server_content'):
-                        sc = response.server_content
-                        if hasattr(sc, 'output_transcription') and sc.output_transcription:
-                            text = getattr(sc.output_transcription, 'text', '')
-                            if text:
-                                logger.info(f"AI transcript: {text[:50]}...")
-                                await websocket.send_json({
-                                    "type": "transcript",
-                                    "role": "assistant",
-                                    "text": text
-                                })
-                        if hasattr(sc, 'input_transcription') and sc.input_transcription:
-                            text = getattr(sc.input_transcription, 'text', '')
-                            if text:
-                                logger.info(f"User transcript: {text[:50]}...")
-                                await websocket.send_json({
-                                    "type": "transcript",
-                                    "role": "user",
-                                    "text": text
-                                })
+                    # Ensure even byte count for 16-bit audio
+                    if len(audio_data) % 2:
+                        audio_data = audio_data[:-1]
+                    
+                    audio_b64 = base64.b64encode(audio_data).decode()
+                    await websocket.send_json({
+                        "type": "audio",
+                        "data": audio_b64
+                    })
+                    audio_chunks_sent += 1
+                    
+                    if audio_chunks_sent == 1:
+                        print(f"[EAGI-OUT] First audio chunk sent! Size: {len(audio_data)}", flush=True)
+                        logger.info(f"[EAGI-OUT] First audio chunk sent! Size: {len(audio_data)}")
+                    elif audio_chunks_sent % 50 == 0:
+                        print(f"[EAGI-OUT] Sent {audio_chunks_sent} audio chunks", flush=True)
+                        
+            except asyncio.CancelledError:
+                print("[EAGI-OUT] Task cancelled", flush=True)
+                logger.info("[EAGI-OUT] Task cancelled")
             except Exception as e:
                 if "closed" not in str(e).lower():
-                    logger.error(f"Send audio error: {e}", exc_info=True)
-            logger.info(f"Gemini receiver ended, sent {audio_chunks_sent} chunks")
+                    print(f"[EAGI-OUT] Error: {e}", flush=True)
+                    logger.error(f"[EAGI-OUT] Error: {e}", exc_info=True)
+            print(f"[EAGI-OUT] Ended, sent {audio_chunks_sent} chunks total", flush=True)
+            logger.info(f"[EAGI-OUT] Ended, sent {audio_chunks_sent} chunks total")
         
-        # Task to forward audio to Gemini
+        # Task to forward audio to Gemini (using send_realtime_input)
         async def forward_audio_to_gemini():
-            logger.info("Starting Gemini audio sender task")
+            print("[EAGI-FWD] Starting Gemini audio sender task", flush=True)
+            logger.info("[EAGI-FWD] Starting Gemini audio sender task")
             try:
                 await agent_service.send_realtime_input()
+            except asyncio.CancelledError:
+                print("[EAGI-FWD] Task cancelled", flush=True)
+                logger.info("[EAGI-FWD] Task cancelled")
             except Exception as e:
                 if "cancel" not in str(e).lower():
-                    logger.error(f"Forward audio error: {e}", exc_info=True)
-            logger.info("Gemini sender ended")
+                    print(f"[EAGI-FWD] Error: {e}", flush=True)
+                    logger.error(f"[EAGI-FWD] Error: {e}", exc_info=True)
+            print("[EAGI-FWD] Ended", flush=True)
+            logger.info("[EAGI-FWD] Ended")
         
         # Start background tasks
+        print("[EAGI-WS] Creating background tasks...", flush=True)
+        logger.info("[EAGI-WS] Creating background tasks...")
         audio_task = asyncio.create_task(send_audio_to_client())
         receive_task = asyncio.create_task(forward_audio_to_gemini())
+        print("[EAGI-WS] Background tasks started", flush=True)
+        logger.info("[EAGI-WS] Background tasks started")
         
-        # Main loop - receive audio from client
+        # Main loop - receive audio from client and queue for Gemini
         audio_received = 0
-        logger.info("Starting main audio receive loop")
+        print("[EAGI-WS] Starting main audio receive loop", flush=True)
+        logger.info("[EAGI-WS] Starting main audio receive loop")
         while True:
             try:
                 msg = await websocket.receive_json()
@@ -222,39 +238,58 @@ async def eagi_stream(websocket: WebSocket):
                         })
                         audio_received += 1
                         if audio_received == 1:
-                            logger.info("First audio chunk received from EAGI")
+                            print(f"[EAGI-WS] First audio from EAGI: {len(audio_data)} bytes", flush=True)
+                            logger.info(f"[EAGI-WS] First audio from EAGI: {len(audio_data)} bytes")
                         elif audio_received % 100 == 0:
-                            logger.info(f"Received {audio_received} audio chunks from EAGI")
+                            print(f"[EAGI-WS] Received {audio_received} audio chunks from EAGI", flush=True)
+                            logger.info(f"[EAGI-WS] Received {audio_received} audio chunks from EAGI")
                 
                 elif msg_type == "end":
-                    logger.info("Client requested end")
+                    print("[EAGI-WS] Client requested end", flush=True)
+                    logger.info("[EAGI-WS] Client requested end")
                     break
                     
             except WebSocketDisconnect:
-                logger.info("WebSocket disconnected")
+                print("[EAGI-WS] WebSocket disconnected", flush=True)
+                logger.info("[EAGI-WS] WebSocket disconnected")
                 break
             except Exception as e:
-                logger.error(f"Receive error: {e}", exc_info=True)
+                print(f"[EAGI-WS] Receive error: {e}", flush=True)
+                logger.error(f"[EAGI-WS] Receive error: {e}", exc_info=True)
                 break
         
-        logger.info(f"Main loop ended, received {audio_received} total chunks")
+        print(f"[EAGI-WS] Main loop ended, received {audio_received} total chunks", flush=True)
+        logger.info(f"[EAGI-WS] Main loop ended, received {audio_received} total chunks")
         
     except asyncio.TimeoutError:
-        logger.error("Timeout waiting for start message")
+        print("[EAGI-WS] Timeout waiting for start message", flush=True)
+        logger.error("[EAGI-WS] Timeout waiting for start message")
     except Exception as e:
-        logger.error(f"EAGI stream error: {e}", exc_info=True)
+        print(f"[EAGI-WS] Stream error: {e}", flush=True)
+        logger.error(f"[EAGI-WS] Stream error: {e}", exc_info=True)
     finally:
         # Cleanup
+        print("[EAGI-WS] Cleaning up...", flush=True)
+        logger.info("[EAGI-WS] Cleaning up...")
         if audio_task:
             audio_task.cancel()
+            try:
+                await audio_task
+            except asyncio.CancelledError:
+                pass
         if receive_task:
             receive_task.cancel()
+            try:
+                await receive_task
+            except asyncio.CancelledError:
+                pass
         
         if agent_service:
             try:
                 await agent_service.stop_session()
-            except:
-                pass
+            except Exception as e:
+                print(f"[EAGI-WS] Stop session error: {e}", flush=True)
+                logger.error(f"[EAGI-WS] Stop session error: {e}")
         
         if call:
             call.status = CallStatus.COMPLETED
@@ -262,7 +297,8 @@ async def eagi_stream(websocket: WebSocket):
             if call.started_at:
                 call.duration = int((call.ended_at - call.started_at).total_seconds())
             db.commit()
-            logger.info(f"Call {call.id} ended, duration: {call.duration}s")
+            print(f"[EAGI-WS] Call {call.id} ended, duration: {call.duration}s", flush=True)
+            logger.info(f"[EAGI-WS] Call {call.id} ended, duration: {call.duration}s")
         
         db.close()
         
@@ -271,4 +307,5 @@ async def eagi_stream(websocket: WebSocket):
         except:
             pass
         
-        logger.info("EAGI session ended")
+        print("[EAGI-WS] Session ended", flush=True)
+        logger.info("[EAGI-WS] Session ended")
