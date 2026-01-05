@@ -5,12 +5,13 @@
 # =============================================================================
 #
 # This script deploys the WeeVoice AI Voice Agent using EAGI (Extended AGI)
-# for Asterisk phone call handling.
+# for Asterisk phone call handling with Zadarma SIP trunk.
 #
 # Prerequisites:
-#   1. Asterisk 18+ installed
+#   1. Asterisk 18+ installed with PJSIP
 #   2. Python 3.9+ installed
 #   3. GOOGLE_API_KEY configured
+#   4. Zadarma SIP trunk configured in pjsip.conf
 #
 # Usage:
 #   sudo ./deploy-eagi.sh
@@ -54,7 +55,7 @@ BACKEND_DIR="${SCRIPT_DIR}/../backend"
 # =============================================================================
 # Step 1: Verify Asterisk
 # =============================================================================
-log_step "Step 1/6: Verifying Asterisk installation..."
+log_step "Step 1/7: Verifying Asterisk installation..."
 
 if ! command -v asterisk &> /dev/null; then
     log_error "Asterisk not found. Please install Asterisk first."
@@ -74,11 +75,11 @@ fi
 # =============================================================================
 # Step 2: Install Python dependencies
 # =============================================================================
-log_step "Step 2/6: Installing Python dependencies..."
+log_step "Step 2/7: Installing Python dependencies..."
 
 # Install system packages
 apt-get update -qq
-apt-get install -y -qq python3 python3-pip python3-venv > /dev/null
+apt-get install -y -qq python3 python3-pip python3-venv python3-dotenv > /dev/null 2>&1 || true
 
 # Create WeeVoice directory structure
 mkdir -p "$WEEVOICE_DIR"/{backend,config,data}
@@ -99,13 +100,14 @@ fi
 # Install dependencies
 ./venv/bin/pip install --upgrade pip -q
 ./venv/bin/pip install -r requirements.txt -q
+./venv/bin/pip install python-dotenv -q
 
 log_info "Python dependencies installed"
 
 # =============================================================================
 # Step 3: Configure environment
 # =============================================================================
-log_step "Step 3/6: Configuring environment..."
+log_step "Step 3/7: Configuring environment..."
 
 # Check for existing .env
 ENV_FILE="$WEEVOICE_DIR/backend/.env"
@@ -126,13 +128,11 @@ DEBUG=false
 # Google Gemini API (REQUIRED)
 GOOGLE_API_KEY=
 
-# Gemini model and voice settings
+# Gemini model settings
 GEMINI_MODEL=gemini-2.5-flash-native-audio-preview-09-2025
-GEMINI_VOICE=Aoede
 
-# Agent configuration (can be overridden per-agent in database)
-AGENT_SYSTEM_PROMPT=You are a helpful and professional phone assistant. Keep responses concise and natural.
-AGENT_GREETING=Hello! How can I help you today?
+# High quality audio mode (16kHz instead of 8kHz)
+WEEVOICE_HIGH_QUALITY=true
 
 # Database (SQLite default)
 DATABASE_URL=sqlite:////opt/weevoice/data/voiceagent.db
@@ -153,90 +153,90 @@ fi
 # =============================================================================
 # Step 4: Install EAGI scripts
 # =============================================================================
-log_step "Step 4/6: Installing EAGI scripts..."
+log_step "Step 4/7: Installing EAGI scripts..."
 
-# Create EAGI wrapper script that activates venv
-cat > "$AGI_BIN/weevoice_eagi.py" << 'EAGI_WRAPPER'
+# Create EAGI wrapper script that activates venv and loads env
+cat > "$AGI_BIN/weevoice_eagi_realtime.py" << 'EAGI_WRAPPER'
 #!/bin/bash
 # WeeVoice EAGI Wrapper - Activates venv and runs EAGI script
 
-# Load environment
+# Set environment
 export HOME="/opt/weevoice"
-source /opt/weevoice/backend/.env 2>/dev/null
+export WEEVOICE_HIGH_QUALITY="true"
+
+# Load .env file
+if [ -f /opt/weevoice/backend/.env ]; then
+    set -a
+    source /opt/weevoice/backend/.env
+    set +a
+fi
 
 # Run EAGI with virtual environment Python
 exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_realtime.py "$@"
 EAGI_WRAPPER
 
 # Make executable
-chmod +x "$AGI_BIN/weevoice_eagi.py"
-chown asterisk:asterisk "$AGI_BIN/weevoice_eagi.py"
+chmod +x "$AGI_BIN/weevoice_eagi_realtime.py"
+chown asterisk:asterisk "$AGI_BIN/weevoice_eagi_realtime.py"
 
-log_info "EAGI script installed: $AGI_BIN/weevoice_eagi.py"
+log_info "EAGI script installed: $AGI_BIN/weevoice_eagi_realtime.py"
 
-# Also create a direct Python script for debugging
-cat > "$AGI_BIN/weevoice_debug.py" << 'DEBUG_SCRIPT'
-#!/opt/weevoice/backend/venv/bin/python3
-# Direct EAGI script for debugging
-import sys
-sys.path.insert(0, '/opt/weevoice/backend')
-from eagi.weevoice_eagi_realtime import main
-main()
-DEBUG_SCRIPT
-
-chmod +x "$AGI_BIN/weevoice_debug.py"
-chown asterisk:asterisk "$AGI_BIN/weevoice_debug.py"
+# Also create symlink for backward compatibility
+ln -sf "$AGI_BIN/weevoice_eagi_realtime.py" "$AGI_BIN/weevoice_eagi.py" 2>/dev/null || true
+chown -h asterisk:asterisk "$AGI_BIN/weevoice_eagi.py" 2>/dev/null || true
 
 # =============================================================================
-# Step 5: Configure Asterisk dialplan
+# Step 5: Configure Asterisk dialplan (extensions.conf)
 # =============================================================================
-log_step "Step 5/6: Configuring Asterisk dialplan..."
+log_step "Step 5/7: Configuring Asterisk dialplan..."
 
 # Backup existing extensions.conf
 if [ -f "$ASTERISK_CONF/extensions.conf" ]; then
-    cp "$ASTERISK_CONF/extensions.conf" "$ASTERISK_CONF/extensions.conf.backup.$(date +%Y%m%d)"
+    BACKUP_FILE="$ASTERISK_CONF/extensions.conf.backup.$(date +%Y%m%d%H%M%S)"
+    cp "$ASTERISK_CONF/extensions.conf" "$BACKUP_FILE"
+    log_info "Backed up extensions.conf to $BACKUP_FILE"
 fi
 
-# Copy EAGI dialplan
-cp "$SCRIPT_DIR/asterisk/extensions_eagi.conf" "$ASTERISK_CONF/"
-chown asterisk:asterisk "$ASTERISK_CONF/extensions_eagi.conf"
-
-# Check if include exists in extensions.conf
-if ! grep -q "extensions_eagi.conf" "$ASTERISK_CONF/extensions.conf" 2>/dev/null; then
-    log_info "Adding EAGI dialplan include to extensions.conf..."
-    
-    # Add include at end of file
-    echo "" >> "$ASTERISK_CONF/extensions.conf"
-    echo "; WeeVoice EAGI AI Agent" >> "$ASTERISK_CONF/extensions.conf"
-    echo '#include "extensions_eagi.conf"' >> "$ASTERISK_CONF/extensions.conf"
-fi
-
-# Reload dialplan
-if pgrep -x asterisk > /dev/null; then
-    asterisk -rx "dialplan reload" > /dev/null 2>&1 || true
-    log_info "Asterisk dialplan reloaded"
+# Copy our extensions.conf (contains [zadarma] context for incoming calls)
+if [ -f "$SCRIPT_DIR/asterisk/extensions.conf" ]; then
+    cp "$SCRIPT_DIR/asterisk/extensions.conf" "$ASTERISK_CONF/extensions.conf"
+    chown asterisk:asterisk "$ASTERISK_CONF/extensions.conf"
+    log_info "Installed extensions.conf with [zadarma] context"
 else
-    log_warn "Asterisk not running - dialplan will load on start"
+    log_error "extensions.conf not found in $SCRIPT_DIR/asterisk/"
+    exit 1
 fi
 
 # =============================================================================
 # Step 6: Set permissions and create directories
 # =============================================================================
-log_step "Step 6/6: Setting permissions..."
+log_step "Step 6/7: Setting permissions..."
 
 # Set ownership
 chown -R asterisk:asterisk "$WEEVOICE_DIR"
 chown -R asterisk:asterisk "$LOG_DIR"
 
-# Create temp directories
-mkdir -p /tmp/weevoice_fifos /tmp/weevoice_audio
-chown asterisk:asterisk /tmp/weevoice_fifos /tmp/weevoice_audio
-chmod 755 /tmp/weevoice_fifos /tmp/weevoice_audio
+# Create temp directories for audio
+mkdir -p /tmp/weevoice_audio
+chown asterisk:asterisk /tmp/weevoice_audio
+chmod 755 /tmp/weevoice_audio
 
 # Ensure asterisk user can read backend files
 chmod -R 755 "$WEEVOICE_DIR/backend"
 chmod 600 "$ENV_FILE"
 chown asterisk:asterisk "$ENV_FILE"
+
+# =============================================================================
+# Step 7: Reload Asterisk
+# =============================================================================
+log_step "Step 7/7: Reloading Asterisk..."
+
+if pgrep -x asterisk > /dev/null; then
+    asterisk -rx "dialplan reload" > /dev/null 2>&1 || true
+    log_info "Asterisk dialplan reloaded"
+else
+    log_warn "Asterisk not running - start with: systemctl start asterisk"
+fi
 
 # =============================================================================
 # Verify Installation
@@ -248,17 +248,17 @@ echo "============================================"
 echo ""
 
 # Check EAGI script
-if [ -x "$AGI_BIN/weevoice_eagi.py" ]; then
-    log_info "✓ EAGI script installed: $AGI_BIN/weevoice_eagi.py"
+if [ -x "$AGI_BIN/weevoice_eagi_realtime.py" ]; then
+    log_info "✓ EAGI script: $AGI_BIN/weevoice_eagi_realtime.py"
 else
     log_error "✗ EAGI script not executable"
 fi
 
-# Check dialplan
-if grep -q "weevoice-ai-agent" "$ASTERISK_CONF/extensions_eagi.conf" 2>/dev/null; then
-    log_info "✓ Asterisk dialplan configured"
+# Check extensions.conf has zadarma context
+if grep -q "\[zadarma\]" "$ASTERISK_CONF/extensions.conf" 2>/dev/null; then
+    log_info "✓ Dialplan [zadarma] context configured"
 else
-    log_error "✗ Dialplan configuration missing"
+    log_error "✗ Dialplan [zadarma] context missing"
 fi
 
 # Check API key
@@ -268,23 +268,33 @@ else
     log_warn "⚠ GOOGLE_API_KEY not set - edit $ENV_FILE"
 fi
 
+# Show dialplan
 echo ""
-echo "Next steps:"
-echo "  1. Edit $ENV_FILE and set GOOGLE_API_KEY"
-echo "  2. Configure your SIP trunk to route to context [weevoice-ai-agent]"
-echo "  3. Test with: asterisk -rx 'originate Local/s@weevoice-ai-agent application Wait 60'"
+log_info "Dialplan contexts:"
+asterisk -rx "dialplan show zadarma" 2>/dev/null | head -10 || echo "  (Asterisk not running)"
+
 echo ""
-echo "Dialplan contexts available:"
-echo "  - weevoice-ai-agent    : Main AI agent context"
-echo "  - from-zadarma         : For Zadarma SIP trunk"
-echo "  - weevoice-test        : Test extensions (9999, 9998)"
+echo "============================================"
+echo "  Configuration Summary"
+echo "============================================"
+echo ""
+echo "EAGI Script:"
+echo "  $AGI_BIN/weevoice_eagi_realtime.py"
+echo ""
+echo "Dialplan Contexts:"
+echo "  [zadarma]     - Incoming calls from Zadarma → AI Agent"
+echo "  [webrtc]      - Outbound calls from AI/WebRTC"
+echo "  [internal]    - Internal extension calls"
+echo ""
+echo "Call Flow:"
+echo "  +32480206645 called → Zadarma → pjsip [zadarma] → EAGI AI Agent"
+echo ""
+echo "Next Steps:"
+echo "  1. Verify GOOGLE_API_KEY in $ENV_FILE"
+echo "  2. Ensure pjsip.conf has: context=zadarma for zadarma-endpoint"
+echo "  3. Test: Call +32480206645"
 echo ""
 echo "Logs:"
-echo "  - /var/log/weevoice/eagi_realtime.log"
-echo "  - /var/log/asterisk/messages"
-echo ""
-echo "Debug:"
+echo "  tail -f /var/log/weevoice/eagi.log"
 echo "  asterisk -rvvvv"
-echo "  tail -f /var/log/weevoice/eagi_realtime.log"
 echo ""
-
