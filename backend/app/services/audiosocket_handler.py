@@ -44,11 +44,26 @@ MSG_AUDIO = 0x10
 MSG_HANGUP = 0x00
 MSG_ERROR = 0xFF
 
-# Audio: 8kHz mono PCM (standard phone audio)
-# 160 samples * 2 bytes = 320 bytes = 20ms frame
-SAMPLE_RATE = 8000
-FRAME_SIZE = 320
-SILENCE_FRAME = b'\x00' * FRAME_SIZE
+# Audio Settings
+# INPUT: 8kHz from Asterisk (ulaw/alaw native) - upsampled to 16kHz for Gemini
+# OUTPUT: 24kHz from Gemini - sent directly to Asterisk (Asterisk handles transcoding to ulaw/alaw)
+INPUT_SAMPLE_RATE = 8000   # From Asterisk (PSTN native)
+OUTPUT_SAMPLE_RATE = 24000  # To Asterisk (Gemini native) - Asterisk transcodes to ulaw/alaw
+GEMINI_INPUT_RATE = 16000   # Gemini expects 16kHz input
+
+# Frame sizes (20ms frames)
+# INPUT: 8kHz * 0.02s * 2 bytes = 320 bytes
+# OUTPUT: 24kHz * 0.02s * 2 bytes = 960 bytes
+INPUT_FRAME_SIZE = 320   # 20ms at 8kHz
+OUTPUT_FRAME_SIZE = 960  # 20ms at 24kHz (slin24)
+
+# Legacy aliases for backward compatibility
+SAMPLE_RATE = INPUT_SAMPLE_RATE
+FRAME_SIZE = INPUT_FRAME_SIZE
+
+# Silence frames for each format
+SILENCE_FRAME = b'\x00' * INPUT_FRAME_SIZE
+SILENCE_FRAME_24K = b'\x00' * OUTPUT_FRAME_SIZE
 
 # Audio Quality Settings - EXACT values from Asterisk-AI-Voice-Agent golden config
 AUDIO_TARGET_RMS = 1400   # Target RMS level for normalization
@@ -356,12 +371,12 @@ class AudioSocketSession:
             except Exception as e:
                 print(f"{ts()} TCP_NODELAY failed: {e}", flush=True)
             
-            # Send first frames directly via writer (simpler approach)
-            header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+            # Send first frames directly via writer (simpler approach) - using 24kHz format
+            header = struct.pack('>BH', MSG_AUDIO, OUTPUT_FRAME_SIZE)
             for i in range(5):
-                self.writer.write(header + SILENCE_FRAME)
+                self.writer.write(header + SILENCE_FRAME_24K)
             await self.writer.drain()
-            print(f"{ts()} 5 silence frames sent via writer.drain()", flush=True)
+            print(f"{ts()} 5 silence frames sent via writer.drain() (24kHz)", flush=True)
             
             # Note: Audio sending is handled by _unified_audio_loop (started later)
             print(f"{ts()} Ready for audio", flush=True)
@@ -484,15 +499,14 @@ class AudioSocketSession:
         
         print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms ({MIN_START_CHUNKS} chunks), jitter={JITTER_BUFFER_MS}ms", flush=True)
         
-        # AudioSocket frame header (type + length)
-        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        # AudioSocket frame header (type + length) - using 24kHz frame size (960 bytes)
+        header = struct.pack('>BH', MSG_AUDIO, OUTPUT_FRAME_SIZE)
         
         # Async jitter buffer - large enough for 10 seconds of audio
         # Gemini can send large bursts, need buffer to absorb them
         jitter_buffer = asyncio.Queue(maxsize=1000)
         
-        # State
-        resample_state = None
+        # State (no resample_state needed - sending 24kHz directly to Asterisk)
         attack_state = None
         pending = b''  # Frame remainder buffer
         startup_ready = False
@@ -528,7 +542,8 @@ class AudioSocketSession:
                     next_tick = now  # Reset if behind
                 
                 # === DRAIN JITTER BUFFER (like _drain_next_frame) ===
-                while len(pending) < FRAME_SIZE:
+                # Using OUTPUT_FRAME_SIZE (960 bytes for 24kHz)
+                while len(pending) < OUTPUT_FRAME_SIZE:
                     try:
                         chunk = jitter_buffer.get_nowait()
                         if chunk is None:
@@ -539,7 +554,7 @@ class AudioSocketSession:
                         break
                 
                 buf_level = len(pending)
-                available_frames = buf_level // FRAME_SIZE + jitter_buffer.qsize()
+                available_frames = buf_level // OUTPUT_FRAME_SIZE + jitter_buffer.qsize()
                 
                 if buf_level < stats['min_buffer']:
                     stats['min_buffer'] = buf_level
@@ -550,16 +565,17 @@ class AudioSocketSession:
                         startup_ready = True
                         stats['playback_start_time'] = time.perf_counter()
                         lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
-                        print(f"[PACER] ▶ START: {buf_level/16:.0f}ms buffered, latency={lat_ms:.0f}ms", flush=True)
+                        # 48 bytes per ms at 24kHz (24000 * 2 / 1000)
+                        print(f"[PACER] ▶ START: {buf_level/48:.0f}ms buffered (24kHz), latency={lat_ms:.0f}ms", flush=True)
                     else:
                         next_tick += TICK_SECONDS
                         continue  # Wait for more audio
                 
                 # === EMIT FRAME ===
-                if buf_level >= FRAME_SIZE:
-                    # Have audio - send it
-                    frame = pending[:FRAME_SIZE]
-                    pending = pending[FRAME_SIZE:]
+                if buf_level >= OUTPUT_FRAME_SIZE:
+                    # Have audio - send it (24kHz frame)
+                    frame = pending[:OUTPUT_FRAME_SIZE]
+                    pending = pending[OUTPUT_FRAME_SIZE:]
                     try:
                         self.writer.write(header + frame)
                         # Only drain if write buffer is getting large (avoid blocking on every frame)
@@ -576,7 +592,7 @@ class AudioSocketSession:
                     # End of stream - send any remaining partial data
                     if pending:
                         try:
-                            self.writer.write(header + pending.ljust(FRAME_SIZE, b'\x00'))
+                            self.writer.write(header + pending.ljust(OUTPUT_FRAME_SIZE, b'\x00'))
                             stats['sent'] += 1
                         except:
                             pass
@@ -585,7 +601,7 @@ class AudioSocketSession:
                         await self.writer.drain()
                     except:
                         pass
-                    print(f"[PACER] ✓ Done: {stats['sent']} frames, under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
+                    print(f"[PACER] ✓ Done: {stats['sent']} frames (24kHz), under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
                     break
                 
                 elif startup_ready and jitter_buffer.empty():
@@ -605,12 +621,12 @@ class AudioSocketSession:
                         if time_since_real < PROVIDER_GRACE_MS:
                             # Send any partial pending data or very quiet filler
                             if pending:
-                                frame = pending + (b'\x00' * (FRAME_SIZE - len(pending)))
+                                frame = pending + (b'\x00' * (OUTPUT_FRAME_SIZE - len(pending)))
                                 pending = b''
                                 stats['underrun_partial'] += 1
                             else:
-                                # Send silence to keep audio stream alive
-                                frame = SILENCE_FRAME
+                                # Send silence to keep audio stream alive (24kHz)
+                                frame = SILENCE_FRAME_24K
                                 stats['underrun_empty'] += 1
                             stats['underruns'] += 1
                             try:
@@ -634,20 +650,26 @@ class AudioSocketSession:
                 
                 # Periodic log
                 if stats['sent'] > 0 and stats['sent'] % 500 == 0:
-                    print(f"[PACER] {stats['sent']} frames, buf={buf_level/16:.0f}ms, q={jitter_buffer.qsize()}, under={stats['underruns']}", flush=True)
+                    print(f"[PACER] {stats['sent']} frames (24kHz), buf={buf_level/48:.0f}ms, q={jitter_buffer.qsize()}, under={stats['underruns']}", flush=True)
         
         async def receiver():
             """
-            Receive from Gemini with EXACT processing from Asterisk-AI-Voice-Agent:
-            1. Resample 24kHz → 8kHz using audioop.ratecv with state
-            2. Apply attack envelope (20ms)
+            Receive from Gemini and send 24kHz directly to Asterisk.
+            
+            NO RESAMPLING - Asterisk handles transcoding from slin24 to ulaw/alaw.
+            This is more efficient as Asterisk's codec translation is optimized.
+            
+            Processing:
+            1. Receive 24kHz PCM from Gemini
+            2. Apply attack envelope (20ms) to prevent pop
             3. Apply normalization (target_rms=1400, max_gain=18dB)
+            4. Send 24kHz directly to Asterisk (no downsampling!)
             """
-            nonlocal resample_state, attack_state
+            nonlocal attack_state
             first_chunk = True
             attack_done = False  # Only apply attack envelope once at start
             
-            print(f"[RECV] Using audioop.ratecv with state", flush=True)
+            print(f"[RECV] Direct 24kHz pass-through (Asterisk handles transcoding)", flush=True)
             
             try:
                 async for audio_24k in self.agent_service.receive_audio():
@@ -661,29 +683,26 @@ class AudioSocketSession:
                     # Track first audio timing
                     if first_chunk:
                         stats['first_audio_time'] = time.perf_counter()
-                        print(f"[RECV] ▶ FIRST: {len(audio_24k)}b", flush=True)
+                        print(f"[RECV] ▶ FIRST: {len(audio_24k)}b (24kHz direct)", flush=True)
                         first_chunk = False
                     
-                    # === Resample 24kHz → 8kHz (using audioop.ratecv with state) ===
-                    audio_8k, resample_state = audioop.ratecv(
-                        audio_24k, 2, 1, 24000, 8000, resample_state
-                    )
+                    # NO RESAMPLING - send 24kHz directly to Asterisk
+                    # Asterisk will transcode slin24 → ulaw/alaw for PSTN
                     
                     # === Apply attack envelope ONLY at very start (prevents pop) ===
-                    # FIX: Don't reset attack_state for each phrase - causes choppy audio
                     if not attack_done:
-                        audio_8k, attack_state = apply_attack_envelope(
-                            audio_8k, SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state
+                        audio_24k, attack_state = apply_attack_envelope(
+                            audio_24k, OUTPUT_SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state
                         )
                         if attack_state and attack_state.get('bytes_remaining', 0) <= 0:
                             attack_done = True  # Attack complete, don't apply again
                     
                     # === Normalize audio (target_rms=1400, max_gain=18dB) ===
-                    audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
+                    audio_24k = normalize_audio(audio_24k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
                     
-                    # Put in async jitter buffer
+                    # Put in async jitter buffer (24kHz audio)
                     try:
-                        jitter_buffer.put_nowait(audio_8k)
+                        jitter_buffer.put_nowait(audio_24k)
                         stats['recv'] += 1
                     except asyncio.QueueFull:
                         pass  # Drop if full
@@ -694,7 +713,7 @@ class AudioSocketSession:
                     
                     # Log progress
                     if stats['recv'] <= 3 or stats['recv'] % 50 == 0:
-                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}→{len(audio_8k)}b, q={jitter_buffer.qsize()}", flush=True)
+                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}b (24kHz), q={jitter_buffer.qsize()}", flush=True)
                         
             except asyncio.CancelledError:
                 pass
@@ -1377,19 +1396,13 @@ class AudioSocketSession:
         except:
             print(f"[GREETING-PLAY] 🎤 Starting playback: {len(self.greeting_audio)} bytes ({audio_duration_ms:.0f}ms)", flush=True)
         
-        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
-        frames_sent = 0
+        # Apply normalization for consistent volume (on 8kHz audio)
+        audio_8k = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
         
-        # FIX: Send 150ms of silence BEFORE greeting to let Asterisk audio path initialize
-        # This prevents the first few words from being cut off
-        LEAD_IN_FRAMES = 8  # 160ms of silence (8 frames * 20ms)
-        print(f"[GREETING-PLAY] Sending {LEAD_IN_FRAMES} lead-in silence frames...", flush=True)
-        for _ in range(LEAD_IN_FRAMES):
-            self.writer.write(header + SILENCE_FRAME)
-        await self.writer.drain()
-        
-        # Apply normalization for consistent volume
-        audio_data = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
+        # Upsample 8kHz → 24kHz to match Asterisk's expected format (slin24)
+        # Asterisk is configured to use slin24 for AudioSocket
+        audio_data, _ = audioop.ratecv(audio_8k, 2, 1, INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, None)
+        print(f"[GREETING-PLAY] Upsampled {len(audio_8k)}b (8kHz) → {len(audio_data)}b (24kHz)", flush=True)
         
         # Check RMS after normalization
         try:
@@ -1398,26 +1411,38 @@ class AudioSocketSession:
         except:
             pass
         
+        # Use 24kHz frame size (960 bytes for 20ms)
+        header = struct.pack('>BH', MSG_AUDIO, OUTPUT_FRAME_SIZE)
+        frames_sent = 0
+        
+        # FIX: Send 150ms of silence BEFORE greeting to let Asterisk audio path initialize
+        # This prevents the first few words from being cut off
+        LEAD_IN_FRAMES = 8  # 160ms of silence (8 frames * 20ms)
+        print(f"[GREETING-PLAY] Sending {LEAD_IN_FRAMES} lead-in silence frames (24kHz)...", flush=True)
+        for _ in range(LEAD_IN_FRAMES):
+            self.writer.write(header + SILENCE_FRAME_24K)
+        await self.writer.drain()
+        
         # Send audio in 20ms frames with proper timing
         frame_duration = 0.02  # 20ms
         next_frame_time = time.perf_counter()
         
         try:
-            for i in range(0, len(audio_data), FRAME_SIZE):
+            for i in range(0, len(audio_data), OUTPUT_FRAME_SIZE):
                 if not self.is_running:
                     print(f"[GREETING-PLAY] ⚠ Stopped early (is_running=False)", flush=True)
                     break
                 
-                chunk = audio_data[i:i + FRAME_SIZE]
-                if len(chunk) < FRAME_SIZE:
-                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+                chunk = audio_data[i:i + OUTPUT_FRAME_SIZE]
+                if len(chunk) < OUTPUT_FRAME_SIZE:
+                    chunk += b'\x00' * (OUTPUT_FRAME_SIZE - len(chunk))
                 
                 self.writer.write(header + chunk)
                 frames_sent += 1
                 
                 # Log first few frames for debugging
                 if frames_sent <= 3:
-                    print(f"[GREETING-PLAY] Frame #{frames_sent} sent ({len(chunk)} bytes)", flush=True)
+                    print(f"[GREETING-PLAY] Frame #{frames_sent} sent ({len(chunk)} bytes, 24kHz)", flush=True)
                 
                 # Drain periodically to prevent buffer overflow
                 if frames_sent % 25 == 0:
@@ -1432,7 +1457,7 @@ class AudioSocketSession:
             await self.writer.drain()
             
             elapsed = (time.perf_counter() - t0) * 1000
-            print(f"[GREETING-PLAY] ✅ Complete: {frames_sent} frames in {elapsed:.0f}ms", flush=True)
+            print(f"[GREETING-PLAY] ✅ Complete: {frames_sent} frames (24kHz) in {elapsed:.0f}ms", flush=True)
             
             self.greeting_played = True
             
@@ -1456,7 +1481,15 @@ class AudioSocketSession:
                     print(f"[SETUP] Released line for phone_id {self.phone_number_id}", flush=True)
     
     async def _process_audio(self, audio_8k: bytes):
-        """Process audio from Asterisk (8kHz), send to Gemini (16kHz)"""
+        """
+        Process audio from Asterisk (8kHz) and send to Gemini (16kHz).
+        
+        Audio flow (input side):
+        - Asterisk receives ulaw/alaw (8kHz) from PSTN/Zadarma
+        - AudioSocket sends 8kHz PCM to Python
+        - Python upsamples 8kHz → 16kHz (Gemini requires 16kHz input)
+        - Audio is queued for sending to Gemini
+        """
         if not self.ai_ready.is_set():
             return
         if len(audio_8k) < 2:
@@ -1470,9 +1503,9 @@ class AudioSocketSession:
             if not hasattr(self, '_caller_resample_state'):
                 self._caller_resample_state = None
             
-            # Upsample 8kHz to 16kHz for Gemini
+            # Upsample 8kHz to 16kHz for Gemini (Gemini requires 16kHz input)
             audio_16k, self._caller_resample_state = simple_resample(
-                audio_8k, 8000, 16000, self._caller_resample_state
+                audio_8k, INPUT_SAMPLE_RATE, GEMINI_INPUT_RATE, self._caller_resample_state
             )
             
             # Queue for sending
@@ -1629,7 +1662,8 @@ class AudioSocketSession:
         import math
         import time
         
-        sample_rate = 8000
+        # Generate busy tone at 24kHz (to match Asterisk's expected slin24 format)
+        sample_rate = OUTPUT_SAMPLE_RATE  # 24000 Hz
         duration_on = 0.5  # 500ms tone
         duration_off = 0.5  # 500ms silence
         num_cycles = 3  # Play 3 beeps
@@ -1637,7 +1671,7 @@ class AudioSocketSession:
         samples_on = int(sample_rate * duration_on)
         samples_off = int(sample_rate * duration_off)
         
-        # Create tone (480Hz + 620Hz = standard busy signal)
+        # Create tone (480Hz + 620Hz = standard busy signal) at 24kHz
         tone_data = b''
         for i in range(samples_on):
             # Mix 480Hz and 620Hz for authentic busy tone
@@ -1646,9 +1680,9 @@ class AudioSocketSession:
             tone_data += struct.pack('<h', max(-32768, min(32767, value)))
         
         silence_data = b'\x00' * (samples_off * 2)
-        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+        header = struct.pack('>BH', MSG_AUDIO, OUTPUT_FRAME_SIZE)
         
-        print(f"[BUSY] Starting busy tone playback ({num_cycles} cycles)", flush=True)
+        print(f"[BUSY] Starting busy tone playback ({num_cycles} cycles, 24kHz)", flush=True)
         
         frame_duration = 0.02  # 20ms per frame
         next_frame_time = time.time()
@@ -1656,10 +1690,10 @@ class AudioSocketSession:
         
         for cycle in range(num_cycles):
             # Send tone in chunks with proper timing
-            for i in range(0, len(tone_data), FRAME_SIZE):
-                chunk = tone_data[i:i + FRAME_SIZE]
-                if len(chunk) < FRAME_SIZE:
-                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+            for i in range(0, len(tone_data), OUTPUT_FRAME_SIZE):
+                chunk = tone_data[i:i + OUTPUT_FRAME_SIZE]
+                if len(chunk) < OUTPUT_FRAME_SIZE:
+                    chunk += b'\x00' * (OUTPUT_FRAME_SIZE - len(chunk))
                 self.writer.write(header + chunk)
                 frames_sent += 1
                 
@@ -1670,10 +1704,10 @@ class AudioSocketSession:
                     await asyncio.sleep(sleep_time)
             
             # Send silence with proper timing
-            for i in range(0, len(silence_data), FRAME_SIZE):
-                chunk = silence_data[i:i + FRAME_SIZE]
-                if len(chunk) < FRAME_SIZE:
-                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+            for i in range(0, len(silence_data), OUTPUT_FRAME_SIZE):
+                chunk = silence_data[i:i + OUTPUT_FRAME_SIZE]
+                if len(chunk) < OUTPUT_FRAME_SIZE:
+                    chunk += b'\x00' * (OUTPUT_FRAME_SIZE - len(chunk))
                 self.writer.write(header + chunk)
                 frames_sent += 1
                 
@@ -1684,7 +1718,7 @@ class AudioSocketSession:
                     await asyncio.sleep(sleep_time)
         
         await self.writer.drain()
-        print(f"[BUSY] Busy tone complete ({frames_sent} frames sent)", flush=True)
+        print(f"[BUSY] Busy tone complete ({frames_sent} frames sent, 24kHz)", flush=True)
     
     async def _play_audio_file(self, audio_url: str):
         """Download and play an audio file"""
@@ -1712,13 +1746,13 @@ class AudioSocketSession:
                 input_path = f.name
                 f.write(audio_content)
             
-            # Convert to 8kHz mono PCM using ffmpeg
+            # Convert to 24kHz mono PCM using ffmpeg (to match Asterisk's slin24 format)
             with tempfile.NamedTemporaryFile(suffix='.raw', delete=False) as f:
                 raw_path = f.name
             
             result = subprocess.run([
                 'ffmpeg', '-y', '-i', input_path,
-                '-ar', '8000', '-ac', '1', '-f', 's16le', raw_path
+                '-ar', '24000', '-ac', '1', '-f', 's16le', raw_path
             ], capture_output=True)
             
             if result.returncode != 0:
@@ -1735,19 +1769,19 @@ class AudioSocketSession:
             os.unlink(input_path)
             os.unlink(raw_path)
             
-            print(f"[BUSY] Converted to {len(audio_data)} bytes of 8kHz PCM", flush=True)
+            print(f"[BUSY] Converted to {len(audio_data)} bytes of 24kHz PCM", flush=True)
             
-            # Send audio to Asterisk with proper 20ms timing
+            # Send audio to Asterisk with proper 20ms timing (24kHz frames)
             import time
-            header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
+            header = struct.pack('>BH', MSG_AUDIO, OUTPUT_FRAME_SIZE)
             frame_duration = 0.02  # 20ms per frame
             next_frame_time = time.time()
             frames_sent = 0
             
-            for i in range(0, len(audio_data), FRAME_SIZE):
-                chunk = audio_data[i:i + FRAME_SIZE]
-                if len(chunk) < FRAME_SIZE:
-                    chunk += b'\x00' * (FRAME_SIZE - len(chunk))
+            for i in range(0, len(audio_data), OUTPUT_FRAME_SIZE):
+                chunk = audio_data[i:i + OUTPUT_FRAME_SIZE]
+                if len(chunk) < OUTPUT_FRAME_SIZE:
+                    chunk += b'\x00' * (OUTPUT_FRAME_SIZE - len(chunk))
                 self.writer.write(header + chunk)
                 frames_sent += 1
                 
