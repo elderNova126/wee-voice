@@ -88,18 +88,8 @@ fi
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip -q
 
-# Install dependencies (same as web backend)
-pip install -q \
-    google-genai \
-    sqlalchemy \
-    psycopg2-binary \
-    httpx \
-    pydantic \
-    pydantic-settings \
-    python-dotenv \
-    langchain \
-    langchain-google-genai \
-    langchain-core
+# Install ONLY websockets (EAGI uses backend API for everything)
+pip install -q websockets
 
 log_info "✓ Virtual environment ready"
 
@@ -111,8 +101,13 @@ log_step "4/7: Copying EAGI scripts..."
 # IMPORTANT: Remove old app directory if it exists (causes pydantic issues)
 if [ -d "${BACKEND_DIR}/app" ]; then
     rm -rf "${BACKEND_DIR}/app"
-    log_info "✓ Removed old app directory (avoids pydantic issues)"
+    log_info "✓ Removed old app directory"
 fi
+
+# IMPORTANT: Remove cached Python files (cause stale imports)
+find "${BACKEND_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "${BACKEND_DIR}" -name "*.pyc" -delete 2>/dev/null || true
+log_info "✓ Cleared Python cache files"
 
 # ONLY copy EAGI scripts - NOT the app directory
 if [ -d "${SOURCE_DIR}/backend/eagi" ]; then
@@ -167,24 +162,16 @@ log_step "6/7: Creating AGI wrapper script..."
 cat > "${AGI_BIN}/weevoice_eagi_realtime.py" << 'WRAPPER_EOF'
 #!/bin/bash
 #===============================================================================
-# WeeVoice EAGI Wrapper (Standalone - no app imports)
+# WeeVoice EAGI Wrapper (API Mode)
+# Uses backend API for configuration - same settings as web agent
 #===============================================================================
 
 export HOME="/opt/weevoice"
-# NOTE: Do NOT add backend to PYTHONPATH - it would trigger pydantic config loading
 
-# Load ONLY the variables we need from .env
-ENV_FILE="/opt/weevoice/backend/.env"
-if [ -f "$ENV_FILE" ]; then
-    export DATABASE_URL=$(grep "^DATABASE_URL=" "$ENV_FILE" | cut -d= -f2-)
-    export GOOGLE_API_KEY=$(grep "^GOOGLE_API_KEY=" "$ENV_FILE" | cut -d= -f2-)
-    export GEMINI_MODEL=$(grep "^GEMINI_MODEL=" "$ENV_FILE" | cut -d= -f2-)
-fi
+# Backend API URL (same server)
+export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8000}"
 
-# Fallback for model
-export GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-flash-preview-native-audio-dialog}"
-
-# Run the standalone EAGI script
+# Run EAGI script (gets config from API, no local imports needed)
 exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_full.py "$@"
 WRAPPER_EOF
 
@@ -214,6 +201,13 @@ log_info "✓ Asterisk dialplan reloaded"
 # Set permissions
 chown -R asterisk:asterisk "$WEEVOICE_DIR"
 chmod +x "${EAGI_DIR}"/*.py 2>/dev/null || true
+
+# Final cleanup - ensure no stale cache
+find "${BACKEND_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "${BACKEND_DIR}" -name "*.pyc" -delete 2>/dev/null || true
+
+# Clear EAGI log for fresh start
+truncate -s 0 "${LOG_DIR}/eagi.log" 2>/dev/null || true
 
 #===============================================================================
 # Summary
