@@ -17,6 +17,7 @@ import tempfile
 import struct
 import fcntl
 import select
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -57,6 +58,9 @@ FRAME_SIZE = 320           # 20ms at 8kHz
 AUDIO_TMP_DIR = "/tmp/weevoice_audio"
 os.makedirs(AUDIO_TMP_DIR, exist_ok=True)
 
+# Call timeout - if no audio for this long, assume call ended
+CALL_TIMEOUT_SECONDS = 5
+
 
 class EAGIHandler:
     """
@@ -79,6 +83,9 @@ class EAGIHandler:
         
         # Audio output buffer
         self._playback_queue = asyncio.Queue()
+        
+        # Track last audio time for timeout detection
+        self._last_audio_time = time.time()
         
         log("=" * 60)
         log("WeeVoice EAGI Starting (WebSocket API Mode)")
@@ -133,6 +140,19 @@ class EAGIHandler:
     def _stream_file(self, filename: str) -> str:
         """Play audio file using STREAM FILE (without extension)"""
         return self._agi_command(f'STREAM FILE "{filename}" ""')
+    
+    def _check_channel_status(self) -> bool:
+        """Check if channel is still active"""
+        try:
+            result = self._agi_command('CHANNEL STATUS')
+            # Result format: "200 result=X" where X is status code
+            # Status 6 = up/connected, others might indicate hangup
+            if '200 result=' in result:
+                status = int(result.split('=')[1].split()[0])
+                return status == 6  # 6 = channel up
+            return False
+        except:
+            return False
     
     # ========================================================================
     # AUDIO RESAMPLING
@@ -259,7 +279,8 @@ class EAGIHandler:
         
         frame_count = 0
         buffer = b''
-        loop = asyncio.get_event_loop()
+        empty_read_count = 0
+        MAX_EMPTY_READS = 50  # ~1 second of no audio = call ended
         
         while self.running and self.ws:
             try:
@@ -271,11 +292,31 @@ class EAGIHandler:
                         data = self._audio_fd.read(FRAME_SIZE * 4)  # Read multiple frames
                         if data:
                             buffer += data
+                            empty_read_count = 0  # Reset counter
+                            self._last_audio_time = time.time()
+                        else:
+                            # EOF - Asterisk closed FD3, call ended
+                            empty_read_count += 1
+                            if empty_read_count > MAX_EMPTY_READS:
+                                log("CAPTURE: EOF detected (call ended)")
+                                break
                     except BlockingIOError:
                         pass  # No data available
+                    except OSError as e:
+                        # Handle "Bad file descriptor" = call ended
+                        if e.errno == 9:  # EBADF
+                            log("CAPTURE: FD3 closed (call ended)")
+                            break
+                        raise
                     except Exception as e:
                         if self.running:
                             log(f"CAPTURE: FD3 read error: {e}")
+                        break
+                else:
+                    # Timeout - check if call is still active
+                    empty_read_count += 1
+                    if empty_read_count > MAX_EMPTY_READS:
+                        log("CAPTURE: No audio timeout (call may have ended)")
                         break
                 
                 # Process complete frames
@@ -295,7 +336,7 @@ class EAGIHandler:
                             frame_count += 1
                             if frame_count == 1:
                                 log("CAPTURE: First audio chunk sent to backend")
-                            elif frame_count % 100 == 0:
+                            elif frame_count % 500 == 0:  # Log less frequently
                                 log(f"CAPTURE: Sent {frame_count} chunks to backend")
                         except Exception as e:
                             if self.running:
@@ -311,6 +352,7 @@ class EAGIHandler:
                 break
         
         log(f"CAPTURE: Ended, {frame_count} frames sent")
+        self.running = False  # Signal other tasks to stop
     
     async def _receive_and_buffer(self):
         """Receive audio from backend and queue for playback"""
@@ -369,6 +411,9 @@ class EAGIHandler:
                         break
                         
                 except asyncio.TimeoutError:
+                    # Check if call is still active
+                    if not self.running:
+                        break
                     # Flush remaining audio if we have some
                     if len(audio_accumulator) > 1000:
                         file_id += 1
@@ -414,6 +459,10 @@ class EAGIHandler:
                     log("PLAYBACK: Received end signal")
                     break
                 
+                # Check if still running before playing
+                if not self.running:
+                    break
+                
                 # Play the audio file (run in thread to not block)
                 log(f"PLAYBACK: Playing file: {filename}")
                 
@@ -422,9 +471,11 @@ class EAGIHandler:
                 )
                 
                 files_played += 1
-                log(f"PLAYBACK: Played file #{files_played}, result: {result[:50] if result else 'none'}")
+                log(f"PLAYBACK: Played file #{files_played}")
                 
             except asyncio.TimeoutError:
+                if not self.running:
+                    break
                 continue
             except Exception as e:
                 if self.running:
@@ -448,6 +499,7 @@ class EAGIHandler:
                 await self.ws.close()
             except:
                 pass
+            self.ws = None
         
         # Close audio FD
         if self._audio_fd:
@@ -455,6 +507,7 @@ class EAGIHandler:
                 self._audio_fd.close()
             except:
                 pass
+            self._audio_fd = None
         
         # Clean up audio files
         self._cleanup_audio_files()
@@ -475,6 +528,7 @@ class EAGIHandler:
         
         self._verbose("WeeVoice: Connected")
         self.running = True
+        self._last_audio_time = time.time()
         
         try:
             # Create tasks
@@ -484,22 +538,23 @@ class EAGIHandler:
             playback_task = asyncio.create_task(self._playback_worker())
             log("All tasks created")
             
-            # Wait for any task to complete (usually means call ended)
-            done, pending = await asyncio.wait(
-                [capture_task, receive_task, playback_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
+            # Wait for capture task to complete (it detects call end)
+            await capture_task
             
-            log("One task completed, stopping others...")
+            log("Capture ended, stopping other tasks...")
             self.running = False
             
+            # Give receive/playback tasks a moment to finish gracefully
+            await asyncio.sleep(0.5)
+            
             # Cancel pending tasks
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            for task in [receive_task, playback_task]:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
                     
         except Exception as e:
             log(f"Run error: {e}")
@@ -508,7 +563,7 @@ class EAGIHandler:
             await self._cleanup()
         
         self._verbose("WeeVoice: Ended")
-        log("EAGI session ended")
+        log("EAGI session ended - process exiting")
 
 
 def main():
@@ -521,6 +576,9 @@ def main():
         log(f"Fatal: {e}")
         sys.stdout.write('VERBOSE "WeeVoice: Error" 1\n')
         sys.stdout.flush()
+    finally:
+        log("EAGI process terminating")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
