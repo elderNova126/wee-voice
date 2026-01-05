@@ -72,9 +72,10 @@ def get_gemini_voice_name(language: str, gender: str, voice_id: str = None) -> s
         return voice_id
     
     # Priority 3: Default by language (matches agent_service.py)
+    # NOTE: Puck is more neutral and handles non-English languages better
     if language:
         if language.startswith('fr'):
-            return "Charon"
+            return "Puck"  # Neutral voice - clearer French pronunciation than Charon
         elif language.startswith('es'):
             return "Kore"
     
@@ -191,8 +192,15 @@ async def generate_greeting_with_gemini(
             config=config
         ) as session:
             # Send greeting text with instruction to just say it
-            lang_instruction = "Réponds en français" if language.startswith('fr') else "Respond in English"
-            prompt = f"[{lang_instruction}] Say exactly this greeting, nothing more: \"{greeting_text}\""
+            # For French: Add pronunciation guidance for better voice quality
+            if language.startswith('fr'):
+                prompt = f"""[Instructions: Parle en français avec une prononciation claire et naturelle. 
+Articule chaque syllabe distinctement. Utilise une intonation naturelle française.
+Ne te précipite pas - maintiens un rythme modéré et régulier.]
+
+Dis exactement cette salutation, rien de plus: "{greeting_text}" """
+            else:
+                prompt = f"Say exactly this greeting, nothing more: \"{greeting_text}\""
             
             await session.send(input=prompt, end_of_turn=True)
             

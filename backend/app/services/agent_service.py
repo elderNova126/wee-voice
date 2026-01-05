@@ -204,8 +204,9 @@ GREETING PROTOCOL:
             voice_name = self.agent.voice_id
         else:
             # No preference, default by language
+            # NOTE: Puck is more neutral and handles non-English languages better
             if self.agent.language.startswith('fr'):
-                voice_name = "Charon"  # Deeper voice for French
+                voice_name = "Puck"  # Neutral voice - clearer French pronunciation than Charon
             elif self.agent.language.startswith('es'):
                 voice_name = "Kore"  # Female voice for Spanish
             else:
@@ -221,7 +222,23 @@ GREETING PROTOCOL:
         }
         
         # Add explicit voice instruction to system prompt to maintain consistency
-        voice_instruction = f"""
+        # For French: Add specific pronunciation guidance to improve voice quality
+        if is_french:
+            voice_instruction = f"""
+
+VOICE & PRONUNCIATION INSTRUCTIONS (FRENCH):
+- Your voice is set to "{voice_name}" for this entire conversation
+- NEVER change your voice characteristics mid-conversation
+- Speak French with clear, natural pronunciation
+- Articulate each syllable clearly without rushing
+- Use proper French prosody and intonation patterns
+- Handle liaison and elision naturally
+- Maintain a steady, moderate speaking pace
+- Pause briefly between sentences for clarity
+- Avoid mumbling or swallowing word endings
+- This voice setting is fixed and must not vary"""
+        else:
+            voice_instruction = f"""
 
 VOICE CONSISTENCY INSTRUCTION:
 - Your voice is set to "{voice_name}" for this entire conversation
