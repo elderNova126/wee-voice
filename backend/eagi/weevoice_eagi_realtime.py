@@ -228,12 +228,14 @@ class WeeVoiceEAGI:
         """
         Load agent and call from database - SAME as audiosocket_handler.py
         This ensures we get the same agent configuration as web calls.
+        Falls back to environment variables if database is not available.
         """
         try:
             # Import models
             from app.models.database import SessionLocal
             from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
             
+            logger.info("Connecting to database...")
             self.db = SessionLocal()
             
             # Find phone number with SIP config (same logic as audiosocket_handler)
@@ -243,23 +245,27 @@ class WeeVoiceEAGI:
             ).first()
             
             if not phone:
-                logger.error("No phone number with SIP config found")
-                return False
-            
-            logger.info(f"Found phone: {phone.phone_number}, agent_id: {phone.agent_id}")
-            
-            # Get agent (SAME as audiosocket_handler)
-            self.agent = self.db.query(VoiceAgent).filter(
-                VoiceAgent.id == phone.agent_id
-            ).first()
-            
-            if not self.agent:
-                # Fallback to first agent
+                logger.warning("No phone number with SIP config found, trying first agent...")
+                # Fallback: try to get any agent
                 self.agent = self.db.query(VoiceAgent).first()
+                if not self.agent:
+                    logger.error("No agents in database - will use fallback mode")
+                    return self._setup_fallback_mode()
+            else:
+                logger.info(f"Found phone: {phone.phone_number}, agent_id: {phone.agent_id}")
+                
+                # Get agent (SAME as audiosocket_handler)
+                self.agent = self.db.query(VoiceAgent).filter(
+                    VoiceAgent.id == phone.agent_id
+                ).first()
+                
+                if not self.agent:
+                    # Fallback to first agent
+                    self.agent = self.db.query(VoiceAgent).first()
             
             if not self.agent:
-                logger.error("No agent found")
-                return False
+                logger.error("No agent found in database")
+                return self._setup_fallback_mode()
             
             logger.info(f"Using agent: {self.agent.name} (ID: {self.agent.id})")
             logger.info(f"  - Language: {self.agent.language}")
@@ -287,6 +293,64 @@ class WeeVoiceEAGI:
             
         except Exception as e:
             logger.error(f"Database setup error: {e}", exc_info=True)
+            logger.info("Falling back to environment-based configuration...")
+            return self._setup_fallback_mode()
+    
+    def _setup_fallback_mode(self) -> bool:
+        """
+        Fallback mode when database is not available.
+        Uses environment variables and creates mock objects.
+        """
+        try:
+            logger.info("Setting up FALLBACK MODE (no database)")
+            
+            # Create a mock agent object
+            class MockAgent:
+                def __init__(self):
+                    self.id = 1
+                    self.user_id = 1
+                    self.name = os.environ.get('AGENT_NAME', 'WeeVoice AI')
+                    self.system_prompt = os.environ.get('AGENT_SYSTEM_PROMPT', 
+                        "You are a helpful and professional phone assistant. "
+                        "Keep responses concise and natural. Be friendly.")
+                    self.greeting = os.environ.get('AGENT_GREETING', 
+                        "Hello! How can I help you today?")
+                    self.language = os.environ.get('AGENT_LANGUAGE', 'en-US')
+                    self.voice_gender = os.environ.get('AGENT_VOICE_GENDER', 'female')
+                    self.voice_id = os.environ.get('AGENT_VOICE_ID', 'Aoede')
+                    self.model_name = os.environ.get('GEMINI_MODEL', 
+                        'gemini-2.5-flash-native-audio-preview-09-2025')
+                    self.temperature = 0.7
+                    self.rag_enabled = False
+                    self.tools_enabled = []
+                    self.email_request_enabled = False
+                    self.manager_contact = None
+            
+            # Create a mock call object
+            class MockCall:
+                def __init__(self, call_id, caller_id):
+                    self.id = 1
+                    self.session_id = f"eagi_{call_id}"
+                    self.caller_phone = caller_id
+                    self.caller_name = caller_id
+                    self.status = "initiated"
+                    self.started_at = datetime.utcnow()
+                    self.ended_at = None
+                    self.duration = 0
+                    self.transcript = ""
+            
+            self.agent = MockAgent()
+            self.call = MockCall(self.call_id, self.caller_id)
+            self.db = None  # No database in fallback mode
+            
+            logger.info(f"Fallback agent: {self.agent.name}")
+            logger.info(f"  - Voice: {self.agent.voice_id}")
+            logger.info(f"  - Greeting: {self.agent.greeting[:50]}...")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Fallback setup error: {e}", exc_info=True)
             return False
     
     def _setup_agent_service(self) -> bool:
@@ -322,10 +386,13 @@ class WeeVoiceEAGI:
                 logger.error("Failed to start Gemini session")
                 return False
             
-            # Update call status
-            from app.models import CallStatus
-            self.call.status = CallStatus.IN_PROGRESS
-            self.db.commit()
+            # Update call status (only if we have database)
+            if self.db:
+                from app.models import CallStatus
+                self.call.status = CallStatus.IN_PROGRESS
+                self.db.commit()
+            else:
+                self.call.status = "in_progress"
             
             logger.info("Gemini session started successfully")
             return True
@@ -483,20 +550,23 @@ class WeeVoiceEAGI:
         logger.info("Audio input forwarding ended")
     
     def _save_call_data(self):
-        """Save final call data to database"""
+        """Save final call data to database (if available)"""
         try:
-            if self.call and self.db:
-                from app.models import CallStatus
-                
-                self.call.status = CallStatus.COMPLETED
+            if self.call:
                 self.call.ended_at = datetime.utcnow()
-                
-                if self.call.started_at:
+                if hasattr(self.call, 'started_at') and self.call.started_at:
                     duration = (self.call.ended_at - self.call.started_at).total_seconds()
                     self.call.duration = int(duration)
+                    logger.info(f"Call duration: {self.call.duration}s")
                 
-                self.db.commit()
-                logger.info(f"Call {self.call.id} saved: duration={self.call.duration}s")
+                # Only save to database if we have a db connection
+                if self.db:
+                    from app.models import CallStatus
+                    self.call.status = CallStatus.COMPLETED
+                    self.db.commit()
+                    logger.info(f"Call {self.call.id} saved to database")
+                else:
+                    logger.info("No database - call data not persisted")
                 
         except Exception as e:
             logger.error(f"Failed to save call data: {e}")
