@@ -13,6 +13,21 @@ Supports database-driven agent configuration with all features:
 
 import os
 import sys
+
+# ============================================================================
+# FIX PYDANTIC SETTINGS - Set env vars BEFORE any app imports
+# ============================================================================
+# BACKEND_CORS_ORIGINS must be a valid JSON array for pydantic-settings
+if 'BACKEND_CORS_ORIGINS' not in os.environ or not os.environ['BACKEND_CORS_ORIGINS'].startswith('['):
+    os.environ['BACKEND_CORS_ORIGINS'] = '["http://localhost:3000"]'
+
+# Ensure other required settings have defaults
+if 'SECRET_KEY' not in os.environ:
+    os.environ['SECRET_KEY'] = 'eagi-default-key'
+
+# ============================================================================
+# Now safe to import other modules
+# ============================================================================
 import asyncio
 import audioop
 import logging
@@ -20,7 +35,7 @@ from datetime import datetime
 from typing import Optional
 
 # ============================================================================
-# LOGGING SETUP - Configure before any imports
+# LOGGING SETUP
 # ============================================================================
 LOG_DIR = "/var/log/weevoice"
 os.makedirs(LOG_DIR, exist_ok=True)
