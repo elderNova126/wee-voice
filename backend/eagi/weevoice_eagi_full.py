@@ -620,18 +620,20 @@ class EAGIHandler:
         file_id = 0
         audio_accumulator = b''
         
-        # === LARGE BUFFER for smooth playback ===
-        # Small buffers (400ms) cause choppy audio due to gaps between files
-        # Large buffers (2-3 seconds) = fewer files = smoother playback
-        # Trade-off: More latency, but much better quality
-        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 2.5)  # 2.5 seconds of audio
-        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.5)   # 500ms minimum for flush
+        # === OPTIMIZED BUFFER for fast response + good quality ===
+        # FIRST response: Play quickly (500ms) for fast perceived response
+        # SUBSEQUENT: Use larger buffer (1.2s) for smooth continuous speech
+        FIRST_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 0.5)   # 500ms for first chunk (fast!)
+        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 1.0)     # 1.0 second for rest
+        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.2)       # 200ms minimum for flush
         
-        # Track silence for smart flushing
+        # Track silence for smart flushing - flush quickly when speech pauses
         last_audio_time = time.time()
-        SILENCE_FLUSH_MS = 300  # Flush after 300ms of silence (speech pause)
+        SILENCE_FLUSH_MS = 120  # Flush after 120ms of silence (very quick response)
         
-        log(f"RECEIVE: Buffer config: min={MIN_PLAYBACK_SIZE}b (2.5s), flush_threshold={FLUSH_THRESHOLD}b")
+        is_first_chunk = True  # Track if this is the first response
+        
+        log(f"RECEIVE: Buffer config: first={FIRST_PLAYBACK_SIZE}b (500ms), normal={MIN_PLAYBACK_SIZE}b (1s), flush={FLUSH_THRESHOLD}b")
         
         try:
             while self.running and self.ws:
@@ -658,14 +660,21 @@ class EAGIHandler:
                                 elif chunk_count % 100 == 0:
                                     log(f"RECEIVE: Got {chunk_count} chunks, buffer={len(audio_accumulator)}b")
                                 
-                                # Queue when we have enough audio (2.5 seconds)
-                                if len(audio_accumulator) >= MIN_PLAYBACK_SIZE:
+                                # Determine buffer threshold (smaller for first response)
+                                current_threshold = FIRST_PLAYBACK_SIZE if is_first_chunk else MIN_PLAYBACK_SIZE
+                                
+                                # Queue when we have enough audio
+                                if len(audio_accumulator) >= current_threshold:
                                     file_id += 1
                                     filename = self._write_audio_file(audio_accumulator, file_id)
                                     if filename:
                                         await self._playback_queue.put(filename)
                                         duration_ms = len(audio_accumulator) / (ASTERISK_RATE * 2) * 1000
-                                        log(f"RECEIVE: Queued file #{file_id} ({duration_ms:.0f}ms)")
+                                        if is_first_chunk:
+                                            log(f"RECEIVE: ⚡ FIRST response queued in {duration_ms:.0f}ms!")
+                                            is_first_chunk = False  # Switch to normal buffer size
+                                        else:
+                                            log(f"RECEIVE: Queued file #{file_id} ({duration_ms:.0f}ms)")
                                     audio_accumulator = b''
                     
                     elif msg_type == "transcript":

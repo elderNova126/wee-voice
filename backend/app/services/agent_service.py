@@ -222,29 +222,30 @@ GREETING PROTOCOL:
         }
         
         # Add explicit voice instruction to system prompt to maintain consistency
-        # For French: Add specific pronunciation guidance to improve voice quality
+        # CRITICAL: Speaking pace must match greeting for consistent experience
         if is_french:
             voice_instruction = f"""
 
-VOICE & PRONUNCIATION INSTRUCTIONS (FRENCH):
-- Your voice is set to "{voice_name}" for this entire conversation
-- NEVER change your voice characteristics mid-conversation
-- Speak French with clear, natural pronunciation
-- Articulate each syllable clearly without rushing
-- Use proper French prosody and intonation patterns
-- Handle liaison and elision naturally
-- Maintain a steady, moderate speaking pace
-- Pause briefly between sentences for clarity
-- Avoid mumbling or swallowing word endings
-- This voice setting is fixed and must not vary"""
+VOICE & SPEAKING PACE INSTRUCTIONS (CRITICAL):
+- Your voice is set to "{voice_name}" - maintain this EXACT voice throughout
+- SPEAKING SPEED: Moderate pace, approximately 140-150 words per minute
+- DO NOT speak faster during conversation than during greeting
+- Articulate each syllable clearly - do not rush or mumble
+- Pause briefly (0.3-0.5 seconds) between sentences
+- Use natural French prosody and intonation
+- Handle liaison and elision smoothly
+- Never swallow word endings
+- Keep consistent rhythm throughout the entire call"""
         else:
             voice_instruction = f"""
 
-VOICE CONSISTENCY INSTRUCTION:
-- Your voice is set to "{voice_name}" for this entire conversation
-- NEVER change your voice characteristics mid-conversation
-- Maintain consistent tone, pitch, and speaking style throughout
-- This voice setting is fixed and must not vary"""
+VOICE & SPEAKING PACE INSTRUCTIONS (CRITICAL):
+- Your voice is set to "{voice_name}" - maintain this EXACT voice throughout
+- SPEAKING SPEED: Moderate pace, approximately 140-150 words per minute
+- DO NOT speak faster during conversation than during greeting
+- Articulate clearly - do not rush or mumble
+- Pause briefly (0.3-0.5 seconds) between sentences
+- Keep consistent rhythm throughout the entire call"""
         
         logger.info(f"Voice selection for agent {self.agent.id}:")
         logger.info(f"  - Language: {self.agent.language}")

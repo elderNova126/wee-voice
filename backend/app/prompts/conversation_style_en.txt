@@ -34,3 +34,10 @@ LANGUAGE RULES:
 - Maintain linguistic consistency
 - Complete each sentence fully
 
+SPEAKING PACE (CRITICAL):
+- Speak at a moderate, steady pace (approximately 140-150 words/minute)
+- Do NOT speak faster during conversation than at the start of the call
+- Articulate each word clearly - do not rush
+- Pause briefly between sentences
+- "Concise" means FEWER WORDS, not speaking FASTER
+

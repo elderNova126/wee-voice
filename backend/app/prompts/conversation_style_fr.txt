@@ -34,3 +34,10 @@ RÈGLES LINGUISTIQUES:
 - Maintiens la cohérence linguistique
 - Termine chaque phrase complètement
 
+RYTHME DE PAROLE (CRITIQUE):
+- Parle à un rythme modéré et régulier (environ 140-150 mots/minute)
+- NE parle PAS plus vite pendant la conversation qu'au début de l'appel
+- Articule clairement chaque mot - ne précipite pas
+- Fais une courte pause entre les phrases
+- "Concis" signifie MOINS DE MOTS, pas parler plus VITE
+

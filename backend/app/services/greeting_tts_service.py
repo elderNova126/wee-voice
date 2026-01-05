@@ -191,16 +191,9 @@ async def generate_greeting_with_gemini(
             model=settings.GEMINI_MODEL,
             config=config
         ) as session:
-            # Send greeting text with instruction to just say it
-            # For French: Add pronunciation guidance for better voice quality
-            if language.startswith('fr'):
-                prompt = f"""[Instructions: Parle en français avec une prononciation claire et naturelle. 
-Articule chaque syllabe distinctement. Utilise une intonation naturelle française.
-Ne te précipite pas - maintiens un rythme modéré et régulier.]
-
-Dis exactement cette salutation, rien de plus: "{greeting_text}" """
-            else:
-                prompt = f"Say exactly this greeting, nothing more: \"{greeting_text}\""
+            # Send greeting text - keep prompt SHORT to minimize delay
+            # Same simple format for all languages
+            prompt = f'Say this greeting naturally: "{greeting_text}"'
             
             await session.send(input=prompt, end_of_turn=True)
             
