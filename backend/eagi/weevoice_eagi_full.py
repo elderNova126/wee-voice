@@ -245,27 +245,53 @@ class EAGIHandler:
                 "session_id": self.session_id
             }))
             
-            # Wait for ready - but handle greeting message first if sent
+            # Wait for ready - but handle greeting messages first if sent
+            greeting_chunks = []
+            
             while True:
                 response = await asyncio.wait_for(self.ws.recv(), timeout=30)
                 msg = json.loads(response)
+                msg_type = msg.get("type")
                 
-                if msg.get("type") == "error":
+                if msg_type == "error":
                     log(f"Backend error: {msg.get('message')}")
                     return False
                 
-                if msg.get("type") == "greeting":
-                    # Play cached greeting IMMEDIATELY while Gemini starts
+                if msg_type == "greeting":
+                    # Legacy single-message greeting (small greetings)
                     log("Received pre-cached greeting - playing IMMEDIATELY!")
                     await self._play_greeting_immediately(msg.get("data"))
-                    # Continue waiting for "ready"
                     continue
                 
-                if msg.get("type") == "ready":
+                if msg_type == "greeting_start":
+                    # Chunked greeting start
+                    total_bytes = msg.get("total_bytes", 0)
+                    chunks = msg.get("chunks", 0)
+                    log(f"Receiving greeting: {total_bytes} bytes in {chunks} chunks")
+                    greeting_chunks = []
+                    continue
+                
+                if msg_type == "greeting_chunk":
+                    # Accumulate greeting chunks
+                    chunk_data = msg.get("data", "")
+                    if chunk_data:
+                        greeting_chunks.append(base64.b64decode(chunk_data))
+                    continue
+                
+                if msg_type == "greeting_end":
+                    # All chunks received - play greeting
+                    if greeting_chunks:
+                        full_audio = b''.join(greeting_chunks)
+                        log(f"Greeting complete: {len(full_audio)} bytes - playing IMMEDIATELY!")
+                        await self._play_greeting_audio(full_audio)
+                        greeting_chunks = []
+                    continue
+                
+                if msg_type == "ready":
                     log(f"Connected! Agent: {msg.get('agent')}")
                     return True
                 
-                log(f"Unexpected response: {msg}")
+                log(f"Unexpected response type: {msg_type}")
                 # Don't fail on unexpected messages, keep waiting for ready
             
         except ImportError:
@@ -280,10 +306,21 @@ class EAGIHandler:
     
     async def _play_greeting_immediately(self, audio_b64: str):
         """
+        Play pre-cached greeting from base64 string.
+        Legacy method for backwards compatibility.
+        """
+        if not audio_b64:
+            log("No greeting audio data")
+            return
+        audio_24k = base64.b64decode(audio_b64)
+        await self._play_greeting_audio(audio_24k)
+    
+    async def _play_greeting_audio(self, audio_24k: bytes):
+        """
         Play pre-cached greeting IMMEDIATELY.
         This runs before Gemini session is ready, eliminating the 5+ second delay.
         """
-        if not audio_b64:
+        if not audio_24k or len(audio_24k) < 100:
             log("No greeting audio data")
             return
         
@@ -291,8 +328,6 @@ class EAGIHandler:
             import time
             t0 = time.perf_counter()
             
-            # Decode base64 audio (24kHz PCM from backend)
-            audio_24k = base64.b64decode(audio_b64)
             log(f"Greeting received: {len(audio_24k)} bytes (24kHz)")
             
             # Resample 24kHz -> 8kHz for Asterisk

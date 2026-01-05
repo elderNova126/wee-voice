@@ -148,19 +148,41 @@ async def eagi_stream(websocket: WebSocket):
                 # (EAGI expects 24kHz from backend for playback)
                 try:
                     greeting_24k, _ = audioop.ratecv(greeting_audio, 2, 1, 8000, 24000, None)
-                    greeting_b64 = base64.b64encode(greeting_24k).decode()
                     
-                    # Send greeting IMMEDIATELY - before Gemini session starts!
+                    # Send greeting in chunks to avoid WebSocket message size limit
+                    # Each chunk should be ~50KB to stay well under 1MB limit
+                    CHUNK_SIZE = 48000  # ~1 second of 24kHz audio (24000 * 2 bytes)
+                    total_chunks = (len(greeting_24k) + CHUNK_SIZE - 1) // CHUNK_SIZE
+                    
+                    print(f"[EAGI-WS] Sending greeting: {len(greeting_24k)} bytes in {total_chunks} chunks", flush=True)
+                    
+                    # Send greeting start marker
                     await websocket.send_json({
-                        "type": "greeting",
-                        "data": greeting_b64
+                        "type": "greeting_start",
+                        "total_bytes": len(greeting_24k),
+                        "chunks": total_chunks
                     })
+                    
+                    # Send greeting audio in chunks
+                    for i in range(0, len(greeting_24k), CHUNK_SIZE):
+                        chunk = greeting_24k[i:i + CHUNK_SIZE]
+                        chunk_b64 = base64.b64encode(chunk).decode()
+                        await websocket.send_json({
+                            "type": "greeting_chunk",
+                            "data": chunk_b64,
+                            "index": i // CHUNK_SIZE
+                        })
+                    
+                    # Send greeting end marker
+                    await websocket.send_json({"type": "greeting_end"})
                     
                     elapsed_ms = (time.perf_counter() - t0) * 1000
                     print(f"[EAGI-WS] ✅ Greeting sent in {elapsed_ms:.0f}ms ({len(greeting_24k)} bytes)", flush=True)
                     logger.info(f"[EAGI-WS] Greeting sent in {elapsed_ms:.0f}ms")
                 except Exception as e:
                     print(f"[EAGI-WS] ⚠ Greeting conversion error: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
                     greeting_audio = None
             else:
                 print(f"[EAGI-WS] ⚠ No cached greeting found, Gemini will generate it", flush=True)
