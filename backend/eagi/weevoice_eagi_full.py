@@ -74,9 +74,9 @@ GEMINI_INPUT_RATE = 16000  # Backend expects 16kHz
 GEMINI_OUTPUT_RATE = 24000 # Backend sends 24kHz
 FRAME_SIZE = 320           # 20ms at 8kHz
 
-# Audio quality settings (same as AudioSocket handler)
-AUDIO_TARGET_RMS = 1400    # Target RMS level for normalization
-AUDIO_MAX_GAIN_DB = 18.0   # Maximum gain in dB
+# Audio quality settings - conservative values to prevent distortion
+AUDIO_TARGET_RMS = 2000    # Target RMS level (higher = louder but may clip)
+AUDIO_MAX_GAIN_DB = 12.0   # Maximum gain in dB (reduced from 18 to prevent distortion)
 
 
 # =============================================================================
@@ -332,14 +332,12 @@ class EAGIHandler:
             return b''
         try:
             # High-quality resample using soxr VHQ
-            # soxr handles anti-aliasing internally, no need for separate lowpass
+            # soxr handles anti-aliasing internally
             result = self._resampler_24k_to_8k.process(audio_24k)
             
-            # Remove DC offset (prevents clicks at boundaries)
+            # Only apply DC offset removal (lightweight, prevents clicks)
+            # Skip normalization - Gemini output is already normalized
             result = remove_dc_offset(result)
-            
-            # Normalize for consistent volume
-            result = normalize_audio(result)
             
             return result
         except Exception as e:
@@ -523,7 +521,7 @@ class EAGIHandler:
     # ========================================================================
     
     async def _capture_and_send(self):
-        """Capture audio from FD3 (non-blocking) and send to backend"""
+        """Capture audio from FD3 and send to backend in batches for efficiency"""
         log("CAPTURE: Starting audio capture from Asterisk")
         
         if not self._audio_fd:
@@ -532,32 +530,37 @@ class EAGIHandler:
         
         frame_count = 0
         buffer = b''
+        send_buffer = b''  # Accumulate audio before sending
         empty_read_count = 0
         MAX_EMPTY_READS = 50  # ~1 second of no audio = call ended
+        
+        # Batch size for sending - 60ms at 16kHz = 1920 bytes
+        # This reduces WebSocket overhead while keeping latency low
+        SEND_BATCH_SIZE = 1920  # ~60ms at 16kHz
+        last_send_time = time.time()
+        MAX_SEND_DELAY = 0.04  # Force send every 40ms even if buffer not full
         
         while self.running and self.ws:
             try:
                 # Non-blocking read using select
-                readable, _, _ = select.select([self._audio_fd], [], [], 0.02)  # 20ms timeout
+                readable, _, _ = select.select([self._audio_fd], [], [], 0.015)  # 15ms timeout (faster)
                 
                 if readable:
                     try:
                         data = self._audio_fd.read(FRAME_SIZE * 4)  # Read multiple frames
                         if data:
                             buffer += data
-                            empty_read_count = 0  # Reset counter
+                            empty_read_count = 0
                             self._last_audio_time = time.time()
                         else:
-                            # EOF - Asterisk closed FD3, call ended
                             empty_read_count += 1
                             if empty_read_count > MAX_EMPTY_READS:
                                 log("CAPTURE: EOF detected (call ended)")
                                 break
                     except BlockingIOError:
-                        pass  # No data available
+                        pass
                     except OSError as e:
-                        # Handle "Bad file descriptor" = call ended
-                        if e.errno == 9:  # EBADF
+                        if e.errno == 9:
                             log("CAPTURE: FD3 closed (call ended)")
                             break
                         raise
@@ -566,38 +569,46 @@ class EAGIHandler:
                             log(f"CAPTURE: FD3 read error: {e}")
                         break
                 else:
-                    # Timeout - check if call is still active
                     empty_read_count += 1
                     if empty_read_count > MAX_EMPTY_READS:
                         log("CAPTURE: No audio timeout (call may have ended)")
                         break
                 
-                # Process complete frames
+                # Process complete frames and accumulate for batch send
                 while len(buffer) >= FRAME_SIZE:
                     chunk = buffer[:FRAME_SIZE]
                     buffer = buffer[FRAME_SIZE:]
                     
                     # Resample 8kHz -> 16kHz
                     audio_16k = self._resample_8k_to_16k(chunk)
-                    
-                    if audio_16k and self.ws:
-                        try:
-                            await self.ws.send(json.dumps({
-                                "type": "audio",
-                                "data": base64.b64encode(audio_16k).decode()
-                            }))
-                            frame_count += 1
-                            if frame_count == 1:
-                                log("CAPTURE: First audio chunk sent to backend")
-                            elif frame_count % 500 == 0:  # Log less frequently
-                                log(f"CAPTURE: Sent {frame_count} chunks to backend")
-                        except Exception as e:
-                            if self.running:
-                                log(f"CAPTURE: WebSocket send error: {e}")
-                            break
+                    if audio_16k:
+                        send_buffer += audio_16k
+                        frame_count += 1
+                
+                # Send when buffer is full OR timeout reached (whichever comes first)
+                current_time = time.time()
+                should_send = (
+                    len(send_buffer) >= SEND_BATCH_SIZE or 
+                    (len(send_buffer) > 0 and current_time - last_send_time >= MAX_SEND_DELAY)
+                )
+                
+                if should_send and self.ws:
+                    try:
+                        await self.ws.send(json.dumps({
+                            "type": "audio",
+                            "data": base64.b64encode(send_buffer).decode()
+                        }))
+                        if frame_count <= 5 or frame_count % 200 == 0:
+                            log(f"CAPTURE: Sent batch ({len(send_buffer)}b, {frame_count} frames total)")
+                        send_buffer = b''
+                        last_send_time = current_time
+                    except Exception as e:
+                        if self.running:
+                            log(f"CAPTURE: WebSocket send error: {e}")
+                        break
                 
                 # Yield to other tasks
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(0)  # Minimal yield
                         
             except Exception as e:
                 if self.running:
@@ -605,7 +616,7 @@ class EAGIHandler:
                 break
         
         log(f"CAPTURE: Ended, {frame_count} frames sent")
-        self.running = False  # Signal other tasks to stop
+        self.running = False
     
     async def _receive_and_buffer(self):
         """

@@ -222,30 +222,30 @@ GREETING PROTOCOL:
         }
         
         # Add explicit voice instruction to system prompt to maintain consistency
-        # CRITICAL: Speaking pace must match greeting for consistent experience
+        # CRITICAL: Voice quality and pace instructions
         if is_french:
             voice_instruction = f"""
 
-VOICE & SPEAKING PACE INSTRUCTIONS (CRITICAL):
-- Your voice is set to "{voice_name}" - maintain this EXACT voice throughout
-- SPEAKING SPEED: Moderate pace, approximately 140-150 words per minute
-- DO NOT speak faster during conversation than during greeting
-- Articulate each syllable clearly - do not rush or mumble
-- Pause briefly (0.3-0.5 seconds) between sentences
-- Use natural French prosody and intonation
-- Handle liaison and elision smoothly
-- Never swallow word endings
-- Keep consistent rhythm throughout the entire call"""
+VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
+- Voice: "{voice_name}" - maintain this EXACT voice throughout
+- Speed: Moderate pace (140-150 words/minute) - NEVER rush
+- Clarity: Articulate EVERY syllable clearly and distinctly
+- Pronunciation: Use clear, standard French pronunciation
+- Pauses: Brief pause (0.3s) between sentences
+- Volume: Speak at consistent, clear volume
+- Quality: Prioritize audio clarity over speed
+- NEVER mumble, slur, or swallow word endings"""
         else:
             voice_instruction = f"""
 
-VOICE & SPEAKING PACE INSTRUCTIONS (CRITICAL):
-- Your voice is set to "{voice_name}" - maintain this EXACT voice throughout
-- SPEAKING SPEED: Moderate pace, approximately 140-150 words per minute
-- DO NOT speak faster during conversation than during greeting
-- Articulate clearly - do not rush or mumble
-- Pause briefly (0.3-0.5 seconds) between sentences
-- Keep consistent rhythm throughout the entire call"""
+VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
+- Voice: "{voice_name}" - maintain this EXACT voice throughout
+- Speed: Moderate pace (140-150 words/minute) - NEVER rush
+- Clarity: Articulate EVERY word clearly and distinctly
+- Pauses: Brief pause (0.3s) between sentences
+- Volume: Speak at consistent, clear volume
+- Quality: Prioritize audio clarity over speed
+- NEVER mumble or rush through words"""
         
         logger.info(f"Voice selection for agent {self.agent.id}:")
         logger.info(f"  - Language: {self.agent.language}")
@@ -942,9 +942,9 @@ VOICE & SPEAKING PACE INSTRUCTIONS (CRITICAL):
         logger.info(f"Starting audio input for call {self.call.session_id}")
         audio_sent_count = 0
         
-        # Batch audio for better VAD - accumulate ~80ms before sending
-        # 16kHz * 2 bytes * 0.08s = 2560 bytes minimum batch
-        MIN_BATCH_SIZE = 2048  # ~64ms at 16kHz (matches test.py)
+        # Batch audio for VAD - smaller batches = faster response
+        # 16kHz * 2 bytes * 0.03s = 960 bytes minimum batch (30ms)
+        MIN_BATCH_SIZE = 960  # ~30ms at 16kHz - reduced for faster response
         audio_buffer = b''
         
         try:
@@ -956,8 +956,8 @@ VOICE & SPEAKING PACE INSTRUCTIONS (CRITICAL):
                     break
                 
                 try:
-                    # Use wait_for with timeout to allow cancellation
-                    msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=0.05)  # 50ms timeout
+                    # Use wait_for with timeout - shorter timeout for faster response
+                    msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=0.025)  # 25ms timeout
                     
                     # Accumulate audio data
                     if isinstance(msg, dict) and "data" in msg:
@@ -986,8 +986,8 @@ VOICE & SPEAKING PACE INSTRUCTIONS (CRITICAL):
                         logger.info("Session is None during timeout, stopping audio input")
                         break
                     
-                    # Flush any buffered audio on timeout (ensures responsiveness)
-                    if len(audio_buffer) >= 640:  # At least 20ms of audio
+                    # Flush any buffered audio on timeout (ensures fast response)
+                    if len(audio_buffer) >= 320:  # At least 10ms of audio - flush quickly
                         audio_sent_count += 1
                         batch_msg = {"data": audio_buffer, "mime_type": "audio/pcm;rate=16000"}
                         try:
