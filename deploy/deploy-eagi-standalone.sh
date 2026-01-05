@@ -104,27 +104,23 @@ pip install -q \
 log_info "✓ Virtual environment ready"
 
 #===============================================================================
-# Step 4: Copy backend code
+# Step 4: Copy EAGI scripts ONLY (not the full app - avoids pydantic issues)
 #===============================================================================
-log_step "4/7: Copying backend application..."
+log_step "4/7: Copying EAGI scripts..."
 
-# Copy entire backend (app, prompts, eagi)
-if [ -d "${SOURCE_DIR}/backend/app" ]; then
-    cp -r "${SOURCE_DIR}/backend/app" "${BACKEND_DIR}/"
-    log_info "✓ Copied app module"
+# IMPORTANT: Remove old app directory if it exists (causes pydantic issues)
+if [ -d "${BACKEND_DIR}/app" ]; then
+    rm -rf "${BACKEND_DIR}/app"
+    log_info "✓ Removed old app directory (avoids pydantic issues)"
 fi
 
-if [ -d "${SOURCE_DIR}/backend/prompts" ]; then
-    cp -r "${SOURCE_DIR}/backend/prompts" "${BACKEND_DIR}/"
-    log_info "✓ Copied prompts"
-fi
-
+# ONLY copy EAGI scripts - NOT the app directory
 if [ -d "${SOURCE_DIR}/backend/eagi" ]; then
     cp -r "${SOURCE_DIR}/backend/eagi" "${BACKEND_DIR}/"
     log_info "✓ Copied EAGI scripts"
 fi
 
-# Copy .env if not exists (uses existing web backend config)
+# Copy .env if not exists
 if [ ! -f "${BACKEND_DIR}/.env" ] && [ -f "${SOURCE_DIR}/backend/.env" ]; then
     cp "${SOURCE_DIR}/backend/.env" "${BACKEND_DIR}/.env"
     log_info "✓ Copied .env from source"
@@ -171,27 +167,24 @@ log_step "6/7: Creating AGI wrapper script..."
 cat > "${AGI_BIN}/weevoice_eagi_realtime.py" << 'WRAPPER_EOF'
 #!/bin/bash
 #===============================================================================
-# WeeVoice EAGI Wrapper
-# Loads environment from web backend and runs EAGI script
+# WeeVoice EAGI Wrapper (Standalone - no app imports)
 #===============================================================================
 
 export HOME="/opt/weevoice"
-export PYTHONPATH="/opt/weevoice/backend:$PYTHONPATH"
+# NOTE: Do NOT add backend to PYTHONPATH - it would trigger pydantic config loading
 
-# Load .env (same as web backend - includes Neon DATABASE_URL)
+# Load ONLY the variables we need from .env
 ENV_FILE="/opt/weevoice/backend/.env"
 if [ -f "$ENV_FILE" ]; then
-    # Source only specific variables we need (avoid problematic ones)
     export DATABASE_URL=$(grep "^DATABASE_URL=" "$ENV_FILE" | cut -d= -f2-)
     export GOOGLE_API_KEY=$(grep "^GOOGLE_API_KEY=" "$ENV_FILE" | cut -d= -f2-)
-    export GEMINI_MODEL=$(grep "^GEMINI_MODEL=" "$ENV_FILE" | cut -d= -f2- || echo "gemini-2.5-flash-preview-native-audio-dialog")
-    export SECRET_KEY=$(grep "^SECRET_KEY=" "$ENV_FILE" | cut -d= -f2- || echo "eagi-key")
+    export GEMINI_MODEL=$(grep "^GEMINI_MODEL=" "$ENV_FILE" | cut -d= -f2-)
 fi
 
-# FIX: Set BACKEND_CORS_ORIGINS as valid JSON (pydantic-settings requirement)
-export BACKEND_CORS_ORIGINS='["http://localhost:3000"]'
+# Fallback for model
+export GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-flash-preview-native-audio-dialog}"
 
-# Run the EAGI script
+# Run the standalone EAGI script
 exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_full.py "$@"
 WRAPPER_EOF
 
