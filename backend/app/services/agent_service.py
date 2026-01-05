@@ -60,7 +60,7 @@ class FrenchVoiceAgentService:
         self.session = None
         self.session_context = None
         self.audio_in_queue = asyncio.Queue()
-        self.audio_out_queue = asyncio.Queue(maxsize=5)
+        self.audio_out_queue = asyncio.Queue(maxsize=100)  # Increased from 5 for better buffering
         
         # RAG service (lazy load - only initialize when first needed)
         self._rag_service = None
@@ -903,10 +903,15 @@ VOICE CONSISTENCY INSTRUCTION:
                 logger.warning(f"Error sending tool response (session may be closed): {e}")
     
     async def send_realtime_input(self):
-        """Send queued audio to Gemini"""
-        print(f"[GEMINI-IN] Starting audio input loop", flush=True)
+        """Send queued audio to Gemini with batching for better VAD detection"""
+        print(f"[GEMINI-IN] Starting audio input loop (with batching)", flush=True)
         logger.info(f"Starting audio input for call {self.call.session_id}")
         audio_sent_count = 0
+        
+        # Batch audio for better VAD - accumulate ~80ms before sending
+        # 16kHz * 2 bytes * 0.08s = 2560 bytes minimum batch
+        MIN_BATCH_SIZE = 2048  # ~64ms at 16kHz (matches test.py)
+        audio_buffer = b''
         
         try:
             while True:
@@ -918,29 +923,46 @@ VOICE CONSISTENCY INSTRUCTION:
                 
                 try:
                     # Use wait_for with timeout to allow cancellation
-                    msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=1.0)
-                    audio_sent_count += 1
+                    msg = await asyncio.wait_for(self.audio_out_queue.get(), timeout=0.05)  # 50ms timeout
+                    
+                    # Accumulate audio data
+                    if isinstance(msg, dict) and "data" in msg:
+                        audio_buffer += msg["data"]
                     
                     # Double-check session is still available before sending
                     if self.session is None:
-                        print(f"[GEMINI-IN] Session became None after {audio_sent_count}", flush=True)
+                        print(f"[GEMINI-IN] Session became None", flush=True)
                         logger.info("Session became None, stopping audio input")
                         break
                     
-                    # Send audio input to Gemini Live API
-                    # Format matches test.py: dict with "data" and "mime_type" keys
-                    await self.session.send_realtime_input(audio=msg)
-                    
-                    if audio_sent_count <= 10 or audio_sent_count % 50 == 0:
-                        data_len = len(msg.get("data", b"")) if isinstance(msg, dict) else 0
-                        print(f"[GEMINI-IN] #{audio_sent_count} sent ({data_len} bytes)", flush=True)
+                    # Send when we have enough audio accumulated
+                    if len(audio_buffer) >= MIN_BATCH_SIZE:
+                        audio_sent_count += 1
+                        batch_msg = {"data": audio_buffer, "mime_type": "audio/pcm;rate=16000"}
+                        await self.session.send_realtime_input(audio=batch_msg)
+                        
+                        if audio_sent_count <= 10 or audio_sent_count % 50 == 0:
+                            print(f"[GEMINI-IN] #{audio_sent_count} sent ({len(audio_buffer)} bytes)", flush=True)
+                        audio_buffer = b''
                         
                 except asyncio.TimeoutError:
-                    # No audio in queue, continue waiting (but check session first)
+                    # No audio in queue, check if we should flush buffer
                     if self.session is None:
                         print(f"[GEMINI-IN] Session None during timeout", flush=True)
                         logger.info("Session is None during timeout, stopping audio input")
                         break
+                    
+                    # Flush any buffered audio on timeout (ensures responsiveness)
+                    if len(audio_buffer) >= 640:  # At least 20ms of audio
+                        audio_sent_count += 1
+                        batch_msg = {"data": audio_buffer, "mime_type": "audio/pcm;rate=16000"}
+                        try:
+                            await self.session.send_realtime_input(audio=batch_msg)
+                            if audio_sent_count <= 10 or audio_sent_count % 50 == 0:
+                                print(f"[GEMINI-IN] #{audio_sent_count} flushed ({len(audio_buffer)} bytes)", flush=True)
+                        except Exception as e:
+                            print(f"[GEMINI-IN] Flush error: {e}", flush=True)
+                        audio_buffer = b''
                     continue
                 except asyncio.CancelledError:
                     print(f"[GEMINI-IN] Cancelled after {audio_sent_count} packets", flush=True)
