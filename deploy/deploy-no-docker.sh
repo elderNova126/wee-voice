@@ -21,11 +21,13 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 
 echo ""
 echo "============================================"
@@ -87,10 +89,17 @@ log_info "Domain: $DOMAIN"
 log_info "Protocol: $PROTOCOL"
 log_info "Google API Key: ${GOOGLE_API_KEY:0:15}..."
 
+# Paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="$(dirname "$SCRIPT_DIR")"
+WEEVOICE_DIR="/opt/weevoice"
+BACKEND_DIR="${WEEVOICE_DIR}/backend"
+AGI_BIN="/var/lib/asterisk/agi-bin"
+
 # =============================================================================
 # Step 1: Install Dependencies
 # =============================================================================
-log_info "Step 1/8: Installing system dependencies..."
+log_step "Step 1/10: Installing system dependencies..."
 
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip supervisor curl > /dev/null
@@ -115,10 +124,11 @@ fi
 # =============================================================================
 # Step 2: Create Directory Structure
 # =============================================================================
-log_info "Step 2/8: Setting up directories..."
+log_step "Step 2/10: Setting up directories..."
 
 mkdir -p /opt/weevoice/{backend,frontend,data,uploads}
 mkdir -p /var/log/weevoice
+mkdir -p "$AGI_BIN"
 
 # Copy application files
 cp -r ../backend/* /opt/weevoice/backend/
@@ -127,7 +137,7 @@ cp -r ../frontend/* /opt/weevoice/frontend/
 # =============================================================================
 # Step 3: Setup Backend
 # =============================================================================
-log_info "Step 3/8: Setting up backend..."
+log_step "Step 3/10: Setting up backend..."
 
 cd /opt/weevoice/backend
 
@@ -135,6 +145,9 @@ cd /opt/weevoice/backend
 python3 -m venv venv
 ./venv/bin/pip install --upgrade pip -q
 ./venv/bin/pip install -r requirements.txt -q
+
+# Install websockets for EAGI
+./venv/bin/pip install -q websockets
 
 # Create production .env (preserving all original values + overriding URLs)
 cat > .env << EOF
@@ -197,7 +210,7 @@ EOF
 # =============================================================================
 # Step 4: Setup Frontend
 # =============================================================================
-log_info "Step 4/8: Setting up frontend..."
+log_step "Step 4/10: Setting up frontend..."
 
 cd /opt/weevoice/frontend
 
@@ -221,9 +234,91 @@ log_info "Building frontend..."
 npx vite build
 
 # =============================================================================
-# Step 5: Configure Supervisor (backend only - frontend served as static files)
+# Step 5: Setup EAGI (Asterisk Voice Agent)
 # =============================================================================
-log_info "Step 5/8: Configuring process manager..."
+log_step "Step 5/10: Setting up EAGI for Asterisk..."
+
+# Copy EAGI scripts
+if [ -d "${SOURCE_DIR}/backend/eagi" ]; then
+    cp -r "${SOURCE_DIR}/backend/eagi" "${BACKEND_DIR}/"
+    chmod +x "${BACKEND_DIR}/eagi"/*.py 2>/dev/null || true
+    log_info "✓ EAGI scripts copied"
+fi
+
+# Check if eagi.py API endpoint exists and copy it
+if [ -f "${SOURCE_DIR}/backend/app/api/eagi.py" ]; then
+    cp "${SOURCE_DIR}/backend/app/api/eagi.py" "${BACKEND_DIR}/app/api/"
+    log_info "✓ EAGI API endpoint installed"
+fi
+
+# Check if main.py needs eagi import
+if [ -f "${BACKEND_DIR}/app/main.py" ]; then
+    if ! grep -q "from app.api import.*eagi" "${BACKEND_DIR}/app/main.py"; then
+        log_info "Adding EAGI router to main.py..."
+        
+        # Add eagi to imports (append to existing import line)
+        sed -i 's/phone_debug, performance$/phone_debug, performance, eagi/' "${BACKEND_DIR}/app/main.py" 2>/dev/null || true
+        
+        # Add router (only if not already there)
+        if ! grep -q "eagi.router" "${BACKEND_DIR}/app/main.py"; then
+            sed -i '/performance.router/a app.include_router(eagi.router, prefix=f"{settings.API_V1_STR}/eagi", tags=["EAGI"])' "${BACKEND_DIR}/app/main.py" 2>/dev/null || true
+        fi
+        
+        log_info "✓ EAGI router added to main.py"
+    else
+        log_info "✓ EAGI already configured in main.py"
+    fi
+fi
+
+# Create AGI wrapper script
+cat > "${AGI_BIN}/weevoice_eagi_realtime.py" << 'WRAPPER_EOF'
+#!/bin/bash
+#===============================================================================
+# WeeVoice EAGI Wrapper
+# Connects to backend WebSocket API for AI voice streaming
+#===============================================================================
+
+export HOME="/opt/weevoice"
+
+# Backend API URL (same server)
+export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8000}"
+
+# Run EAGI script
+exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_full.py "$@"
+WRAPPER_EOF
+
+chmod +x "${AGI_BIN}/weevoice_eagi_realtime.py"
+log_info "✓ AGI wrapper script created"
+
+# =============================================================================
+# Step 6: Deploy Asterisk Dialplan
+# =============================================================================
+log_step "Step 6/10: Deploying Asterisk dialplan..."
+
+if command -v asterisk &> /dev/null; then
+    # Backup existing extensions.conf
+    if [ -f "/etc/asterisk/extensions.conf" ]; then
+        cp "/etc/asterisk/extensions.conf" "/etc/asterisk/extensions.conf.backup.$(date +%Y%m%d%H%M%S)"
+    fi
+    
+    # Deploy new extensions.conf
+    if [ -f "${SOURCE_DIR}/deploy/asterisk/extensions.conf" ]; then
+        cp "${SOURCE_DIR}/deploy/asterisk/extensions.conf" "/etc/asterisk/extensions.conf"
+        chown asterisk:asterisk "/etc/asterisk/extensions.conf"
+        log_info "✓ extensions.conf deployed"
+    fi
+    
+    # Reload dialplan
+    asterisk -rx "dialplan reload" > /dev/null 2>&1 || true
+    log_info "✓ Asterisk dialplan reloaded"
+else
+    log_warn "Asterisk not found - skipping dialplan deployment"
+fi
+
+# =============================================================================
+# Step 7: Configure Supervisor
+# =============================================================================
+log_step "Step 7/10: Configuring process manager..."
 
 # Create cache directory for huggingface/transformers
 mkdir -p /opt/weevoice/.cache
@@ -240,12 +335,20 @@ stdout_logfile=/var/log/weevoice/backend.out.log
 environment=HOME="/opt/weevoice",HF_HOME="/opt/weevoice/.cache/huggingface",TRANSFORMERS_CACHE="/opt/weevoice/.cache/huggingface"
 EOF
 
+# Set permissions
 chown -R www-data:www-data /opt/weevoice /var/log/weevoice
 
+# Also allow asterisk user to access log directory for EAGI
+if id "asterisk" &>/dev/null; then
+    chown -R asterisk:asterisk /var/log/weevoice
+    chmod 775 /var/log/weevoice
+    chown asterisk:asterisk "${AGI_BIN}/weevoice_eagi_realtime.py"
+fi
+
 # =============================================================================
-# Step 6: Configure Web Server (Apache2 or Nginx)
+# Step 8: Configure Web Server (Apache2 or Nginx)
 # =============================================================================
-log_info "Step 6/8: Configuring web server..."
+log_step "Step 8/10: Configuring web server..."
 
 if [ "$USE_APACHE" = true ]; then
     # =========================================================================
@@ -391,6 +494,17 @@ server {
         proxy_read_timeout 86400;
     }
 
+    # EAGI WebSocket
+    location /api/v1/eagi/ {
+        proxy_pass http://127.0.0.1:8000/api/v1/eagi/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 86400;
+    }
+
     # API
     location /api {
         proxy_pass http://127.0.0.1:8000/api;
@@ -430,6 +544,16 @@ server {
         proxy_read_timeout 86400;
     }
 
+    # EAGI WebSocket
+    location /api/v1/eagi/ {
+        proxy_pass http://127.0.0.1:8000/api/v1/eagi/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_read_timeout 86400;
+    }
+
     # API
     location /api {
         proxy_pass http://127.0.0.1:8000/api;
@@ -449,10 +573,10 @@ EOF
 fi
 
 # =============================================================================
-# Step 7: SSL Certificate (if needed)
+# Step 9: SSL Certificate (if needed)
 # =============================================================================
 if [ "$USE_SSL" = true ] && [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-    log_info "Step 7/8: Getting SSL certificate..."
+    log_step "Step 9/10: Getting SSL certificate..."
     if [ "$USE_APACHE" = true ]; then
         systemctl reload apache2
         certbot --apache -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN || {
@@ -465,13 +589,13 @@ if [ "$USE_SSL" = true ] && [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
         }
     fi
 else
-    log_info "Step 7/8: SSL already configured or not needed, skipping..."
+    log_step "Step 9/10: SSL already configured or not needed, skipping..."
 fi
 
 # =============================================================================
-# Step 8: Start Services
+# Step 10: Start Services
 # =============================================================================
-log_info "Step 8/8: Starting services..."
+log_step "Step 10/10: Starting services..."
 
 if [ "$USE_APACHE" = true ]; then
     systemctl reload apache2
@@ -482,6 +606,9 @@ supervisorctl reread > /dev/null
 supervisorctl update > /dev/null
 supervisorctl restart weevoice-backend 2>/dev/null || supervisorctl start weevoice-backend
 
+# Wait for backend to start
+sleep 3
+
 # Configure firewall (if ufw is active)
 if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
     ufw allow 80/tcp > /dev/null
@@ -489,6 +616,17 @@ if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
     ufw allow 5060/udp > /dev/null
     ufw allow 8089/tcp > /dev/null
     ufw allow 9092/tcp > /dev/null  # AudioSocket for Asterisk audio streaming
+fi
+
+# =============================================================================
+# Verify EAGI API
+# =============================================================================
+echo ""
+log_info "Verifying EAGI API..."
+if curl -s "http://127.0.0.1:8000/api/v1/eagi/config" > /dev/null 2>&1; then
+    log_info "✓ EAGI API is responding"
+else
+    log_warn "⚠ EAGI API not responding yet - backend may still be starting"
 fi
 
 # =============================================================================
@@ -503,14 +641,20 @@ echo "URLs:"
 echo "  Frontend: $PROTOCOL://$DOMAIN"
 echo "  API:      $PROTOCOL://$DOMAIN/api"
 echo "  API Docs: $PROTOCOL://$DOMAIN/api/docs"
+echo "  EAGI API: $PROTOCOL://$DOMAIN/api/v1/eagi/config"
 echo ""
-echo "AudioSocket: 127.0.0.1:9092"
+echo "EAGI (Asterisk Voice Agent):"
+echo "  Script:   ${BACKEND_DIR}/eagi/weevoice_eagi_full.py"
+echo "  Wrapper:  ${AGI_BIN}/weevoice_eagi_realtime.py"
+echo "  Logs:     /var/log/weevoice/eagi.log"
 echo ""
 echo "Commands:"
 echo "  Status:  supervisorctl status"
 echo "  Logs:    tail -f /var/log/weevoice/backend.out.log"
+echo "  EAGI:    tail -f /var/log/weevoice/eagi.log"
 echo "  Restart: supervisorctl restart weevoice-backend"
 echo ""
-echo "Asterisk extensions.conf:"
-echo '  AudioSocket(${CALL_UUID},127.0.0.1:9092)'
+echo "Test phone call:"
+echo "  1. Call your configured phone number"
+echo "  2. Watch: tail -f /var/log/weevoice/eagi.log"
 echo ""
