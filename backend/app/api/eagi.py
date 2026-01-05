@@ -138,15 +138,19 @@ async def eagi_stream(websocket: WebSocket):
         )
         
         # Start Gemini session
+        logger.info("Starting Gemini session...")
         if not await agent_service.start_session():
+            logger.error("Failed to start Gemini session")
             await websocket.send_json({"type": "error", "message": "Failed to start AI session"})
             return
         
-        logger.info("Gemini session started")
+        logger.info(f"Gemini session started for agent {agent.name}")
         await websocket.send_json({"type": "ready", "agent": agent.name})
         
         # Task to send audio from Gemini to client
         async def send_audio_to_client():
+            audio_chunks_sent = 0
+            logger.info("Starting Gemini audio receiver task")
             try:
                 async for response in agent_service.session.receive():
                     # Audio data
@@ -156,6 +160,9 @@ async def eagi_stream(websocket: WebSocket):
                             "type": "audio",
                             "data": audio_b64
                         })
+                        audio_chunks_sent += 1
+                        if audio_chunks_sent == 1:
+                            logger.info("First audio chunk from Gemini sent to EAGI")
                     
                     # Transcriptions
                     if hasattr(response, 'server_content'):
@@ -163,6 +170,7 @@ async def eagi_stream(websocket: WebSocket):
                         if hasattr(sc, 'output_transcription') and sc.output_transcription:
                             text = getattr(sc.output_transcription, 'text', '')
                             if text:
+                                logger.info(f"AI transcript: {text[:50]}...")
                                 await websocket.send_json({
                                     "type": "transcript",
                                     "role": "assistant",
@@ -171,6 +179,7 @@ async def eagi_stream(websocket: WebSocket):
                         if hasattr(sc, 'input_transcription') and sc.input_transcription:
                             text = getattr(sc.input_transcription, 'text', '')
                             if text:
+                                logger.info(f"User transcript: {text[:50]}...")
                                 await websocket.send_json({
                                     "type": "transcript",
                                     "role": "user",
@@ -178,21 +187,26 @@ async def eagi_stream(websocket: WebSocket):
                                 })
             except Exception as e:
                 if "closed" not in str(e).lower():
-                    logger.error(f"Send audio error: {e}")
+                    logger.error(f"Send audio error: {e}", exc_info=True)
+            logger.info(f"Gemini receiver ended, sent {audio_chunks_sent} chunks")
         
         # Task to forward audio to Gemini
         async def forward_audio_to_gemini():
+            logger.info("Starting Gemini audio sender task")
             try:
                 await agent_service.send_realtime_input()
             except Exception as e:
                 if "cancel" not in str(e).lower():
-                    logger.error(f"Forward audio error: {e}")
+                    logger.error(f"Forward audio error: {e}", exc_info=True)
+            logger.info("Gemini sender ended")
         
         # Start background tasks
         audio_task = asyncio.create_task(send_audio_to_client())
         receive_task = asyncio.create_task(forward_audio_to_gemini())
         
         # Main loop - receive audio from client
+        audio_received = 0
+        logger.info("Starting main audio receive loop")
         while True:
             try:
                 msg = await websocket.receive_json()
@@ -206,6 +220,11 @@ async def eagi_stream(websocket: WebSocket):
                             "data": audio_data,
                             "mime_type": "audio/pcm;rate=16000"
                         })
+                        audio_received += 1
+                        if audio_received == 1:
+                            logger.info("First audio chunk received from EAGI")
+                        elif audio_received % 100 == 0:
+                            logger.info(f"Received {audio_received} audio chunks from EAGI")
                 
                 elif msg_type == "end":
                     logger.info("Client requested end")
@@ -215,8 +234,10 @@ async def eagi_stream(websocket: WebSocket):
                 logger.info("WebSocket disconnected")
                 break
             except Exception as e:
-                logger.error(f"Receive error: {e}")
+                logger.error(f"Receive error: {e}", exc_info=True)
                 break
+        
+        logger.info(f"Main loop ended, received {audio_received} total chunks")
         
     except asyncio.TimeoutError:
         logger.error("Timeout waiting for start message")

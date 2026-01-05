@@ -226,43 +226,51 @@ class EAGIHandler:
     
     async def _receive_and_play(self):
         """Receive audio from backend and play to Asterisk"""
-        logger.info("Starting playback")
+        logger.info("Starting playback receiver")
         
         chunk_count = 0
         
-        while self.running and self.ws:
-            try:
-                msg_str = await self.ws.recv()
-                msg = json.loads(msg_str)
-                msg_type = msg.get("type")
-                
-                if msg_type == "audio":
-                    # Decode audio
-                    audio_24k = base64.b64decode(msg.get("data", ""))
+        try:
+            while self.running and self.ws:
+                try:
+                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=1.0)
+                    msg = json.loads(msg_str)
+                    msg_type = msg.get("type")
                     
-                    # Resample 24kHz -> 8kHz
-                    audio_out = self._resample_24k_to_8k(audio_24k)
+                    if msg_type == "audio":
+                        # Decode audio
+                        audio_24k = base64.b64decode(msg.get("data", ""))
+                        
+                        # Resample 24kHz -> 8kHz
+                        audio_out = self._resample_24k_to_8k(audio_24k)
+                        
+                        if audio_out:
+                            # Write to stdout (EAGI audio output)
+                            sys.stdout.buffer.write(audio_out)
+                            sys.stdout.buffer.flush()
+                            chunk_count += 1
+                            if chunk_count == 1:
+                                logger.info("First audio chunk received and sent to Asterisk")
                     
-                    if audio_out:
-                        # Write to stdout (EAGI audio output)
-                        sys.stdout.buffer.write(audio_out)
-                        sys.stdout.buffer.flush()
-                        chunk_count += 1
-                
-                elif msg_type == "transcript":
-                    role = msg.get("role", "")
-                    text = msg.get("text", "")
-                    if text:
-                        logger.info(f"{role.upper()}: {text[:80]}...")
-                
-                elif msg_type == "error":
-                    logger.error(f"Backend error: {msg.get('message')}")
+                    elif msg_type == "transcript":
+                        role = msg.get("role", "")
+                        text = msg.get("text", "")
+                        if text:
+                            logger.info(f"{role.upper()}: {text[:80]}...")
+                    
+                    elif msg_type == "error":
+                        logger.error(f"Backend error: {msg.get('message')}")
+                        break
+                        
+                except asyncio.TimeoutError:
+                    # No message received, continue waiting
+                    continue
+                except Exception as e:
+                    if self.running and "closed" not in str(e).lower():
+                        logger.error(f"Receive error: {e}", exc_info=True)
                     break
-                    
-            except Exception as e:
-                if self.running and "closed" not in str(e).lower():
-                    logger.error(f"Receive error: {e}")
-                break
+        except Exception as e:
+            logger.error(f"Playback loop error: {e}", exc_info=True)
         
         logger.info(f"Playback ended. Chunks received: {chunk_count}")
     
