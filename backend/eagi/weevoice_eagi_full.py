@@ -309,6 +309,11 @@ class EAGIHandler:
         # Pending greeting to play in background
         self._pending_greeting = None
         
+        # Synchronization flag: prevents audio capture/playback during greeting
+        # This ensures the greeting is not interrupted by Gemini responding to background noise
+        self._greeting_done = asyncio.Event()
+        self._greeting_done.set()  # Default: no greeting pending, allow audio immediately
+        
         log("=" * 60)
         log("WeeVoice EAGI Starting (WebSocket API Mode)")
         log(f"Backend: {WS_URL}")
@@ -570,16 +575,22 @@ class EAGIHandler:
         """
         Play pre-cached greeting IMMEDIATELY.
         This runs before Gemini session is ready, eliminating the 5+ second delay.
+        
+        IMPORTANT: This blocks audio capture/playback until done to prevent
+        Gemini from responding to background noise and interrupting the greeting.
         """
         if not audio_24k or len(audio_24k) < 100:
             log("No greeting audio data")
+            self._greeting_done.set()  # Allow audio even if no greeting
             return
         
         try:
             import time
             t0 = time.perf_counter()
             
-            log(f"Greeting received: {len(audio_24k)} bytes (24kHz)")
+            # CRITICAL: Block audio capture/playback until greeting is done
+            self._greeting_done.clear()
+            log(f"Greeting received: {len(audio_24k)} bytes (24kHz) - blocking audio until done")
             
             # Resample 24kHz -> 8kHz for Asterisk
             audio_8k = self._resample_24k_to_8k(audio_24k)
@@ -602,10 +613,13 @@ class EAGIHandler:
             )
             
             elapsed_ms = (time.perf_counter() - t0) * 1000
-            log(f"✅ Greeting played in {elapsed_ms:.0f}ms total")
+            log(f"✅ Greeting played in {elapsed_ms:.0f}ms total - unblocking audio")
             
         except Exception as e:
             log(f"Error playing greeting: {e}")
+        finally:
+            # ALWAYS unblock audio capture/playback
+            self._greeting_done.set()
     
     # ========================================================================
     # AUDIO LOOPS (NON-BLOCKING)
@@ -618,6 +632,13 @@ class EAGIHandler:
         if not self._audio_fd:
             log("CAPTURE: Audio FD3 not available")
             return
+        
+        # CRITICAL: Wait for greeting to finish before sending audio to Gemini
+        # This prevents Gemini from responding to background noise during greeting
+        if not self._greeting_done.is_set():
+            log("CAPTURE: Waiting for greeting to finish before capturing audio...")
+            await self._greeting_done.wait()
+            log("CAPTURE: Greeting done, starting audio capture")
         
         frame_count = 0
         buffer = b''
@@ -715,8 +736,14 @@ class EAGIHandler:
         
         Uses LARGE buffer to minimize gaps between files.
         The key to smooth audio is fewer, larger files.
+        
+        NOTE: Discards audio received during greeting to prevent
+        Gemini responses from interrupting the greeting playback.
         """
         log("RECEIVE: Starting audio receiver from backend")
+        
+        # Track if we should discard audio (during greeting)
+        audio_discarded_during_greeting = 0
         
         chunk_count = 0
         file_id = 0
@@ -748,6 +775,20 @@ class EAGIHandler:
                         audio_24k = base64.b64decode(msg.get("data", ""))
                         
                         if audio_24k:
+                            # CRITICAL: Discard audio if greeting is still playing
+                            # This prevents Gemini responses (triggered by background noise)
+                            # from interrupting the greeting
+                            if not self._greeting_done.is_set():
+                                audio_discarded_during_greeting += len(audio_24k)
+                                if audio_discarded_during_greeting == len(audio_24k):
+                                    log(f"RECEIVE: Discarding audio during greeting playback...")
+                                continue
+                            
+                            # Log if we just finished discarding
+                            if audio_discarded_during_greeting > 0:
+                                log(f"RECEIVE: Greeting done, discarded {audio_discarded_during_greeting} bytes of early audio")
+                                audio_discarded_during_greeting = 0
+                            
                             # Resample 24kHz -> 8kHz
                             audio_8k = self._resample_24k_to_8k(audio_24k)
                             
@@ -846,6 +887,13 @@ class EAGIHandler:
         ensuring ALL audio is played including the final words.
         """
         log("PLAYBACK: Starting playback worker")
+        
+        # CRITICAL: Wait for greeting to finish before playing Gemini audio
+        # This prevents Gemini responses from interrupting the greeting
+        if not self._greeting_done.is_set():
+            log("PLAYBACK: Waiting for greeting to finish before playing Gemini audio...")
+            await self._greeting_done.wait()
+            log("PLAYBACK: Greeting done, starting playback")
         
         files_played = 0
         loop = asyncio.get_event_loop()
@@ -958,12 +1006,17 @@ class EAGIHandler:
             receive_task = asyncio.create_task(self._receive_and_buffer())
             playback_task = asyncio.create_task(self._playback_worker())
             
-            # Greeting task - runs in background while other tasks also run
+            # Greeting task - runs and BLOCKS capture/playback until done
+            # This prevents Gemini from responding to background noise during greeting
             greeting_task = None
             if self._pending_greeting:
-                log("Starting greeting playback task (parallel with capture)...")
+                log("Starting greeting playback task (capture/playback blocked until done)...")
+                self._greeting_done.clear()  # Block audio until greeting done
                 greeting_task = asyncio.create_task(self._play_greeting_audio(self._pending_greeting))
                 self._pending_greeting = None
+            else:
+                # No greeting - allow audio immediately
+                self._greeting_done.set()
             
             log("All tasks created")
             

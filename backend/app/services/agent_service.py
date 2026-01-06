@@ -1051,6 +1051,55 @@ VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
             logger.info(f"Ended session for call {self.call.session_id}")
         except Exception as e:
             logger.error(f"Error ending session: {e}")
+    
+    async def stop_session(self):
+        """
+        Stop the voice session and clean up all resources.
+        This is called when a call ends to ensure complete cleanup.
+        
+        CRITICAL: This method clears audio queues to prevent stale audio
+        from leaking into subsequent calls.
+        """
+        logger.info(f"Stopping session for call {self.call.session_id}")
+        
+        try:
+            # Clear audio queues to prevent stale audio from leaking
+            # This is important when a new call comes in quickly after the previous one
+            await self._clear_audio_queues()
+            
+            # End the Gemini session
+            await self.end_session()
+            
+            logger.info(f"Session stopped and cleaned up for call {self.call.session_id}")
+        except Exception as e:
+            logger.error(f"Error stopping session: {e}")
+    
+    async def _clear_audio_queues(self):
+        """
+        Clear all audio queues to prevent stale audio from previous sessions.
+        This is critical when calls end to ensure no leftover audio leaks to new calls.
+        """
+        cleared_in = 0
+        cleared_out = 0
+        
+        # Clear input queue
+        while not self.audio_in_queue.empty():
+            try:
+                self.audio_in_queue.get_nowait()
+                cleared_in += 1
+            except:
+                break
+        
+        # Clear output queue
+        while not self.audio_out_queue.empty():
+            try:
+                self.audio_out_queue.get_nowait()
+                cleared_out += 1
+            except:
+                break
+        
+        if cleared_in > 0 or cleared_out > 0:
+            logger.info(f"Cleared {cleared_in} items from audio_in_queue, {cleared_out} from audio_out_queue")
 
 
 class CallSummaryService:
