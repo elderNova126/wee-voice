@@ -81,7 +81,7 @@ async def get_available_countries(
 ):
     """Get list of countries where virtual numbers are available"""
     service = get_zadarma_numbers_service()
-    result = await service.get_available_countries()
+    result = service.get_available_countries()
     
     if result.get("status") != "success":
         raise HTTPException(
@@ -101,7 +101,7 @@ async def get_country_destinations(
 ):
     """Get available destinations (cities/regions) for a country"""
     service = get_zadarma_numbers_service()
-    result = await service.get_country_destinations(country_code.upper())
+    result = service.get_country_destinations(country_code.upper())
     
     if result.get("status") != "success":
         raise HTTPException(
@@ -121,7 +121,7 @@ async def get_available_numbers(
 ):
     """Get available phone numbers for a specific destination"""
     service = get_zadarma_numbers_service()
-    result = await service.get_available_numbers(direction_id)
+    result = service.get_available_numbers(direction_id)
     
     if result.get("status") != "success":
         raise HTTPException(
@@ -143,7 +143,7 @@ async def create_document_group(
     service = get_zadarma_numbers_service()
     
     name = group_name or f"WeeVoice_{current_user.email}_{datetime.utcnow().strftime('%Y%m%d')}"
-    result = await service.create_document_group(name)
+    result = service.create_document_group(name)
     
     if result.get("status") != "success":
         raise HTTPException(
@@ -184,7 +184,7 @@ async def upload_verification_document(
         )
     
     service = get_zadarma_numbers_service()
-    result = await service.upload_document(
+    result = service.upload_document(
         group_id=group_id,
         document_type=document_type,
         file_content=content,
@@ -226,7 +226,7 @@ async def order_virtual_number(
         )
     
     # Order the number via Zadarma API
-    result = await service.order_number(
+    result = service.order_number(
         number_id=request.number_id,
         direction_id=request.direction_id,
         documents_group_id=request.documents_group_id,
@@ -279,7 +279,7 @@ async def get_connected_numbers(
 ):
     """Get list of user's connected virtual numbers from Zadarma"""
     service = get_zadarma_numbers_service()
-    result = await service.get_connected_numbers()
+    result = service.get_connected_numbers()
     
     if result.get("status") != "success":
         raise HTTPException(
@@ -313,7 +313,7 @@ async def configure_sip_routing(
         )
     
     service = get_zadarma_numbers_service()
-    result = await service.set_sip_routing(phone_record.phone_number, sip_id)
+    result = service.set_sip_routing(phone_record.phone_number, sip_id)
     
     if result.get("status") != "success":
         raise HTTPException(
@@ -338,7 +338,7 @@ async def get_country_pricing(
 ):
     """Get pricing information for a country"""
     service = get_zadarma_numbers_service()
-    result = await service.get_pricing(country_code.upper())
+    result = service.get_pricing(country_code.upper())
     
     return result
 
