@@ -12,14 +12,17 @@ import os
 import hashlib
 import logging
 import audioop
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict
 import time
 
 logger = logging.getLogger(__name__)
 
-# Cache directory for pre-generated greetings - use persistent location
-GREETING_CACHE_DIR = Path("/tmp/weedoo_greetings_gemini")
+# Cache directory for pre-generated greetings - use cross-platform temp directory
+# On Windows: uses %TEMP% (e.g., C:\Users\...\AppData\Local\Temp)
+# On Linux: uses /tmp
+GREETING_CACHE_DIR = Path(tempfile.gettempdir()) / "weedoo_greetings_gemini"
 GREETING_CACHE_DIR.mkdir(exist_ok=True)
 
 # Audio format: 8kHz mono PCM (for Asterisk)
