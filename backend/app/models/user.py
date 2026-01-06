@@ -23,6 +23,15 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)
     is_approved = Column(Boolean, default=False)  # Admin approval required
     
+    # Email verification
+    email_verified = Column(Boolean, default=False)
+    verification_token = Column(String, nullable=True, index=True)
+    verification_token_expires = Column(DateTime, nullable=True)
+    
+    # Password reset
+    reset_password_token = Column(String, nullable=True, index=True)
+    reset_password_token_expires = Column(DateTime, nullable=True)
+    
     # Subscription
     subscription_tier = Column(Enum(SubscriptionTier, values_callable=lambda x: [e.value for e in x]), default=SubscriptionTier.FREE)
     stripe_customer_id = Column(String, nullable=True)

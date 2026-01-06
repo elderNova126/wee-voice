@@ -16,6 +16,8 @@ export default function LoginPage() {
     password: '',
   })
   const [isLoading, setIsLoading] = useState(false)
+  const [showResendVerification, setShowResendVerification] = useState(false)
+  const [resendingEmail, setResendingEmail] = useState(false)
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -36,9 +38,48 @@ export default function LoginPage() {
       navigate('/dashboard')
     } catch (error: any) {
       console.error('Login error:', error)
-      toast.error(error.response?.data?.detail || t.auth.loginError)
+      const errorMsg = error.response?.data?.detail || t.auth.loginError
+      const errorCode = error.response?.headers?.['x-error-code'] || error.response?.data?.code
+      
+      // Check if email is not verified
+      if (errorCode === 'EMAIL_NOT_VERIFIED' || errorMsg === 'EMAIL_NOT_VERIFIED' || errorMsg.toLowerCase().includes('not verified') || errorMsg.toLowerCase().includes('verify')) {
+        setShowResendVerification(true)
+        toast.error(
+          'Please verify your email address before logging in.',
+          { duration: 5000 }
+        )
+      } else if (errorMsg.toLowerCase().includes('not approved')) {
+        toast.error(
+          'Your account is pending admin approval. You will receive an email once approved.',
+          { duration: 5000 }
+        )
+      } else {
+        toast.error(errorMsg)
+        setShowResendVerification(false)
+      }
     } finally {
       setIsLoading(false)
+    }
+  }
+  
+  const handleResendVerification = async () => {
+    if (!formData.email) {
+      toast.error('Please enter your email address')
+      return
+    }
+    
+    setResendingEmail(true)
+    try {
+      await authAPI.requestVerification(formData.email)
+      toast.success('Verification email sent! Check your inbox.')
+      setShowResendVerification(false)
+    } catch (error: any) {
+      console.error('Resend verification error:', error)
+      // Don't show error - always show success to prevent email enumeration
+      toast.success('If an account exists, a verification email has been sent.')
+      setShowResendVerification(false)
+    } finally {
+      setResendingEmail(false)
     }
   }
   
@@ -74,9 +115,17 @@ export default function LoginPage() {
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                {t.auth.password}
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.auth.password}
+                </label>
+                <Link 
+                  to="/forgot-password" 
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 type="password"
                 required
@@ -94,6 +143,23 @@ export default function LoginPage() {
               {isLoading ? t.auth.connecting : t.auth.connect}
             </button>
           </form>
+          
+          {/* Resend Verification Email */}
+          {showResendVerification && (
+            <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+              <p className="text-sm text-blue-800 dark:text-blue-300 mb-3">
+                <strong>Email not verified.</strong> Click below to resend the verification email.
+              </p>
+              <button
+                type="button"
+                onClick={handleResendVerification}
+                disabled={resendingEmail || !formData.email}
+                className="btn-secondary w-full text-sm"
+              >
+                {resendingEmail ? 'Sending...' : 'Resend Verification Email'}
+              </button>
+            </div>
+          )}
           
           <div className="mt-6 text-center">
             <p className="text-gray-600 dark:text-gray-400">

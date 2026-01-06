@@ -80,7 +80,8 @@ class EmailService:
             smtp_port = getattr(settings, 'SMTP_PORT', 587)
             smtp_user = getattr(settings, 'SMTP_USER', None)
             smtp_password = getattr(settings, 'SMTP_PASSWORD', None)
-            use_tls = getattr(settings, 'SMTP_USE_TLS', True)
+            use_tls = getattr(settings, 'SMTP_USE_TLS', False)
+            use_ssl = getattr(settings, 'SMTP_USE_SSL', True)  # SSL for port 465
             
             # Check if credentials are provided
             if not smtp_user or not smtp_password:
@@ -92,9 +93,15 @@ class EmailService:
             try:
                 logger.info(f"Attempting to send email via SMTP: {smtp_host}:{smtp_port}")
                 logger.info(f"From: {from_email}, To: {to_email}, Subject: {subject}")
-                logger.info(f"SMTP User: {smtp_user}, Use TLS: {use_tls}")
+                logger.info(f"SMTP User: {smtp_user}, Use TLS: {use_tls}, Use SSL: {use_ssl}")
                 
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                # Use SMTP_SSL for port 465, regular SMTP for 587/25
+                if use_ssl:
+                    server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30)
+                else:
+                    server = smtplib.SMTP(smtp_host, smtp_port, timeout=30)
+                
+                try:
                     # Enable debug output to see SMTP conversation (set to 1 for verbose, 0 for none)
                     debug_level = getattr(settings, 'SMTP_DEBUG_LEVEL', 0)
                     server.set_debuglevel(debug_level)
@@ -102,7 +109,7 @@ class EmailService:
                         logger.info(f"SMTP debug level set to {debug_level}")
                     logger.debug(f"Connected to SMTP server {smtp_host}:{smtp_port}")
                     
-                    if use_tls:
+                    if not use_ssl and use_tls:
                         logger.debug("Starting TLS...")
                         server.starttls()
                         logger.debug("TLS started successfully")
@@ -115,6 +122,9 @@ class EmailService:
                     # send_message returns a dict of failed recipients, check it
                     failed_recipients = server.send_message(msg)
                     
+                    server.quit()
+                    logger.debug("SMTP connection closed")
+                    
                     if failed_recipients:
                         logger.error(f"Email sending failed for recipients: {failed_recipients}")
                         logger.error(f"Failed to send email to: {to_email}")
@@ -123,6 +133,11 @@ class EmailService:
                     logger.info(f"Email sent successfully to {to_email}")
                     logger.info(f"SMTP server accepted the message for delivery")
                     return True
+                finally:
+                    try:
+                        server.quit()
+                    except:
+                        pass
             except smtplib.SMTPAuthenticationError as e:
                 error_msg = f"SMTP authentication failed: {str(e)}"
                 logger.error(error_msg)

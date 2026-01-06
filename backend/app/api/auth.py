@@ -1,6 +1,9 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+import secrets
+import os
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, field_validator
@@ -14,6 +17,7 @@ from app.core.security import (
     generate_api_key,
 )
 from app.models import get_db, User, APIKey, SubscriptionTier
+from app.services.email_service import EmailService
 
 router = APIRouter()
 
@@ -66,6 +70,28 @@ class APIKeyResponse(BaseModel):
         from_attributes = True
 
 
+class EmailVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    
+    @field_validator('new_password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if len(v) > 72:
+            raise ValueError('Password cannot be longer than 72 characters')
+        return v
+
+
 @router.post("/register", response_model=UserResponse)
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
     """Register a new user"""
@@ -77,19 +103,52 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             detail="Email already registered"
         )
     
+    # Generate verification token
+    verification_token = _generate_token()
+    
     # Create new user (password truncation handled in get_password_hash)
-    # New users require admin approval before they can login
+    # New users require email verification and admin approval before they can login
     user = User(
         email=user_data.email,
         full_name=user_data.full_name,
         hashed_password=get_password_hash(user_data.password),
         subscription_tier=SubscriptionTier.FREE,
-        is_approved=False  # Requires admin approval
+        is_approved=False,  # Requires admin approval
+        email_verified=False,  # Requires email verification
+        verification_token=verification_token,
+        verification_token_expires=datetime.utcnow() + timedelta(hours=24)
     )
     
     db.add(user)
     db.commit()
     db.refresh(user)
+    
+    # Send verification email
+    verification_url = f"{settings.FRONTEND_URL}/verify-email?token={verification_token}"
+    
+    try:
+        text_body, html_body = _load_email_template(
+            "email_verification",
+            full_name=user.full_name,
+            verification_url=verification_url
+        )
+        
+        success = EmailService.send_email(
+            to_email=user.email,
+            subject="Verify Your Email - WeeVoice",
+            body_text=text_body,
+            body_html=html_body
+        )
+        
+        if not success:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send verification email to {user.email}")
+    except Exception as e:
+        # Log error but don't fail registration
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending verification email to {user.email}: {str(e)}")
     
     return user
 
@@ -111,6 +170,14 @@ def login(
     
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+    
+    # Check if email is verified
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="EMAIL_NOT_VERIFIED",
+            headers={"X-Error-Code": "EMAIL_NOT_VERIFIED", "X-User-Email": user.email}
+        )
     
     # Check if user is approved by admin
     if not user.is_approved:
@@ -182,4 +249,224 @@ def delete_api_key(
     db.commit()
     
     return {"message": "API key deleted"}
+
+
+def _generate_token() -> str:
+    """Generate a secure random token"""
+    return secrets.token_urlsafe(32)
+
+
+def _load_email_template(template_name: str, **kwargs) -> tuple[str, str]:
+    """Load HTML and text email templates"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    template_dir = Path(__file__).parent.parent / "templates"
+    
+    try:
+        # Load HTML template
+        html_path = template_dir / f"{template_name}.html"
+        if not html_path.exists():
+            logger.error(f"HTML template not found: {html_path}")
+            raise FileNotFoundError(f"Template {template_name}.html not found")
+        
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        # Load text template
+        txt_path = template_dir / f"{template_name}.txt"
+        if not txt_path.exists():
+            logger.warning(f"Text template not found: {txt_path}, using HTML as fallback")
+            txt_content = html_content  # Fallback to HTML if text template missing
+        else:
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                txt_content = f.read()
+        
+        # Replace placeholders
+        for key, value in kwargs.items():
+            placeholder = "{{" + key + "}}"
+            html_content = html_content.replace(placeholder, str(value))
+            txt_content = txt_content.replace(placeholder, str(value))
+        
+        logger.debug(f"Template {template_name} loaded and processed successfully")
+        return txt_content, html_content
+        
+    except Exception as e:
+        logger.error(f"Error loading email template {template_name}: {e}", exc_info=True)
+        # Return simple fallback template
+        fallback_text = f"Please visit: {kwargs.get('reset_url', kwargs.get('verification_url', 'the link'))}"
+        fallback_html = f"<html><body><p>Please visit: <a href='{kwargs.get('reset_url', kwargs.get('verification_url', '#'))}'>Click here</a></p></body></html>"
+        return fallback_text, fallback_html
+
+
+@router.post("/request-verification")
+def request_verification_email(
+    request_data: EmailVerificationRequest,
+    db: Session = Depends(get_db)
+):
+    """Request a new verification email"""
+    user = db.query(User).filter(User.email == request_data.email).first()
+    
+    if not user:
+        # Don't reveal if email exists
+        return {"message": "If the email exists, a verification link has been sent"}
+    
+    if user.email_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already verified"
+        )
+    
+    # Generate new verification token
+    token = _generate_token()
+    user.verification_token = token
+    user.verification_token_expires = datetime.utcnow() + timedelta(hours=24)
+    
+    db.commit()
+    
+    # Send verification email
+    verification_url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+    
+    text_body, html_body = _load_email_template(
+        "email_verification",
+        full_name=user.full_name,
+        verification_url=verification_url
+    )
+    
+    try:
+        success = EmailService.send_email(
+            to_email=user.email,
+            subject="Verify Your Email - WeeVoice",
+            body_text=text_body,
+            body_html=html_body
+        )
+        
+        if not success:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send verification email to {user.email}")
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending verification email: {str(e)}")
+    
+    return {"message": "Verification email sent"}
+
+
+@router.get("/verify-email")
+def verify_email(
+    token: str = Query(..., description="Verification token"),
+    db: Session = Depends(get_db)
+):
+    """Verify email address with token"""
+    user = db.query(User).filter(User.verification_token == token).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired verification token"
+        )
+    
+    if user.email_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already verified"
+        )
+    
+    # Check token expiration
+    if user.verification_token_expires and user.verification_token_expires < datetime.utcnow():
+        raise HTTPException(
+            status_code=400,
+            detail="Verification token has expired"
+        )
+    
+    # Verify email
+    user.email_verified = True
+    user.verification_token = None
+    user.verification_token_expires = None
+    
+    db.commit()
+    
+    return {"message": "Email verified successfully"}
+
+
+@router.post("/forgot-password")
+def forgot_password(
+    request_data: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """Request password reset email"""
+    user = db.query(User).filter(User.email == request_data.email).first()
+    
+    # Don't reveal if email exists
+    if not user:
+        return {"message": "If the email exists, a password reset link has been sent"}
+    
+    # Generate reset token
+    token = _generate_token()
+    user.reset_password_token = token
+    user.reset_password_token_expires = datetime.utcnow() + timedelta(hours=1)
+    
+    db.commit()
+    
+    # Send password reset email
+    reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    
+    text_body, html_body = _load_email_template(
+        "password_reset",
+        full_name=user.full_name,
+        reset_url=reset_url
+    )
+    
+    try:
+        success = EmailService.send_email(
+            to_email=user.email,
+            subject="Reset Your Password - WeeVoice",
+            body_text=text_body,
+            body_html=html_body
+        )
+        
+        if not success:
+            # Log the error but don't reveal to user
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send password reset email to {user.email}")
+    except Exception as e:
+        # Log the error but don't reveal to user
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending password reset email: {str(e)}")
+    
+    return {"message": "Password reset email sent"}
+
+
+@router.post("/reset-password")
+def reset_password(
+    request_data: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """Reset password with token"""
+    user = db.query(User).filter(User.reset_password_token == request_data.token).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token"
+        )
+    
+    # Check token expiration
+    if user.reset_password_token_expires and user.reset_password_token_expires < datetime.utcnow():
+        raise HTTPException(
+            status_code=400,
+            detail="Reset token has expired"
+        )
+    
+    # Reset password
+    user.hashed_password = get_password_hash(request_data.new_password)
+    user.reset_password_token = None
+    user.reset_password_token_expires = None
+    
+    db.commit()
+    
+    return {"message": "Password reset successfully"}
 

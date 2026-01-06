@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { authAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
-import { MicrophoneIcon } from '@heroicons/react/24/outline'
+import { MicrophoneIcon, CheckCircleIcon } from '@heroicons/react/24/outline'
 import { useTranslation } from '@/lib/translations'
 
 export default function RegisterPage() {
@@ -16,6 +16,8 @@ export default function RegisterPage() {
     confirmPassword: '',
   })
   const [isLoading, setIsLoading] = useState(false)
+  const [registered, setRegistered] = useState(false)
+  const [registeredEmail, setRegisteredEmail] = useState('')
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -45,13 +47,72 @@ export default function RegisterPage() {
       })
       
       toast.success(t.register.success)
-      navigate('/login')
+      setRegisteredEmail(formData.email)
+      setRegistered(true)
     } catch (error: any) {
       console.error('Registration error:', error)
       toast.error(error.response?.data?.detail || t.register.error)
     } finally {
       setIsLoading(false)
     }
+  }
+  
+  // Show success message after registration
+  if (registered) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center px-6">
+        <div className="max-w-md w-full">
+          <div className="text-center mb-8">
+            <Link to="/" className="inline-flex items-center space-x-2">
+              <MicrophoneIcon className="w-10 h-10 text-primary-600" />
+              <span className="text-3xl font-bold text-gray-900 dark:text-white">VoiceAgent</span>
+            </Link>
+          </div>
+          
+          <div className="card text-center">
+            <div className="flex justify-center mb-4">
+              <CheckCircleIcon className="w-16 h-16 text-green-500" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+              Registration Successful!
+            </h2>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              We've sent a verification email to <strong>{registeredEmail}</strong>
+            </p>
+            
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6 text-left">
+              <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-2">
+                📧 Next Steps:
+              </p>
+              <ol className="text-sm text-blue-800 dark:text-blue-300 space-y-1 list-decimal list-inside">
+                <li>Check your email inbox</li>
+                <li>Click the verification link</li>
+                <li>Wait for admin approval</li>
+                <li>You'll receive an email once approved</li>
+              </ol>
+            </div>
+            
+            <Link 
+              to="/login"
+              className="btn-primary w-full block mb-3"
+            >
+              Go to Login
+            </Link>
+            
+            <Link 
+              to="/resend-verification"
+              className="text-sm text-gray-600 dark:text-gray-400 hover:text-primary-600"
+            >
+              Didn't receive the email?
+            </Link>
+            
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-4">
+              💡 Check your spam folder if you don't see the email.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
   }
   
   return (

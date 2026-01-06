@@ -62,14 +62,15 @@ class Settings(BaseSettings):
     STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
     STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     
-    # Email (SMTP)
+    # Email (SMTP) - Using TLS on port 587
     SMTP_HOST: str = os.getenv("SMTP_HOST", "mail.weedoo.be")
     SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
-    SMTP_USER: str = os.getenv("SMTP_USER", "example@weedoo.be")
-    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "***********")
-    SMTP_USE_TLS: bool = bool(int(os.getenv("SMTP_USE_TLS", "1")))
+    SMTP_USER: str = os.getenv("SMTP_USER", "voice@weedoo.be")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "1") == "1"  # Use TLS for port 587
+    SMTP_USE_SSL: bool = os.getenv("SMTP_USE_SSL", "0") == "1"  # Use SSL for port 465
     SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "voice@weedoo.be")
-    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Weedoo Voice Agent")
+    SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "WeeVoice")
     
     # Frontend URL (for email links)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
