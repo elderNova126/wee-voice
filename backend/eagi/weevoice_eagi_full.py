@@ -465,14 +465,14 @@ class EAGIHandler:
             # Convert to µ-law (Asterisk native format)
             ulaw_data = self._pcm_to_ulaw(audio_data)
             
-            # Add silence padding at the end to mask inter-file gaps
-            # The gap between STREAM FILE commands is typically 20-80ms
-            # We add 100ms of silence to ensure smooth transitions
+            # Add minimal silence padding at the end to mask inter-file gaps
+            # The gap between STREAM FILE commands is typically 20-50ms
+            # We add just 50ms to prevent clicks without adding noticeable silence
             if add_padding:
-                # 100ms of µ-law silence at 8kHz = 800 samples
+                # 50ms of µ-law silence at 8kHz = 400 samples
                 # In µ-law encoding, 0xFF (255) represents zero amplitude (silence)
-                # This provides a comfortable buffer between sequential files
-                PADDING_SAMPLES = 800
+                # Keep this minimal - we handle longer gaps with explicit silence files
+                PADDING_SAMPLES = 400
                 silence_padding = bytes([0xFF] * PADDING_SAMPLES)
                 ulaw_data = ulaw_data + silence_padding
             
@@ -791,28 +791,27 @@ class EAGIHandler:
         file_id = 0
         audio_accumulator = b''
         
-        # === ADAPTIVE BUFFER SETTINGS ===
+        # === OPTIMIZED BUFFER SETTINGS ===
         # 
-        # Strategy: Use SMALLER files so we can queue MORE of them during
-        # Gemini's burst sends. This builds up buffer cushion that survives
-        # Gemini's long pauses between sentences.
+        # Key insight: Gemini pauses for 5-15+ seconds between sentences.
+        # No amount of small-file buffering can handle this.
+        # 
+        # Strategy:
+        # 1. Use 2-second files - good balance of latency vs buffer
+        # 2. Don't flush tiny files - they cause more gaps than they help
+        # 3. When queue empties, WAIT for Gemini (up to 10s) before inserting silence
         #
-        # With 1.5-second files:
-        # - During burst: Gemini sends faster, we queue multiple files
-        # - During pause: We play from buffer, insert silence when empty
-        # - More files = more granular control = smoother experience
-        #
-        FIRST_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 1.2)   # 1.2 seconds for first chunk (fast start)
-        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 1.5)     # 1.5 seconds for subsequent chunks
-        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.4)       # 400ms minimum for flush
+        FIRST_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 1.5)   # 1.5 seconds for first chunk
+        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 2.0)     # 2 seconds for subsequent chunks
+        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.8)       # 800ms minimum for flush (no tiny files!)
         
-        # Track silence for smart flushing
+        # Track silence for smart flushing - be patient, don't create tiny files
         last_audio_time = time.time()
-        SILENCE_FLUSH_MS = 250  # Flush after 250ms of silence
+        SILENCE_FLUSH_MS = 400  # Flush after 400ms of silence (longer = fewer tiny files)
         
         is_first_chunk = True  # Track if this is the first response
         
-        log(f"RECEIVE: Adaptive buffer: first={FIRST_PLAYBACK_SIZE}b (1.2s), normal={MIN_PLAYBACK_SIZE}b (1.5s), flush={FLUSH_THRESHOLD}b (400ms)")
+        log(f"RECEIVE: Buffer config: first=1.5s, normal=2s, flush_min=800ms, silence_timeout=400ms")
         
         try:
             while self.running and self.ws:
@@ -954,49 +953,46 @@ class EAGIHandler:
         files_played = 0
         loop = asyncio.get_event_loop()
         
-        # PRE-BUFFERING - CRITICAL FOR SMOOTH AUDIO
+        # PRE-BUFFERING - Wait for initial audio before starting playback
         # 
-        # The key insight: Gemini sends audio at roughly real-time speed,
-        # so we can NEVER build up a large buffer during streaming.
-        # The only cushion we can create is at the START.
-        # 
-        # Strategy with 1.5s files:
-        # 1. Wait for 3+ files before starting (gives us ~4.5s cushion)
-        # 2. If only 1-2 files after 4s, start anyway (short response)
-        # 3. When buffer empties during playback, WAIT for more audio
+        # Gemini can be slow to start (5-15s) but once it starts,
+        # it sends audio in bursts. We wait for at least 2 files
+        # to have some cushion.
         #
-        PRE_BUFFER_FILES = 3  # Wait for 3 files minimum (~4.5 seconds of audio)
-        prebuffer_timeout = 5.0  # Wait up to 5 seconds for pre-buffer
-        prebuffer_start = time.time()
+        PRE_BUFFER_FILES = 2  # Wait for 2 files (~4 seconds of audio with 2s files)
         
-        log(f"PLAYBACK: Pre-buffering (target: {PRE_BUFFER_FILES} files @ 1.5s each, timeout: {prebuffer_timeout}s)...")
+        log(f"PLAYBACK: Waiting for first audio from Gemini...")
+        
+        # Phase 1: Wait indefinitely for FIRST file (Gemini might be slow to start)
+        first_file_timeout = 30.0  # Wait up to 30 seconds for first audio
+        wait_start = time.time()
+        
+        while self._playback_queue.qsize() < 1:
+            if not self.running:
+                log("PLAYBACK: Call ended during pre-buffer")
+                return
+            if time.time() - wait_start > first_file_timeout:
+                log("PLAYBACK: Timeout waiting for first audio")
+                return
+            await asyncio.sleep(0.1)
+        
+        first_file_time = time.time() - wait_start
+        log(f"PLAYBACK: First audio received after {first_file_time:.1f}s")
+        
+        # Phase 2: Wait briefly for more files to build buffer (up to 3 seconds)
+        buffer_wait_start = time.time()
+        BUFFER_WAIT = 3.0
         
         while self._playback_queue.qsize() < PRE_BUFFER_FILES:
-            elapsed = time.time() - prebuffer_start
-            
-            # After 4 seconds, start with whatever we have (might be a short response)
-            if elapsed > 4.0 and self._playback_queue.qsize() >= 1:
-                log(f"PLAYBACK: Starting with {self._playback_queue.qsize()} file(s) after {elapsed:.1f}s wait")
-                break
-            
-            if elapsed > prebuffer_timeout:
-                if self._playback_queue.qsize() >= 1:
-                    log(f"PLAYBACK: Pre-buffer timeout, starting with {self._playback_queue.qsize()} file(s)")
-                else:
-                    log(f"PLAYBACK: Pre-buffer timeout with empty queue - waiting more...")
-                    # Keep waiting if queue is completely empty
-                    await asyncio.sleep(0.5)
-                    continue
-                break
-            
             if not self.running:
-                log("PLAYBACK: Stopping during pre-buffer (call ended)")
+                log("PLAYBACK: Call ended during buffer build")
                 return
-            
-            await asyncio.sleep(0.1)  # Check every 100ms
+            if time.time() - buffer_wait_start > BUFFER_WAIT:
+                break
+            await asyncio.sleep(0.1)
         
         initial_buffer = self._playback_queue.qsize()
-        log(f"PLAYBACK: Pre-buffer complete, {initial_buffer} files ready (~{initial_buffer * 1.5:.1f}s of audio)")
+        log(f"PLAYBACK: Starting with {initial_buffer} file(s) (~{initial_buffer * 2}s of audio)")
         
         # Continue until we receive the end signal (None) from the queue
         # IMPORTANT: Don't stop just because self.running=False - we need to 
@@ -1018,23 +1014,32 @@ class EAGIHandler:
                 queue_depth = self._playback_queue.qsize()
                 
                 # DROPOUT PREVENTION: If queue is empty after this file, we need to
-                # wait and give Gemini time to send more audio. Insert progressively
-                # longer silences to maintain smooth audio.
+                # wait for Gemini to send more audio. Gemini often pauses 5-15+ seconds
+                # between sentences while "thinking", so we need to wait patiently.
                 if queue_depth == 0 and files_played > 0:
-                    # First, wait a moment to see if more audio arrives
-                    log(f"PLAYBACK: ⚠️ Queue empty after file #{files_played} - waiting for more audio...")
+                    log(f"PLAYBACK: Queue empty after file #{files_played} - waiting for Gemini...")
                     
-                    # Wait up to 2 seconds for new audio to arrive
+                    # Wait up to 8 seconds for new audio to arrive
+                    # Gemini's thinking pauses can be very long!
                     wait_start = time.time()
-                    while self._playback_queue.empty() and (time.time() - wait_start) < 2.0:
-                        await asyncio.sleep(0.1)
+                    MAX_WAIT = 8.0
                     
-                    # If still empty, insert silence to bridge the gap
-                    if self._playback_queue.empty():
-                        wait_time = time.time() - wait_start
-                        # Insert 500ms silence - enough to feel natural but not too long
-                        log(f"PLAYBACK: Inserting 500ms silence bridge (waited {wait_time:.1f}s)")
-                        silence_file = self._create_silence_file(500)
+                    while self._playback_queue.empty() and (time.time() - wait_start) < MAX_WAIT:
+                        await asyncio.sleep(0.1)
+                        # Check if call ended
+                        if not self.running:
+                            break
+                    
+                    wait_time = time.time() - wait_start
+                    
+                    # If audio arrived, continue normally (no silence needed)
+                    if not self._playback_queue.empty():
+                        log(f"PLAYBACK: Audio arrived after {wait_time:.1f}s wait")
+                    elif self.running:
+                        # Still no audio after long wait - insert brief silence and keep waiting
+                        # This keeps the audio channel active
+                        log(f"PLAYBACK: No audio after {wait_time:.1f}s - inserting 300ms silence")
+                        silence_file = self._create_silence_file(300)
                         if silence_file:
                             try:
                                 await loop.run_in_executor(None, self._stream_file, silence_file)
