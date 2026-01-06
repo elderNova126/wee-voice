@@ -96,6 +96,10 @@ class HighQualityResampler:
     
     NOTE: scipy.signal.resample is NOT used because it's not stateful,
     causing clicks/pops at chunk boundaries in real-time streaming.
+    
+    CRITICAL: Call flush() at end of stream to get remaining samples!
+    The resampler maintains internal state - without flushing, the last
+    few samples (containing final words/syllables) are lost!
     """
     def __init__(self, from_rate: int, to_rate: int):
         self.from_rate = from_rate
@@ -103,6 +107,7 @@ class HighQualityResampler:
         self.resampler = None
         self.audioop_state = None
         self.method = "audioop"  # Default fallback
+        self._has_pending_samples = False  # Track if we have unflushed data
         
         if SOXR_AVAILABLE and NUMPY_AVAILABLE:
             try:
@@ -124,6 +129,8 @@ class HighQualityResampler:
         if len(audio_bytes) < 2:
             return audio_bytes
         
+        self._has_pending_samples = True  # Mark that we have data in the pipeline
+        
         if self.method == "soxr_vhq" and self.resampler:
             try:
                 # Convert to float32
@@ -144,6 +151,66 @@ class HighQualityResampler:
             audio_bytes, 2, 1, self.from_rate, self.to_rate, self.audioop_state
         )
         return result
+    
+    def flush(self) -> bytes:
+        """
+        Flush any remaining samples from the resampler's internal buffer.
+        
+        CRITICAL: Must be called at end of audio stream to get final samples!
+        Without this, the last portion of audio (final words/syllables) is lost.
+        
+        Returns: Remaining audio bytes (may be empty if nothing buffered)
+        """
+        if not self._has_pending_samples:
+            return b''
+        
+        self._has_pending_samples = False
+        
+        if self.method == "soxr_vhq" and self.resampler:
+            try:
+                # Pass empty array to flush remaining samples from soxr's internal buffer
+                # This is the documented way to get the "tail" of the resampled audio
+                empty_input = np.array([], dtype=np.float32)
+                final_samples = self.resampler.resample_chunk(empty_input, last=True)
+                
+                if len(final_samples) > 0:
+                    # Convert back to int16
+                    final_int16 = np.clip(final_samples * 32768.0, -32768, 32767).astype(np.int16)
+                    flushed_bytes = final_int16.tobytes()
+                    log(f"Resampler flush: {len(flushed_bytes)} bytes recovered")
+                    return flushed_bytes
+            except Exception as e:
+                log(f"soxr flush error: {e}")
+        
+        # audioop doesn't have significant buffering, but process any remaining state
+        # by passing a small silence buffer
+        if self.audioop_state:
+            try:
+                # Process a tiny silence to flush any remaining state
+                silence = b'\x00\x00' * 16  # 16 samples of silence
+                result, self.audioop_state = audioop.ratecv(
+                    silence, 2, 1, self.from_rate, self.to_rate, self.audioop_state
+                )
+                # Don't return the silence, just clear the state
+            except:
+                pass
+        
+        return b''
+    
+    def reset(self):
+        """Reset the resampler state for a new stream."""
+        self._has_pending_samples = False
+        self.audioop_state = None
+        if self.method == "soxr_vhq" and SOXR_AVAILABLE and NUMPY_AVAILABLE:
+            try:
+                self.resampler = soxr.ResampleStream(
+                    self.from_rate, self.to_rate,
+                    num_channels=1,
+                    dtype=np.float32,
+                    quality=soxr.VHQ
+                )
+            except Exception as e:
+                log(f"soxr reset failed: {e}")
 
 
 def remove_dc_offset(pcm_bytes: bytes, threshold: int = 256) -> bytes:
@@ -347,6 +414,26 @@ class EAGIHandler:
             log(f"Resample 24k->8k error: {e}")
             return audio_24k
     
+    def _flush_output_resampler(self) -> bytes:
+        """
+        Flush the output resampler to recover any buffered samples.
+        
+        CRITICAL: This must be called at end of audio stream!
+        Without flushing, the final samples (last words/syllables) are lost
+        because the streaming resampler holds samples in its internal buffer.
+        
+        Returns: Remaining 8kHz audio bytes
+        """
+        try:
+            flushed = self._resampler_24k_to_8k.flush()
+            if flushed:
+                flushed = remove_dc_offset(flushed)
+                log(f"Output resampler flushed: {len(flushed)} bytes recovered")
+            return flushed
+        except Exception as e:
+            log(f"Output resampler flush error: {e}")
+            return b''
+    
     def _pcm_to_ulaw(self, pcm_data: bytes) -> bytes:
         """Convert PCM16 to µ-law for Asterisk"""
         try:
@@ -536,7 +623,7 @@ class EAGIHandler:
         buffer = b''
         send_buffer = b''  # Accumulate audio before sending
         empty_read_count = 0
-        MAX_EMPTY_READS = 50  # ~1 second of no audio = call ended
+        MAX_EMPTY_READS = 150  # ~3 seconds of no audio = call ended (increased to allow listening)
         
         # Batch size for sending - 40ms at 16kHz = 1280 bytes
         # Smaller batches = faster audio to Gemini = faster VAD detection
@@ -643,7 +730,7 @@ class EAGIHandler:
         
         # Track silence for smart flushing
         last_audio_time = time.time()
-        SILENCE_FLUSH_MS = 80  # Flush after 80ms of silence (immediate!)
+        SILENCE_FLUSH_MS = 150  # Flush after 150ms of silence (balances latency vs. complete phrases)
         
         is_first_chunk = True  # Track if this is the first response
         
@@ -730,13 +817,21 @@ class EAGIHandler:
         except Exception as e:
             log(f"RECEIVE: Loop error: {e}")
         
-        # Flush any remaining audio
-        if audio_accumulator and len(audio_accumulator) > 100:
+        # CRITICAL: Flush the resampler to get any remaining buffered samples
+        # This recovers the final words/syllables that would otherwise be lost!
+        flushed_audio = self._flush_output_resampler()
+        if flushed_audio:
+            audio_accumulator += flushed_audio
+            log(f"RECEIVE: Recovered {len(flushed_audio)} bytes from resampler flush")
+        
+        # Flush any remaining audio (including resampler flush)
+        if audio_accumulator and len(audio_accumulator) > 50:  # Lower threshold to catch final syllables
             file_id += 1
             filename = self._write_audio_file(audio_accumulator, file_id)
             if filename:
                 await self._playback_queue.put(filename)
-                log(f"RECEIVE: Final flush file #{file_id}")
+                duration_ms = len(audio_accumulator) / (ASTERISK_RATE * 2) * 1000
+                log(f"RECEIVE: Final flush file #{file_id} ({duration_ms:.0f}ms audio)")
         
         # Signal end of playback
         await self._playback_queue.put(None)
@@ -744,42 +839,67 @@ class EAGIHandler:
         log(f"RECEIVE: Ended, got {chunk_count} chunks, wrote {file_id} files")
     
     async def _playback_worker(self):
-        """Play queued audio files using Asterisk STREAM FILE"""
+        """
+        Play queued audio files using Asterisk STREAM FILE.
+        
+        CRITICAL: This worker continues until it receives None from the queue,
+        ensuring ALL audio is played including the final words.
+        """
         log("PLAYBACK: Starting playback worker")
         
         files_played = 0
         loop = asyncio.get_event_loop()
         
-        while self.running:
+        # Continue until we receive the end signal (None) from the queue
+        # IMPORTANT: Don't stop just because self.running=False - we need to 
+        # finish playing all queued files to avoid cutting off final words!
+        while True:
             try:
-                filename = await asyncio.wait_for(self._playback_queue.get(), timeout=0.5)
+                # Use longer timeout when running=False to allow queue to drain
+                timeout = 0.5 if self.running else 2.0
+                filename = await asyncio.wait_for(self._playback_queue.get(), timeout=timeout)
                 
                 if filename is None:
-                    log("PLAYBACK: Received end signal")
-                    break
-                
-                # Check if still running before playing
-                if not self.running:
+                    log("PLAYBACK: Received end signal - all audio played")
                     break
                 
                 # Play the audio file (run in thread to not block)
                 log(f"PLAYBACK: Playing file: {filename}")
                 
-                result = await loop.run_in_executor(
-                    None, self._stream_file, filename
-                )
-                
-                files_played += 1
-                log(f"PLAYBACK: Played file #{files_played}")
+                try:
+                    result = await loop.run_in_executor(
+                        None, self._stream_file, filename
+                    )
+                    files_played += 1
+                    log(f"PLAYBACK: Played file #{files_played}")
+                except Exception as e:
+                    log(f"PLAYBACK: Error playing file: {e}")
+                    # Continue to next file even if one fails
+                    files_played += 1
                 
             except asyncio.TimeoutError:
-                if not self.running:
+                # Only exit on timeout if not running AND queue is empty
+                if not self.running and self._playback_queue.empty():
+                    log("PLAYBACK: Timeout with empty queue - exiting")
                     break
                 continue
+            except asyncio.CancelledError:
+                # If cancelled, try to play remaining files quickly
+                log(f"PLAYBACK: Cancelled - draining remaining {self._playback_queue.qsize()} files")
+                while not self._playback_queue.empty():
+                    try:
+                        filename = self._playback_queue.get_nowait()
+                        if filename is None:
+                            break
+                        await loop.run_in_executor(None, self._stream_file, filename)
+                        files_played += 1
+                    except:
+                        break
+                raise  # Re-raise to properly handle cancellation
             except Exception as e:
-                if self.running:
-                    log(f"PLAYBACK: Error: {e}")
-                break
+                log(f"PLAYBACK: Error: {e}")
+                # Continue trying to play remaining files
+                continue
         
         log(f"PLAYBACK: Ended, played {files_played} files")
     
@@ -850,24 +970,49 @@ class EAGIHandler:
             # Wait for capture task to complete (it detects call end)
             await capture_task
             
-            log("Capture ended, stopping other tasks...")
+            log("Capture ended, waiting for playback to complete...")
             self.running = False
             
-            # Give receive/playback tasks a moment to finish gracefully
-            await asyncio.sleep(0.5)
+            # CRITICAL FIX: Wait for receive_task to finish and flush final audio
+            # This ensures the resampler is flushed and final audio is queued
+            try:
+                await asyncio.wait_for(receive_task, timeout=3.0)
+                log("Receive task completed - all audio queued")
+            except asyncio.TimeoutError:
+                log("Receive task timeout - cancelling")
+                receive_task.cancel()
+                try:
+                    await receive_task
+                except asyncio.CancelledError:
+                    pass
             
-            # Cancel pending tasks (including greeting if still running)
-            tasks_to_cancel = [receive_task, playback_task]
+            # CRITICAL FIX: Wait for playback to complete ALL queued files
+            # This ensures the final words are not cut off
+            # The playback_worker will exit when it receives None from the queue
+            try:
+                # Calculate reasonable timeout based on queue size
+                queue_size = self._playback_queue.qsize()
+                # Each file could be up to 500ms, plus processing time
+                playback_timeout = max(5.0, queue_size * 1.0 + 2.0)
+                log(f"Waiting for playback to complete ({queue_size} files in queue, timeout={playback_timeout:.0f}s)")
+                
+                await asyncio.wait_for(playback_task, timeout=playback_timeout)
+                log("Playback task completed - all audio played")
+            except asyncio.TimeoutError:
+                log(f"Playback timeout after {playback_timeout:.0f}s - some audio may be cut off")
+                playback_task.cancel()
+                try:
+                    await playback_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # Cancel greeting if still running (it should be done by now)
             if greeting_task and not greeting_task.done():
-                tasks_to_cancel.append(greeting_task)
-            
-            for task in tasks_to_cancel:
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+                greeting_task.cancel()
+                try:
+                    await greeting_task
+                except asyncio.CancelledError:
+                    pass
                     
         except Exception as e:
             log(f"Run error: {e}")
