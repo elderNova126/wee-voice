@@ -451,14 +451,31 @@ class EAGIHandler:
     # AUDIO FILE HANDLING
     # ========================================================================
     
-    def _write_audio_file(self, audio_data: bytes, file_id: int) -> str:
-        """Write audio to file for playback, return filename without extension"""
+    def _write_audio_file(self, audio_data: bytes, file_id: int, add_padding: bool = True) -> str:
+        """
+        Write audio to file for playback, return filename without extension.
+        
+        IMPORTANT: Adds silence padding at the end of each file to mask the gap
+        between sequential STREAM FILE commands. This prevents audible dropouts.
+        """
         filename = f"{AUDIO_TMP_DIR}/{self.session_id}_{file_id}"
         ulaw_path = f"{filename}.ulaw"
         
         try:
-            # Write as µ-law raw file (Asterisk native format)
+            # Convert to µ-law (Asterisk native format)
             ulaw_data = self._pcm_to_ulaw(audio_data)
+            
+            # Add silence padding at the end to mask inter-file gaps
+            # The gap between STREAM FILE commands is typically 20-50ms
+            # We add 60ms of silence to ensure smooth transitions
+            if add_padding:
+                # 60ms of µ-law silence at 8kHz = 480 samples
+                # In µ-law encoding, 0xFF (255) represents zero amplitude (silence)
+                # This is the standard µ-law silence byte
+                PADDING_SAMPLES = 480
+                silence_padding = bytes([0xFF] * PADDING_SAMPLES)
+                ulaw_data = ulaw_data + silence_padding
+            
             with open(ulaw_path, 'wb') as f:
                 f.write(ulaw_data)
             
@@ -749,24 +766,31 @@ class EAGIHandler:
         file_id = 0
         audio_accumulator = b''
         
-        # === ULTRA-LOW LATENCY buffer settings ===
-        # Trade-off: May have tiny gaps, but MUCH faster response
-        FIRST_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 0.25)  # 250ms for first chunk (FAST!)
-        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 0.5)     # 500ms for rest
-        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.15)      # 150ms minimum for flush
+        # === BUFFER SETTINGS FOR CONTINUOUS AUDIO ===
+        # CRITICAL: Larger buffers = fewer files = fewer gaps = smoother audio
+        # The file-based playback (STREAM FILE) has inherent latency between files.
+        # Using larger buffers creates fewer files with longer audio each,
+        # which dramatically reduces audible dropouts.
+        #
+        # Trade-off: Larger buffers = slightly higher initial latency, but much smoother audio
+        FIRST_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 0.6)   # 600ms for first chunk (balance speed vs smoothness)
+        MIN_PLAYBACK_SIZE = int(ASTERISK_RATE * 2 * 1.5)     # 1.5 seconds for subsequent chunks (smooth!)
+        FLUSH_THRESHOLD = int(ASTERISK_RATE * 2 * 0.3)       # 300ms minimum for flush (avoid tiny files)
         
         # Track silence for smart flushing
         last_audio_time = time.time()
-        SILENCE_FLUSH_MS = 150  # Flush after 150ms of silence (balances latency vs. complete phrases)
+        SILENCE_FLUSH_MS = 200  # Flush after 200ms of silence (longer to accumulate complete phrases)
         
         is_first_chunk = True  # Track if this is the first response
         
-        log(f"RECEIVE: Buffer config: first={FIRST_PLAYBACK_SIZE}b (250ms), normal={MIN_PLAYBACK_SIZE}b (500ms), flush={FLUSH_THRESHOLD}b (150ms)")
+        log(f"RECEIVE: Buffer config: first={FIRST_PLAYBACK_SIZE}b (600ms), normal={MIN_PLAYBACK_SIZE}b (1.5s), flush={FLUSH_THRESHOLD}b (300ms)")
         
         try:
             while self.running and self.ws:
                 try:
-                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.05)  # 50ms timeout
+                    # Use shorter timeout for more responsive audio buffering
+                    # This allows us to queue audio files more quickly
+                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.03)  # 30ms timeout
                     msg = json.loads(msg_str)
                     msg_type = msg.get("type")
                     
@@ -885,6 +909,9 @@ class EAGIHandler:
         
         CRITICAL: This worker continues until it receives None from the queue,
         ensuring ALL audio is played including the final words.
+        
+        PRE-BUFFERING: Waits for multiple files to be queued before starting
+        playback, ensuring the receiver stays ahead and preventing dropouts.
         """
         log("PLAYBACK: Starting playback worker")
         
@@ -897,6 +924,24 @@ class EAGIHandler:
         
         files_played = 0
         loop = asyncio.get_event_loop()
+        
+        # PRE-BUFFERING: Wait until we have at least 2 files queued
+        # This ensures the receiver stays ahead of playback, preventing
+        # the situation where playback catches up and causes gaps
+        PRE_BUFFER_FILES = 2
+        prebuffer_timeout = 3.0  # Maximum time to wait for pre-buffer
+        prebuffer_start = time.time()
+        
+        while self._playback_queue.qsize() < PRE_BUFFER_FILES:
+            if time.time() - prebuffer_start > prebuffer_timeout:
+                log(f"PLAYBACK: Pre-buffer timeout, starting with {self._playback_queue.qsize()} files")
+                break
+            if not self.running:
+                log("PLAYBACK: Stopping during pre-buffer (call ended)")
+                return
+            await asyncio.sleep(0.05)  # Check every 50ms
+        
+        log(f"PLAYBACK: Pre-buffer complete, {self._playback_queue.qsize()} files ready")
         
         # Continue until we receive the end signal (None) from the queue
         # IMPORTANT: Don't stop just because self.running=False - we need to 
@@ -912,14 +957,20 @@ class EAGIHandler:
                     break
                 
                 # Play the audio file (run in thread to not block)
-                log(f"PLAYBACK: Playing file: {filename}")
+                queue_depth = self._playback_queue.qsize()
+                
+                # DROPOUT DETECTION: If queue is empty or nearly empty, we're at risk
+                # of catching up to the receiver, which causes dropouts
+                if queue_depth == 0 and files_played > 0:
+                    log(f"PLAYBACK: ⚠️ Queue empty! May cause dropout after file #{files_played}")
                 
                 try:
                     result = await loop.run_in_executor(
                         None, self._stream_file, filename
                     )
                     files_played += 1
-                    log(f"PLAYBACK: Played file #{files_played}")
+                    if files_played <= 3 or files_played % 10 == 0:
+                        log(f"PLAYBACK: Played file #{files_played} (queue depth: {queue_depth})")
                 except Exception as e:
                     log(f"PLAYBACK: Error playing file: {e}")
                     # Continue to next file even if one fails
