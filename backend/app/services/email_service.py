@@ -80,8 +80,8 @@ class EmailService:
             smtp_port = getattr(settings, 'SMTP_PORT', 587)
             smtp_user = getattr(settings, 'SMTP_USER', None)
             smtp_password = getattr(settings, 'SMTP_PASSWORD', None)
-            use_tls = getattr(settings, 'SMTP_USE_TLS', False)
-            use_ssl = getattr(settings, 'SMTP_USE_SSL', True)  # SSL for port 465
+            use_tls = getattr(settings, 'SMTP_USE_TLS', True)  # TLS for port 587 (default)
+            use_ssl = getattr(settings, 'SMTP_USE_SSL', False)  # SSL for port 465
             
             # Check if credentials are provided
             if not smtp_user or not smtp_password:
