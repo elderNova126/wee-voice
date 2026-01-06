@@ -21,7 +21,9 @@ import {
   GlobeAltIcon,
   SignalIcon,
   BellAlertIcon,
+  PlusIcon,
 } from '@heroicons/react/24/outline'
+import { RequestNumberModal } from '../components/RequestNumberModal'
 
 interface Collaborator {
   id: number;
@@ -643,7 +645,8 @@ export const PhoneNumbersPage: React.FC = () => {
                 {t?.phoneNumbers?.addExistingNumber || 'Add Number'}
               </Button>
               <Button onClick={() => setShowRequestModal(true)} variant="outline" className="border-gray-300 dark:border-gray-600">
-                {t?.phoneNumbers?.requestNewNumber || 'Request New'}
+                <PlusIcon className="h-4 w-4 mr-2" />
+                {t?.phoneNumbers?.requestNewNumber || 'Request Virtual Number'}
               </Button>
             </div>
           </div>
@@ -1142,96 +1145,15 @@ export const PhoneNumbersPage: React.FC = () => {
         </div>
       )}
 
-      {/* Request Number Modal */}
-      {showRequestModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <Card className="max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-4">{t?.phoneNumbers?.requestNewPhoneNumber || 'Request New Phone Number'}</h2>
-            <form onSubmit={handleRequestNumber} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.phoneNumber || 'Phone Number'}</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.phone_number}
-                  onChange={(e) => setFormData({ ...formData, phone_number: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  placeholder={t?.phoneNumbers?.phoneNumberPlaceholderRequest || 'Enter desired phone number'}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.countryCode || 'Country Code'}</label>
-                <select
-                  value={formData.country_code}
-                  onChange={(e) => setFormData({ ...formData, country_code: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                >
-                  <option value="FR">{t.common.status === 'Statut' ? 'France (FR)' : 'France (FR)'}</option>
-                  <option value="US">{t.common.status === 'Statut' ? 'États-Unis (US)' : 'United States (US)'}</option>
-                  <option value="UK">{t.common.status === 'Statut' ? 'Royaume-Uni (UK)' : 'United Kingdom (UK)'}</option>
-                  <option value="DE">{t.common.status === 'Statut' ? 'Allemagne (DE)' : 'Germany (DE)'}</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessType || 'Business Type'}</label>
-                <select
-                  value={formData.business_type}
-                  onChange={(e) => setFormData({ ...formData, business_type: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                >
-                  <option value="company">{t?.phoneNumbers?.company || 'Company'}</option>
-                  <option value="individual">{t?.phoneNumbers?.individual || 'Individual'}</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessName || 'Business Name'}</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.business_name}
-                  onChange={(e) => setFormData({ ...formData, business_name: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.businessAddress || 'Business Address'}</label>
-                <textarea
-                  required
-                  value={formData.business_address}
-                  onChange={(e) => setFormData({ ...formData, business_address: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                  rows={3}
-                />
-              </div>
-
-              <div className="flex gap-3 pt-4">
-                <Button type="submit" className="flex-1" disabled={requestLoading}>
-                  {requestLoading ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      {t?.phoneNumbers?.requesting || 'Requesting...'}
-                    </>
-                  ) : (
-                    t?.phoneNumbers?.requestNewNumber || 'Request New Number'
-                  )}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowRequestModal(false)}
-                  className="flex-1"
-                >
-                  {t?.common?.cancel || 'Cancel'}
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
+      {/* Request Number Modal - Multi-step wizard for ordering virtual numbers */}
+      <RequestNumberModal
+        isOpen={showRequestModal}
+        onClose={() => setShowRequestModal(false)}
+        onSuccess={() => {
+          loadPhoneNumbers();
+          setShowRequestModal(false);
+        }}
+      />
 
       {/* Assign Agent Modal */}
       {showAssignAgentModal && selectedNumber && (
