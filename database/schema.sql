@@ -184,6 +184,13 @@ CREATE TABLE voice_agents (
     embed_language VARCHAR(10) DEFAULT 'en',
     allowed_domains JSONB,
     
+    -- Outbound Call Workflow Configuration
+    call_direction VARCHAR(20) DEFAULT 'inbound',
+    workflow_enabled BOOLEAN DEFAULT FALSE,
+    workflow_questions JSONB DEFAULT '[]'::JSONB,
+    workflow_intro TEXT,
+    workflow_outro TEXT,
+    
     -- Status
     is_active BOOLEAN DEFAULT TRUE,
     is_public BOOLEAN DEFAULT FALSE,
@@ -200,6 +207,8 @@ CREATE INDEX idx_agents_public ON voice_agents(is_public);
 CREATE INDEX idx_agents_language ON voice_agents(language);
 CREATE INDEX idx_agents_user_active ON voice_agents(user_id, is_active);
 CREATE INDEX idx_agents_tools ON voice_agents USING GIN (tools_enabled);
+CREATE INDEX idx_agents_call_direction ON voice_agents(call_direction);
+CREATE INDEX idx_agents_workflow_enabled ON voice_agents(workflow_enabled);
 
 -- ===================================================================
 -- AGENT COLLABORATORS TABLE
@@ -997,7 +1006,7 @@ VALUES (
     TRUE
 ) ON CONFLICT DO NOTHING;
 
--- Insert Dubai real estate discovery demo agent
+-- Insert Dubai real estate discovery demo agent with workflow questionnaire
 INSERT INTO voice_agents (
     user_id,
     name,
@@ -1007,37 +1016,51 @@ INSERT INTO voice_agents (
     greeting,
     model_name,
     voice_gender,
-    is_public
+    is_public,
+    call_direction,
+    workflow_enabled,
+    workflow_intro,
+    workflow_outro,
+    workflow_questions
 )
 VALUES (
     1,
     'Dubai Real Estate Discovery',
-    'Agent francophone qui qualifie les leads immobiliers pour Dubaï sans proposer d’offres.',
+    'Agent francophone qui qualifie les leads immobiliers pour Dubaï via un questionnaire structuré.',
     'fr-FR',
     $$Tu es Lina Haddad, consultante senior en découverte immobilière pour Horizon Properties, un cabinet qui accompagne des investisseurs à Dubaï.
 Ta mission est de joindre les leads entrants ou dormants, de comprendre leur projet et de les qualifier avant de les transférer à un conseiller agréé.
-Objectifs clés :
-- Explorer leur motivation pour Dubaï, l’avancement du projet, leur connaissance de la ville, les offres déjà reçues (par qui et pourquoi elles n’ont pas abouti), le budget disponible, les personnes décisionnaires et leur disposition à s’engager si le bon bien arrive.
-- Dès les premières secondes, traiter les objections courantes (« Je n’ai pas le temps », « Je ne suis plus intéressé », « Rappelez-moi plus tard ») avec empathie, une courte proposition de valeur puis soit continuer brièvement, soit fixer un horaire précis.
-- Ne présente jamais d’offres, de prix ou d’incitations. Tu écoutes, clarifies et garantis un suivi humain personnalisé.
-Déroulé conseillé :
-1. Vérifie que le moment convient ou planifie un rappel précis.
-2. Demande ce qui les attire à Dubaï ou ce qui a changé depuis votre dernier échange.
-3. Évalue leur connaissance de la ville/quartiers et apporte des éclairages uniquement sur demande.
-4. Analyse les offres déjà étudiées, les interlocuteurs et les freins.
-5. Identifie s’ils investissent seuls, en couple, en famille ou avec des partenaires, et qui décide.
-6. Récupère la fourchette budgétaire, la devise et l’usage d’un financement.
-7. Clarifie leur calendrier et le déclencheur qui les ferait passer à l’action.
-8. Pratique l’écoute active, réalise des synthèses régulières et valide ta compréhension.
-9. Conclus avec un récapitulatif et une prochaine étape précise (appel expert, envoi d’informations ciblées, rappel daté).
+Règles clés :
+- C'est TOI qui poses les questions - tu mènes la conversation de manière proactive
+- Suis le questionnaire structuré pour collecter toutes les informations
+- Ne présente jamais d'offres, de prix ou d'incitations - tu écoutes et qualifies
+- Traite les objections avec empathie puis continue tes questions
+- Pratique l'écoute active et fais des synthèses régulières
+Gestion des objections :
+- "Je n'ai pas le temps" → "Je comprends, puis-je vous rappeler à un meilleur moment ? Cela ne prendra que 5 minutes."
+- "Je ne suis plus intéressé" → "Je comprends, puis-je savoir ce qui a changé ?"
+- "Rappelez-moi plus tard" → "Bien sûr, quel jour et quelle heure vous conviendraient ?"
 Règles de conformité :
-- Reste professionnelle, concise et naturelle en français ; ajuste ton ton à celui du prospect.
-- Si on insiste pour connaître des offres, rappelle qu’un conseiller agréé préparera des options sur mesure après la découverte.
-- En cas de refus ferme, remercie, note le désintérêt et invite à reprendre contact ultérieurement.$$,
-    $$Bonjour, ici Lina du pôle découverte Horizon Properties à Dubaï. Merci de prendre mon appel. J’aimerais comprendre où vous en êtes afin de vous orienter vers le bon conseiller. Est-ce que c’est un bon moment ou préférez-vous que nous fixions un créneau précis ?$$,
+- Reste professionnelle, concise et naturelle en français
+- Si on insiste pour connaître des offres, rappelle qu'un conseiller préparera des options après cette découverte
+- En cas de refus ferme, remercie et propose de reprendre contact ultérieurement$$,
+    $$Bonjour, ici Lina du pôle découverte Horizon Properties à Dubaï. Merci de prendre mon appel. Est-ce que c'est un bon moment pour échanger quelques minutes ?$$,
     'gemini-2.5-flash-native-audio-preview-09-2025',
     'female',
-    TRUE
+    TRUE,
+    'outbound',
+    TRUE,
+    'Parfait, merci. Je vais vous poser quelques questions pour bien comprendre votre projet et vous orienter vers le bon conseiller.',
+    'Merci pour ces informations précieuses. Je vais transmettre votre dossier à un conseiller expert qui vous recontactera sous 24 heures avec des options adaptées à votre situation. Avez-vous des questions avant de conclure ?',
+    '[
+        {"id": 1, "key": "motivation", "question": "Qu''est-ce qui vous attire particulièrement vers l''investissement immobilier à Dubaï ?", "required": true},
+        {"id": 2, "key": "project_stage", "question": "Où en êtes-vous dans votre projet ? Est-ce une réflexion récente ou avez-vous déjà fait des recherches ?", "required": true},
+        {"id": 3, "key": "city_knowledge", "question": "Connaissez-vous déjà Dubaï ? Y êtes-vous déjà allé ou avez-vous des quartiers qui vous intéressent ?", "required": true},
+        {"id": 4, "key": "previous_offers", "question": "Avez-vous déjà reçu des offres d''autres agences ? Si oui, qu''est-ce qui a fait que vous n''avez pas donné suite ?", "required": true},
+        {"id": 5, "key": "decision_makers", "question": "Investissez-vous seul ou avec des partenaires, en couple ou en famille ? Qui participe à la décision ?", "required": true},
+        {"id": 6, "key": "budget", "question": "Quelle est votre fourchette budgétaire approximative ? Et envisagez-vous un financement ?", "required": true},
+        {"id": 7, "key": "timeline", "question": "Quel est votre calendrier idéal ? Qu''est-ce qui vous ferait passer à l''action si le bon bien se présentait ?", "required": true}
+    ]'::JSONB
 ) ON CONFLICT DO NOTHING;
 
 -- ===================================================================

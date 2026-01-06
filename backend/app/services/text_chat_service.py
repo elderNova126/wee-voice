@@ -144,8 +144,18 @@ class TextChatService:
         if not manager_contact:
             manager_contact = 'email: contact@company.com or phone: +1234567890'
         
+        # Build workflow instruction if enabled (for outbound calls/proactive chats)
+        workflow_instruction = ""
+        if getattr(self.agent, 'workflow_enabled', False) and getattr(self.agent, 'call_direction', 'inbound') == 'outbound':
+            workflow_instruction = self._build_workflow_instruction(lang_suffix)
+        
         # Build complete prompt with variable substitution
         complete_prompt = agent_identity + "\n\n"
+        
+        # Include workflow instruction if applicable
+        if workflow_instruction:
+            complete_prompt += workflow_instruction + "\n\n"
+        
         complete_prompt += conversation_style.replace("{agent_name}", self.agent.name) + "\n\n"
         
         if rag_note:
@@ -155,6 +165,48 @@ class TextChatService:
         complete_prompt += identity_rules
         
         return complete_prompt
+    
+    def _build_workflow_instruction(self, lang_suffix: str) -> str:
+        """Build the workflow/questionnaire instruction for outbound calls"""
+        
+        # Load the workflow template
+        workflow_template = load_prompt(f'workflow_outbound_{lang_suffix}.txt')
+        
+        if not workflow_template:
+            logger.warning(f"Workflow template not found for language: {lang_suffix}")
+            return ""
+        
+        # Get workflow intro and outro
+        workflow_intro = getattr(self.agent, 'workflow_intro', None) or ""
+        workflow_outro = getattr(self.agent, 'workflow_outro', None) or ""
+        
+        # Format the questions
+        workflow_questions = getattr(self.agent, 'workflow_questions', None) or []
+        questions_text = ""
+        
+        if workflow_questions:
+            for i, q in enumerate(workflow_questions, 1):
+                if isinstance(q, dict):
+                    question = q.get('question', '')
+                    key = q.get('key', f'question_{i}')
+                    required = q.get('required', True)
+                else:
+                    # Handle WorkflowQuestion objects
+                    question = getattr(q, 'question', '')
+                    key = getattr(q, 'key', f'question_{i}')
+                    required = getattr(q, 'required', True)
+                
+                req_marker = "*" if required else ""
+                questions_text += f"{i}. [{key}]{req_marker} {question}\n"
+        
+        # Substitute placeholders in template
+        workflow_instruction = workflow_template.replace("{workflow_intro}", workflow_intro)
+        workflow_instruction = workflow_instruction.replace("{workflow_questions}", questions_text)
+        workflow_instruction = workflow_instruction.replace("{workflow_outro}", workflow_outro)
+        
+        logger.info(f"Built workflow instruction for text chat agent {self.agent.id} with {len(workflow_questions)} questions")
+        
+        return workflow_instruction
     
     async def send_message(self, user_message: str) -> Dict[str, Any]:
         """

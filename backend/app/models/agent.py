@@ -40,6 +40,13 @@ class VoiceAgent(Base):
     # Interaction Mode
     interaction_mode = Column(String, default="voice")  # "voice", "text", or "both"
     
+    # Outbound Call Workflow Configuration
+    call_direction = Column(String, default="inbound")  # "inbound" or "outbound"
+    workflow_enabled = Column(Boolean, default=False)  # Enable structured questionnaire workflow
+    workflow_questions = Column(JSON, default=list)  # List of questions: [{id, question, key, required}]
+    workflow_intro = Column(Text, nullable=True)  # Message before starting questions
+    workflow_outro = Column(Text, nullable=True)  # Message after all questions answered
+    
     # Status
     is_active = Column(Boolean, default=True)
     is_public = Column(Boolean, default=False)  # For demo agents

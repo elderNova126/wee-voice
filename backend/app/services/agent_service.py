@@ -112,6 +112,11 @@ class FrenchVoiceAgentService:
         identity_enforcement = load_prompt('identity_rules.txt')
         context_rules = load_prompt('conversation_context_rules.txt')
         
+        # Load workflow template if workflow is enabled (for outbound calls)
+        workflow_instruction = ""
+        if getattr(self.agent, 'workflow_enabled', False) and getattr(self.agent, 'call_direction', 'inbound') == 'outbound':
+            workflow_instruction = self._build_workflow_instruction(lang_suffix)
+        
         # Get manager contact info and substitute in prompts (handle None)
         manager_contact = getattr(self.agent, 'manager_contact', None)
         if not manager_contact:
@@ -256,7 +261,39 @@ VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
         # Assemble complete system instruction (optimized and concise)
         # IMPORTANT: The agent's system_prompt defines the agent's identity and primary behavior
         # All other instructions are supplementary and should not override the agent's core identity
-        system_instruction = f"""=== YOUR IDENTITY AND ROLE (PRIMARY - ALWAYS FOLLOW THIS) ===
+        
+        # For outbound calls with workflow enabled, prioritize the workflow instructions
+        if workflow_instruction:
+            system_instruction = f"""=== YOUR IDENTITY AND ROLE (PRIMARY - ALWAYS FOLLOW THIS) ===
+{self.agent.system_prompt}
+
+{workflow_instruction}
+
+=== CONVERSATION STYLE GUIDELINES (Follow these while staying in character) ===
+{conversation_style}
+
+{rag_note}
+
+{callback_note}
+
+{identity_enforcement}
+
+{voice_instruction}
+
+{greeting_instruction}
+
+=== CRITICAL REMINDER FOR OUTBOUND CALLS ===
+- YOU ARE MAKING AN OUTBOUND CALL - You initiated this conversation
+- YOUR PRIMARY GOAL is to ask the questions in your workflow and collect answers
+- Follow the questionnaire structure - don't skip questions unless the prospect firmly refuses
+- Be proactive: YOU lead the conversation, YOU ask the questions
+- Handle objections with empathy, then redirect back to your questions
+- Summarize answers periodically to show you're listening
+- If the prospect asks questions, answer briefly then return to YOUR questions
+- NO EMOJIS: Keep professional conversations emoji-free
+- INTRODUCE YOURSELF ONLY ONCE in the greeting"""
+        else:
+            system_instruction = f"""=== YOUR IDENTITY AND ROLE (PRIMARY - ALWAYS FOLLOW THIS) ===
 {self.agent.system_prompt}
 
 === CONVERSATION STYLE GUIDELINES (Follow these while staying in character) ===
@@ -301,6 +338,48 @@ VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
             logger.warning(f"No tools loaded for agent {self.agent.id}")
         
         return config
+    
+    def _build_workflow_instruction(self, lang_suffix: str) -> str:
+        """Build the workflow/questionnaire instruction for outbound calls"""
+        
+        # Load the workflow template
+        workflow_template = load_prompt(f'workflow_outbound_{lang_suffix}.txt')
+        
+        if not workflow_template:
+            logger.warning(f"Workflow template not found for language: {lang_suffix}")
+            return ""
+        
+        # Get workflow intro and outro
+        workflow_intro = getattr(self.agent, 'workflow_intro', None) or ""
+        workflow_outro = getattr(self.agent, 'workflow_outro', None) or ""
+        
+        # Format the questions
+        workflow_questions = getattr(self.agent, 'workflow_questions', None) or []
+        questions_text = ""
+        
+        if workflow_questions:
+            for i, q in enumerate(workflow_questions, 1):
+                if isinstance(q, dict):
+                    question = q.get('question', '')
+                    key = q.get('key', f'question_{i}')
+                    required = q.get('required', True)
+                else:
+                    # Handle WorkflowQuestion objects
+                    question = getattr(q, 'question', '')
+                    key = getattr(q, 'key', f'question_{i}')
+                    required = getattr(q, 'required', True)
+                
+                req_marker = "*" if required else ""
+                questions_text += f"{i}. [{key}]{req_marker} {question}\n"
+        
+        # Substitute placeholders in template
+        workflow_instruction = workflow_template.replace("{workflow_intro}", workflow_intro)
+        workflow_instruction = workflow_instruction.replace("{workflow_questions}", questions_text)
+        workflow_instruction = workflow_instruction.replace("{workflow_outro}", workflow_outro)
+        
+        logger.info(f"Built workflow instruction for agent {self.agent.id} with {len(workflow_questions)} questions")
+        
+        return workflow_instruction
     
     def _load_tools(self):
         """Load and configure tools for the agent"""

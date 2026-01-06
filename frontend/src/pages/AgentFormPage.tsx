@@ -10,12 +10,25 @@ import {
   UserPlusIcon,
   XMarkIcon,
   ChatBubbleLeftRightIcon,
-  MicrophoneIcon
+  MicrophoneIcon,
+  PlusIcon,
+  PhoneArrowUpRightIcon,
+  PhoneArrowDownLeftIcon,
+  ClipboardDocumentListIcon,
+  ChevronUpIcon,
+  ChevronDownIcon
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, api, librariesAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
 import { LoadingSpinner } from '@/components/ui'
+
+interface WorkflowQuestion {
+  id: number
+  question: string
+  key: string
+  required: boolean
+}
 
 interface AgentFormData {
   name: string
@@ -30,6 +43,12 @@ interface AgentFormData {
   is_active: boolean
   rag_enabled?: boolean
   interaction_mode?: string
+  // Workflow/Questionnaire settings
+  call_direction?: string
+  workflow_enabled?: boolean
+  workflow_questions?: WorkflowQuestion[]
+  workflow_intro?: string
+  workflow_outro?: string
 }
 
 interface KnowledgeDocument {
@@ -61,7 +80,13 @@ export default function AgentFormPage() {
     is_public: false,
     is_active: true,
     rag_enabled: false,
-    interaction_mode: 'voice'
+    interaction_mode: 'voice',
+    // Workflow defaults
+    call_direction: 'inbound',
+    workflow_enabled: false,
+    workflow_questions: [],
+    workflow_intro: '',
+    workflow_outro: ''
   })
 
   const [loading, setLoading] = useState(false)
@@ -106,7 +131,13 @@ export default function AgentFormPage() {
         is_public: agent.is_public ?? false,
         is_active: agent.is_active ?? true,
         rag_enabled: agent.rag_enabled ?? false,
-        interaction_mode: agent.interaction_mode || 'voice'
+        interaction_mode: agent.interaction_mode || 'voice',
+        // Workflow fields
+        call_direction: agent.call_direction || 'inbound',
+        workflow_enabled: agent.workflow_enabled ?? false,
+        workflow_questions: agent.workflow_questions || [],
+        workflow_intro: agent.workflow_intro || '',
+        workflow_outro: agent.workflow_outro || ''
       })
       
       // Load documents if agent exists
@@ -164,7 +195,13 @@ export default function AgentFormPage() {
         is_public: false,
         is_active: true,
         rag_enabled: library.rag_enabled ?? false,
-        interaction_mode: library.interaction_mode || 'voice'
+        interaction_mode: library.interaction_mode || 'voice',
+        // Workflow fields
+        call_direction: library.call_direction || 'inbound',
+        workflow_enabled: library.workflow_enabled ?? false,
+        workflow_questions: library.workflow_questions || [],
+        workflow_intro: library.workflow_intro || '',
+        workflow_outro: library.workflow_outro || ''
       })
       toast.success(`Loaded template: ${library.name}`)
     } catch (error) {
@@ -579,6 +616,28 @@ export default function AgentFormPage() {
               </p>
             </div>
 
+            {/* Call Direction */}
+            <div>
+              <label htmlFor="call_direction" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                {t.common.status === 'Statut' ? 'Direction d\'appel' : 'Call Direction'}
+              </label>
+              <select
+                id="call_direction"
+                name="call_direction"
+                value={formData.call_direction}
+                onChange={handleChange}
+                className="mt-1 w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 focus:ring-offset-0 transition-all"
+              >
+                <option value="inbound">📥 {t.common.status === 'Statut' ? 'Entrant (réception d\'appels)' : 'Inbound (receive calls)'}</option>
+                <option value="outbound">📤 {t.common.status === 'Statut' ? 'Sortant (appels vers prospects)' : 'Outbound (call prospects)'}</option>
+              </select>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {t.common.status === 'Statut' 
+                  ? 'Pour les appels sortants, l\'agent mène la conversation et pose des questions structurées.' 
+                  : 'For outbound calls, the agent leads the conversation and asks structured questions.'}
+              </p>
+            </div>
+
             {/* Checkboxes */}
             <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-gray-700/50">
               <label className="flex cursor-pointer items-center gap-2">
@@ -620,6 +679,22 @@ export default function AgentFormPage() {
                   {t.agentForm.ragEnabled}
                 </span>
               </label>
+
+              {/* Workflow/Questionnaire Toggle - only visible for outbound calls */}
+              {formData.call_direction === 'outbound' && (
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    name="workflow_enabled"
+                    checked={formData.workflow_enabled}
+                    onChange={handleChange}
+                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    📋 {t.common.status === 'Statut' ? 'Activer le questionnaire structuré' : 'Enable structured questionnaire'}
+                  </span>
+                </label>
+              )}
             </div>
           </div>
 
@@ -643,6 +718,213 @@ export default function AgentFormPage() {
             </p>
           </div>
         </div>
+
+        {/* Workflow/Questionnaire Section - Only for outbound calls with workflow enabled */}
+        {formData.call_direction === 'outbound' && formData.workflow_enabled && (
+          <div className="mt-8 border-t border-gray-200 dark:border-gray-700/60 pt-8">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500">
+                <ClipboardDocumentListIcon className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {t.common.status === 'Statut' ? 'Questionnaire Structuré' : 'Structured Questionnaire'}
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  {t.common.status === 'Statut' 
+                    ? 'Définissez les questions que l\'agent posera aux prospects dans l\'ordre.' 
+                    : 'Define the questions the agent will ask prospects in order.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Workflow Intro */}
+            <div className="mb-6">
+              <label htmlFor="workflow_intro" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                {t.common.status === 'Statut' ? 'Message d\'introduction (avant les questions)' : 'Introduction message (before questions)'}
+              </label>
+              <textarea
+                id="workflow_intro"
+                name="workflow_intro"
+                rows={2}
+                value={formData.workflow_intro}
+                onChange={handleChange}
+                placeholder={t.common.status === 'Statut' 
+                  ? 'Ex: "Merci de prendre mon appel. J\'aurais quelques questions à vous poser pour mieux comprendre votre projet..."' 
+                  : 'Ex: "Thank you for taking my call. I have a few questions to better understand your project..."'}
+                className="w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 transition-all resize-none"
+              />
+            </div>
+
+            {/* Questions List */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t.common.status === 'Statut' ? 'Questions à poser' : 'Questions to ask'} ({formData.workflow_questions?.length || 0})
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newQuestion: WorkflowQuestion = {
+                      id: Date.now(),
+                      question: '',
+                      key: `question_${(formData.workflow_questions?.length || 0) + 1}`,
+                      required: true
+                    }
+                    setFormData(prev => ({
+                      ...prev,
+                      workflow_questions: [...(prev.workflow_questions || []), newQuestion]
+                    }))
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 transition"
+                >
+                  <PlusIcon className="h-4 w-4" />
+                  {t.common.status === 'Statut' ? 'Ajouter une question' : 'Add question'}
+                </button>
+              </div>
+
+              {(!formData.workflow_questions || formData.workflow_questions.length === 0) ? (
+                <div className="text-center py-8 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+                  <ClipboardDocumentListIcon className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    {t.common.status === 'Statut' 
+                      ? 'Aucune question définie. Cliquez sur "Ajouter une question" pour commencer.' 
+                      : 'No questions defined. Click "Add question" to start.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {formData.workflow_questions.map((q, index) => (
+                    <div key={q.id} className="flex items-start gap-3 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700">
+                      {/* Order controls */}
+                      <div className="flex flex-col gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (index === 0) return
+                            const newQuestions = [...(formData.workflow_questions || [])]
+                            const temp = newQuestions[index - 1]
+                            newQuestions[index - 1] = newQuestions[index]
+                            newQuestions[index] = temp
+                            setFormData(prev => ({ ...prev, workflow_questions: newQuestions }))
+                          }}
+                          disabled={index === 0}
+                          className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <ChevronUpIcon className="h-4 w-4" />
+                        </button>
+                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 text-center">{index + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (index === (formData.workflow_questions?.length || 0) - 1) return
+                            const newQuestions = [...(formData.workflow_questions || [])]
+                            const temp = newQuestions[index + 1]
+                            newQuestions[index + 1] = newQuestions[index]
+                            newQuestions[index] = temp
+                            setFormData(prev => ({ ...prev, workflow_questions: newQuestions }))
+                          }}
+                          disabled={index === (formData.workflow_questions?.length || 0) - 1}
+                          className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <ChevronDownIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      {/* Question content */}
+                      <div className="flex-1 space-y-2">
+                        <input
+                          type="text"
+                          value={q.question}
+                          onChange={(e) => {
+                            const newQuestions = [...(formData.workflow_questions || [])]
+                            newQuestions[index] = { ...newQuestions[index], question: e.target.value }
+                            setFormData(prev => ({ ...prev, workflow_questions: newQuestions }))
+                          }}
+                          placeholder={t.common.status === 'Statut' 
+                            ? 'Ex: "Quel est votre budget pour ce projet ?"' 
+                            : 'Ex: "What is your budget for this project?"'}
+                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900/60 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-400"
+                        />
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              value={q.key}
+                              onChange={(e) => {
+                                const newQuestions = [...(formData.workflow_questions || [])]
+                                newQuestions[index] = { ...newQuestions[index], key: e.target.value.replace(/\s+/g, '_').toLowerCase() }
+                                setFormData(prev => ({ ...prev, workflow_questions: newQuestions }))
+                              }}
+                              placeholder={t.common.status === 'Statut' ? 'Clé (ex: budget)' : 'Key (ex: budget)'}
+                              className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900/60 text-gray-700 dark:text-gray-300 focus:ring-1 focus:ring-primary-400"
+                            />
+                          </div>
+                          <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
+                            <input
+                              type="checkbox"
+                              checked={q.required}
+                              onChange={(e) => {
+                                const newQuestions = [...(formData.workflow_questions || [])]
+                                newQuestions[index] = { ...newQuestions[index], required: e.target.checked }
+                                setFormData(prev => ({ ...prev, workflow_questions: newQuestions }))
+                              }}
+                              className="h-3 w-3 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            />
+                            {t.common.status === 'Statut' ? 'Obligatoire' : 'Required'}
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Delete button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newQuestions = (formData.workflow_questions || []).filter((_, i) => i !== index)
+                          setFormData(prev => ({ ...prev, workflow_questions: newQuestions }))
+                        }}
+                        className="p-2 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition"
+                      >
+                        <TrashIcon className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Workflow Outro */}
+            <div>
+              <label htmlFor="workflow_outro" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                {t.common.status === 'Statut' ? 'Message de conclusion (après les questions)' : 'Conclusion message (after questions)'}
+              </label>
+              <textarea
+                id="workflow_outro"
+                name="workflow_outro"
+                rows={2}
+                value={formData.workflow_outro}
+                onChange={handleChange}
+                placeholder={t.common.status === 'Statut' 
+                  ? 'Ex: "Merci pour ces informations. Un conseiller vous recontactera sous 24h pour discuter des options adaptées à votre situation."' 
+                  : 'Ex: "Thank you for this information. An advisor will contact you within 24 hours to discuss options suited to your situation."'}
+                className="w-full rounded-xl border border-gray-300 dark:border-gray-600 bg-white/80 dark:bg-gray-900/60 px-3 py-2 text-sm text-gray-900 dark:text-white shadow-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-400 transition-all resize-none"
+              />
+            </div>
+
+            {/* Workflow Tips */}
+            <div className="mt-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <h4 className="text-sm font-medium text-amber-800 dark:text-amber-300 mb-2">
+                💡 {t.common.status === 'Statut' ? 'Conseils pour un questionnaire efficace' : 'Tips for an effective questionnaire'}
+              </h4>
+              <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
+                <li>{t.common.status === 'Statut' ? 'Commencez par des questions simples pour établir la confiance' : 'Start with simple questions to build trust'}</li>
+                <li>{t.common.status === 'Statut' ? 'Limitez-vous à 5-7 questions pour ne pas fatiguer le prospect' : 'Limit to 5-7 questions to avoid fatiguing the prospect'}</li>
+                <li>{t.common.status === 'Statut' ? 'Posez les questions sensibles (budget, décisionnaire) vers le milieu' : 'Ask sensitive questions (budget, decision-maker) in the middle'}</li>
+                <li>{t.common.status === 'Statut' ? 'Utilisez des clés descriptives pour le suivi (ex: budget, timeline, decision_maker)' : 'Use descriptive keys for tracking (ex: budget, timeline, decision_maker)'}</li>
+              </ul>
+            </div>
+          </div>
+        )}
 
         {/* Knowledge Base Section */}
         {isEdit && formData.rag_enabled && (

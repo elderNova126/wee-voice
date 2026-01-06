@@ -11,6 +11,14 @@ from app.models import get_db, User, VoiceAgent, AgentCollaborator
 router = APIRouter()
 
 
+class WorkflowQuestion(BaseModel):
+    """A single question in the workflow questionnaire"""
+    id: int
+    question: str  # The actual question to ask
+    key: str  # Identifier for the answer (e.g., "budget", "timeline", "decision_maker")
+    required: bool = True  # Whether this question must be answered
+
+
 class AgentCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -27,6 +35,12 @@ class AgentCreate(BaseModel):
     crm_enabled: bool = False
     is_public: bool = False
     interaction_mode: str = "voice"  # "voice", "text", or "both"
+    # Workflow/Questionnaire settings for outbound calls
+    call_direction: str = "inbound"  # "inbound" or "outbound"
+    workflow_enabled: bool = False  # Enable structured questionnaire
+    workflow_questions: List[WorkflowQuestion] = []  # Questions to ask in order
+    workflow_intro: Optional[str] = None  # Message before starting questions
+    workflow_outro: Optional[str] = None  # Message after all questions answered
 
 
 class AgentUpdate(BaseModel):
@@ -46,6 +60,12 @@ class AgentUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_public: Optional[bool] = None
     interaction_mode: Optional[str] = None
+    # Workflow/Questionnaire settings for outbound calls
+    call_direction: Optional[str] = None
+    workflow_enabled: Optional[bool] = None
+    workflow_questions: Optional[List[WorkflowQuestion]] = None
+    workflow_intro: Optional[str] = None
+    workflow_outro: Optional[str] = None
 
 
 class AgentResponse(BaseModel):
@@ -65,6 +85,13 @@ class AgentResponse(BaseModel):
     is_public: bool
     rag_enabled: bool = False  # RAG/Knowledge Base enabled status
     interaction_mode: str = "voice"  # "voice", "text", or "both"
+    # Workflow/Questionnaire settings
+    call_direction: str = "inbound"
+    workflow_enabled: bool = False
+    workflow_questions: List[WorkflowQuestion] = Field(default_factory=list)
+    workflow_intro: Optional[str] = None
+    workflow_outro: Optional[str] = None
+    # Metadata
     created_at: Any
     phone_number: Optional[str] = None
     phone_number_status: Optional[str] = None
@@ -114,6 +141,14 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
                 finally:
                     temp_db.close()
     
+    # Parse workflow questions if stored as JSON
+    workflow_questions = getattr(agent, 'workflow_questions', None) or []
+    if workflow_questions and isinstance(workflow_questions, list):
+        workflow_questions = [
+            WorkflowQuestion(**q) if isinstance(q, dict) else q 
+            for q in workflow_questions
+        ]
+    
     return AgentResponse(
         id=agent.id,
         name=agent.name,
@@ -130,6 +165,13 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
         is_public=agent.is_public,
         rag_enabled=agent.rag_enabled,
         interaction_mode=getattr(agent, 'interaction_mode', 'voice'),
+        # Workflow fields
+        call_direction=getattr(agent, 'call_direction', 'inbound') or 'inbound',
+        workflow_enabled=getattr(agent, 'workflow_enabled', False) or False,
+        workflow_questions=workflow_questions,
+        workflow_intro=getattr(agent, 'workflow_intro', None),
+        workflow_outro=getattr(agent, 'workflow_outro', None),
+        # Metadata
         created_at=agent.created_at,
         phone_number=phone_number,
         phone_number_status=phone_status,
