@@ -78,6 +78,10 @@ export const agentsAPI = {
   delete: (id: number) => api.delete(`/agents/${id}`),
   
   getDemoAgent: () => api.get('/agents/public/demo'),
+  
+  getStats: (id: number) => api.get(`/agents/${id}/stats`),
+  
+  getLeads: (id: number) => api.get(`/agents/${id}/leads`),
 }
 
 // Calls API

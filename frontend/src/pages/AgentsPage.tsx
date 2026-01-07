@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   PlusIcon,
   MicrophoneIcon,
@@ -40,6 +40,7 @@ type FilterType = 'all' | 'my' | 'team'
 
 export default function AgentsPage() {
   const t = useTranslation()
+  const navigate = useNavigate()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [testingAgent, setTestingAgent] = useState<Agent | null>(null)
@@ -281,7 +282,8 @@ export default function AgentsPage() {
             return (
             <div
               key={agent.id}
-              className={`group relative bg-white dark:bg-gray-800 rounded-2xl sm:rounded-3xl shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1 ${
+              onClick={() => navigate(`/dashboard/agents/${agent.id}/view`)}
+              className={`group relative bg-white dark:bg-gray-800 rounded-2xl sm:rounded-3xl shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden transform hover:-translate-y-1 cursor-pointer ${
                 agent.role === 'collaborator'
                   ? 'border-2 border-purple-200 dark:border-purple-800'
                   : 'border border-gray-200 dark:border-gray-700'
@@ -384,9 +386,9 @@ export default function AgentsPage() {
               </div>
 
               {/* Action Buttons */}
-              <div className="px-4 sm:px-5 lg:px-6 pb-4 sm:pb-5 lg:pb-6 pt-0 flex gap-1.5 sm:gap-2">
+              <div className="px-4 sm:px-5 lg:px-6 pb-4 sm:pb-5 lg:pb-6 pt-0 flex gap-1.5 sm:gap-2" onClick={(e) => e.stopPropagation()}>
                 <button
-                  onClick={() => handleTest(agent)}
+                  onClick={(e) => { e.stopPropagation(); handleTest(agent); }}
                   className={`flex-1 inline-flex justify-center items-center gap-1.5 sm:gap-2 rounded-lg sm:rounded-xl bg-gradient-to-r ${colorScheme.badge} ${colorScheme.hover} text-white font-semibold text-xs sm:text-sm py-2 sm:py-2.5 lg:py-3 transition-all shadow-sm hover:shadow-md transform hover:scale-[1.02]`}
                 >
                   <PlayIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
@@ -397,6 +399,7 @@ export default function AgentsPage() {
                   <>
                     <Link
                       to={`/dashboard/agents/${agent.id}/embed`}
+                      onClick={(e) => e.stopPropagation()}
                       className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 transition-all shadow-sm hover:shadow-md"
                       title="Embed Widget"
                     >
@@ -404,6 +407,7 @@ export default function AgentsPage() {
                     </Link>
                     <Link
                       to={`/dashboard/agents/${agent.id}/edit`}
+                      onClick={(e) => e.stopPropagation()}
                       className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition-all shadow-md hover:shadow-lg"
                       title={t.agentsPage.edit}
                     >
@@ -413,7 +417,7 @@ export default function AgentsPage() {
                 )}
                 {(agent.is_owner || agent.permissions?.includes('delete')) && (
                   <button
-                    onClick={() => handleDelete(agent.id)}
+                    onClick={(e) => { e.stopPropagation(); handleDelete(agent.id); }}
                     className="p-2 sm:p-2.5 lg:p-3 rounded-lg sm:rounded-xl bg-gray-100 hover:bg-red-100 dark:bg-gray-700 dark:hover:bg-red-900 text-red-600 dark:text-red-400 transition-all shadow-md hover:shadow-lg"
                     title={t.agentsPage.delete}
                   >

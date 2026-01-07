@@ -11,6 +11,7 @@ import ResetPasswordPage from './pages/ResetPasswordPage'
 import ResendVerificationPage from './pages/ResendVerificationPage'
 import DashboardPage from './pages/DashboardPage'
 import AgentsPage from './pages/AgentsPage'
+import AgentDetailPage from './pages/AgentDetailPage'
 import AgentFormPage from './pages/AgentFormPage'
 import AgentDocumentsPage from './pages/AgentDocumentsPage'
 import CallsPage from './pages/CallsPage'
@@ -76,6 +77,11 @@ function App() {
         <Route path="/dashboard/agents" element={
           <ProtectedRoute>
             <AgentsPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/agents/:agentId/view" element={
+          <ProtectedRoute>
+            <AgentDetailPage />
           </ProtectedRoute>
         } />
         <Route path="/dashboard/agents/new" element={
