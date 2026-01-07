@@ -819,24 +819,30 @@ async def update_phone_number(
     db.commit()
     db.refresh(phone_number)
     
-    logger.info(f"Updated phone number {phone_number.phone_number}")
+    logger.info(f"Updated phone number {phone_number.phone_number}, sip_config_changed={sip_config_changed}")
     
-    # Regenerate Asterisk config if SIP settings changed
+    # Regenerate Asterisk config if SIP settings changed OR if phone has SIP credentials
+    # This ensures the credentials file is always up to date
+    has_sip_creds = bool(phone_number.sip_username and phone_number.sip_password and phone_number.sip_domain)
+    should_regenerate = sip_config_changed or has_sip_creds
+    
     asterisk_config_result = None
-    if sip_config_changed:
-        logger.info(f"SIP configuration changed for {phone_number.phone_number}, regenerating Asterisk config...")
+    if should_regenerate:
+        logger.info(f"Regenerating Asterisk config for {phone_number.phone_number} (changed={sip_config_changed}, has_creds={has_sip_creds})")
         try:
             from app.services.asterisk_config_service import get_asterisk_config_service
             asterisk_service = get_asterisk_config_service()
             asterisk_config_result = asterisk_service.regenerate_config(db)
             
             if asterisk_config_result['success']:
-                logger.info("Asterisk configuration regenerated successfully")
+                logger.info(f"Asterisk configuration regenerated successfully: {asterisk_config_result.get('phone_numbers_count', 0)} phones, zadarma_creds={asterisk_config_result.get('zadarma_credentials_written', False)}")
             else:
                 logger.warning(f"Asterisk config regeneration had issues: {asterisk_config_result.get('errors', [])}")
         except Exception as e:
-            logger.error(f"Error regenerating Asterisk config: {e}")
+            logger.error(f"Error regenerating Asterisk config: {e}", exc_info=True)
             asterisk_config_result = {"success": False, "errors": [str(e)]}
+    else:
+        logger.info(f"No SIP config regeneration needed for {phone_number.phone_number}")
     
     # Parse JSON fields for response
     response = {

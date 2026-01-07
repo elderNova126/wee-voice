@@ -333,16 +333,72 @@ if command -v asterisk &> /dev/null; then
     touch "$ASTERISK_CONF/extensions_weevoice.conf"
     
     # Create Zadarma credentials file
-    # Uses environment variables if available, otherwise creates placeholder
-    ZADARMA_USER="${ZADARMA_SIP_LOGIN:-}"
-    ZADARMA_PASS="${ZADARMA_SIP_PASSWORD:-}"
+    # Priority: 1. Database (existing credentials), 2. Environment variables, 3. Placeholder
+    ZADARMA_USER=""
+    ZADARMA_PASS=""
+    ZADARMA_DOMAIN="sip.zadarma.com"
+    CRED_SOURCE=""
     
+    # Try to get credentials from database first
+    if [ -n "$DATABASE_URL" ]; then
+        log_info "Checking database for existing SIP credentials..."
+        
+        # Extract credentials from DATABASE_URL and query
+        if [[ "$DATABASE_URL" == postgresql://* ]]; then
+            # PostgreSQL database
+            DB_CREDS=$(echo "$DATABASE_URL" | sed -E 's|postgresql://([^:]+):([^@]+)@([^/]+)/(.+)|\1 \2 \3 \4|')
+            DB_USER=$(echo $DB_CREDS | cut -d' ' -f1)
+            DB_PASS=$(echo $DB_CREDS | cut -d' ' -f2)
+            DB_HOST=$(echo $DB_CREDS | cut -d' ' -f3)
+            DB_NAME=$(echo $DB_CREDS | cut -d' ' -f4)
+            
+            # Query for SIP credentials
+            SIP_RESULT=$(PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -t -c \
+                "SELECT sip_username, sip_password, sip_domain FROM phone_numbers WHERE sip_username IS NOT NULL AND sip_password IS NOT NULL AND sip_domain IS NOT NULL LIMIT 1;" 2>/dev/null | tr -d ' ')
+            
+            if [ -n "$SIP_RESULT" ] && [ "$SIP_RESULT" != "||" ]; then
+                ZADARMA_USER=$(echo "$SIP_RESULT" | cut -d'|' -f1)
+                ZADARMA_PASS=$(echo "$SIP_RESULT" | cut -d'|' -f2)
+                ZADARMA_DOMAIN=$(echo "$SIP_RESULT" | cut -d'|' -f3)
+                CRED_SOURCE="database"
+                log_info "✓ Found SIP credentials in database (user: $ZADARMA_USER)"
+            fi
+        elif [[ "$DATABASE_URL" == sqlite://* ]]; then
+            # SQLite database
+            DB_PATH=$(echo "$DATABASE_URL" | sed 's|sqlite:///||')
+            if [ -f "$DB_PATH" ]; then
+                SIP_RESULT=$(sqlite3 "$DB_PATH" \
+                    "SELECT sip_username, sip_password, sip_domain FROM phone_numbers WHERE sip_username IS NOT NULL AND sip_password IS NOT NULL AND sip_domain IS NOT NULL LIMIT 1;" 2>/dev/null)
+                
+                if [ -n "$SIP_RESULT" ]; then
+                    ZADARMA_USER=$(echo "$SIP_RESULT" | cut -d'|' -f1)
+                    ZADARMA_PASS=$(echo "$SIP_RESULT" | cut -d'|' -f2)
+                    ZADARMA_DOMAIN=$(echo "$SIP_RESULT" | cut -d'|' -f3)
+                    CRED_SOURCE="database"
+                    log_info "✓ Found SIP credentials in database (user: $ZADARMA_USER)"
+                fi
+            fi
+        fi
+    fi
+    
+    # Fallback to environment variables if not found in database
+    if [ -z "$ZADARMA_USER" ] || [ -z "$ZADARMA_PASS" ]; then
+        if [ -n "${ZADARMA_SIP_LOGIN:-}" ] && [ -n "${ZADARMA_SIP_PASSWORD:-}" ]; then
+            ZADARMA_USER="${ZADARMA_SIP_LOGIN}"
+            ZADARMA_PASS="${ZADARMA_SIP_PASSWORD}"
+            ZADARMA_DOMAIN="${ZADARMA_SIP_DOMAIN:-sip.zadarma.com}"
+            CRED_SOURCE="environment"
+            log_info "Using SIP credentials from environment variables"
+        fi
+    fi
+    
+    # Create credentials file
     if [ -n "$ZADARMA_USER" ] && [ -n "$ZADARMA_PASS" ]; then
-        log_info "Creating Zadarma credentials from environment variables..."
+        log_info "Creating Zadarma credentials from $CRED_SOURCE..."
         cat > "$ASTERISK_CONF/pjsip_zadarma_credentials.conf" << ZADEOF
 ;==============================================================================
 ; Zadarma SIP Authentication and Registration
-; Auto-generated during deployment from environment variables
+; Auto-generated during deployment from $CRED_SOURCE
 ; Can be updated via Phone Numbers page in WeeVoice
 ;==============================================================================
 
@@ -356,17 +412,17 @@ password=${ZADARMA_PASS}
 type=registration
 transport=transport-udp
 outbound_auth=zadarma-auth
-server_uri=sip:sip.zadarma.com
-client_uri=sip:${ZADARMA_USER}@sip.zadarma.com
+server_uri=sip:${ZADARMA_DOMAIN}
+client_uri=sip:${ZADARMA_USER}@${ZADARMA_DOMAIN}
 retry_interval=60
 max_retries=10
 expiration=3600
 line=yes
 endpoint=zadarma-endpoint
 ZADEOF
-        log_info "✓ Zadarma credentials configured"
+        log_info "✓ Zadarma credentials configured from $CRED_SOURCE"
     else
-        log_warn "ZADARMA_SIP_LOGIN and ZADARMA_SIP_PASSWORD not set"
+        log_warn "No SIP credentials found in database or environment"
         log_warn "Creating placeholder - configure via Phone Numbers page after deployment"
         cat > "$ASTERISK_CONF/pjsip_zadarma_credentials.conf" << 'ZADEOF'
 ;==============================================================================
