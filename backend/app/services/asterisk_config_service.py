@@ -394,6 +394,7 @@ class AsteriskConfigService:
         
         Returns True on success, False if credentials not found.
         """
+        print(f"=== generate_zadarma_credentials CALLED === phones={len(phones) if phones else 0}, db={db is not None}")
         logger.info(f"generate_zadarma_credentials called: phones={len(phones) if phones else 0}, db={db is not None}")
         
         sip_login = None
@@ -478,6 +479,7 @@ endpoint=zadarma-endpoint
             
             # Log what we're writing (mask password for security)
             masked_password = sip_password[:2] + '***' + sip_password[-2:] if len(sip_password) > 4 else '****'
+            print(f"=== WRITING CREDENTIALS === username={sip_login}, password={masked_password}, domain={sip_domain}")
             logger.info(f"Writing credentials: username={sip_login}, password={masked_password}, domain={sip_domain}")
             
             # Read current content for comparison
@@ -485,12 +487,16 @@ endpoint=zadarma-endpoint
             if self.zadarma_credentials_file.exists():
                 try:
                     old_content = self.zadarma_credentials_file.read_text()
+                    print(f"=== Current file has {len(old_content)} bytes ===")
                     logger.info(f"Current file has {len(old_content)} bytes")
                 except Exception as e:
+                    print(f"=== Could not read current file: {e} ===")
                     logger.warning(f"Could not read current file: {e}")
             
             # Write new content
+            print(f"=== WRITING TO FILE: {self.zadarma_credentials_file} ===")
             self.zadarma_credentials_file.write_text(content)
+            print(f"=== WROTE {len(content)} bytes ===")
             logger.info(f"Wrote {len(content)} bytes to file")
             
             # Verify the write by reading back
@@ -568,6 +574,9 @@ endpoint=zadarma-endpoint
         
         Returns status dict with success/failure and details.
         """
+        print("=== reload_asterisk CALLED ===")
+        logger.info("=== reload_asterisk START ===")
+        
         result = {
             'success': False,
             'pjsip_reload': None,
@@ -729,6 +738,9 @@ endpoint=zadarma-endpoint
         
         Returns status dict with details.
         """
+        print("=== ASTERISK CONFIG SERVICE: regenerate_config CALLED ===")
+        logger.info("=== ASTERISK regenerate_config START ===")
+        
         result = {
             'success': False,
             'phone_numbers_count': 0,
