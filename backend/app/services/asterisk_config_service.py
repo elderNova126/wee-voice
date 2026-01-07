@@ -339,10 +339,39 @@ class AsteriskConfigService:
         
         return '\n'.join(config_lines)
     
-    def generate_zadarma_credentials(self, phones: List[Dict[str, Any]] = None) -> bool:
+    def _get_any_phone_with_sip_credentials(self, db: Session) -> Optional[Dict[str, Any]]:
+        """Get any phone number with SIP credentials (doesn't require agent assignment)"""
+        try:
+            result = db.execute(text("""
+                SELECT 
+                    id, phone_number, sip_username, sip_password, sip_domain
+                FROM phone_numbers
+                WHERE sip_username IS NOT NULL 
+                  AND sip_password IS NOT NULL
+                  AND sip_domain IS NOT NULL
+                  AND sip_username != ''
+                  AND sip_password != ''
+                ORDER BY id
+                LIMIT 1
+            """)).first()
+            
+            if result:
+                return {
+                    'id': result[0],
+                    'phone_number': result[1],
+                    'sip_username': result[2],
+                    'sip_password': result[3],
+                    'sip_domain': result[4]
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching phone with SIP credentials: {e}")
+            return None
+    
+    def generate_zadarma_credentials(self, db: Session = None, phones: List[Dict[str, Any]] = None) -> bool:
         """
         Generate Zadarma credentials file from phone number SIP settings.
-        Uses the first phone number with SIP credentials configured.
+        Uses the first phone number with SIP credentials configured (any phone, no agent required).
         Falls back to environment variables if no phone has credentials.
         
         This file is #tryinclude'd from pjsip.conf.
@@ -354,7 +383,7 @@ class AsteriskConfigService:
         sip_domain = None
         source = None
         
-        # First try to get credentials from phone numbers
+        # First try to get credentials from the phones list (if provided)
         if phones:
             for phone in phones:
                 if phone.get('sip_username') and phone.get('sip_password'):
@@ -364,6 +393,16 @@ class AsteriskConfigService:
                     source = f"phone number {phone['phone_number']}"
                     logger.info(f"Using SIP credentials from {source}")
                     break
+        
+        # If no credentials from phones list, try to get ANY phone with SIP credentials
+        if (not sip_login or not sip_password) and db:
+            phone_with_creds = self._get_any_phone_with_sip_credentials(db)
+            if phone_with_creds:
+                sip_login = phone_with_creds['sip_username']
+                sip_password = phone_with_creds['sip_password']
+                sip_domain = phone_with_creds.get('sip_domain', 'sip.zadarma.com')
+                source = f"phone number {phone_with_creds['phone_number']} (no agent)"
+                logger.info(f"Using SIP credentials from {source}")
         
         # Fallback to environment variables
         if not sip_login or not sip_password:
@@ -377,17 +416,32 @@ class AsteriskConfigService:
             return False
         
         content = f""";==============================================================================
-; Zadarma SIP Authentication
+; Zadarma SIP Authentication and Registration
 ; Generated: {datetime.utcnow().isoformat()}
 ; Source: {source}
 ; DO NOT EDIT - This file is auto-generated from phone number SIP settings
 ;==============================================================================
 
+;--- Authentication ---
 [zadarma-auth]
 type=auth
 auth_type=userpass
 username={sip_login}
 password={sip_password}
+
+;--- Outbound Registration ---
+; This tells Asterisk to register with Zadarma to receive incoming calls
+[zadarma-registration]
+type=registration
+transport=transport-udp
+outbound_auth=zadarma-auth
+server_uri=sip:{sip_domain}
+client_uri=sip:{sip_login}@{sip_domain}
+retry_interval=60
+max_retries=10
+expiration=3600
+line=yes
+endpoint=zadarma-endpoint
 """
         
         try:
@@ -563,7 +617,8 @@ password={sip_password}
                 return result
             
             # Generate Zadarma credentials from phone number SIP settings
-            result['zadarma_credentials_written'] = self.generate_zadarma_credentials(phones)
+            # Pass db session so it can look for ANY phone with SIP credentials (not just those with agents)
+            result['zadarma_credentials_written'] = self.generate_zadarma_credentials(db=db, phones=phones)
             if not result['zadarma_credentials_written']:
                 result['errors'].append("No SIP credentials found - configure SIP settings in Phone Numbers page")
             
