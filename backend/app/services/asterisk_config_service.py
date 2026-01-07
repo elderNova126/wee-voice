@@ -587,14 +587,24 @@ endpoint=zadarma-endpoint
         
         try:
             # Check if Asterisk is running
+            # Try with sudo first (for www-data user), fallback to direct if that fails
             check_cmd = subprocess.run(
-                ['asterisk', '-rx', 'core show version'],
+                ['sudo', 'asterisk', '-rx', 'core show version'],
                 capture_output=True, text=True, timeout=10
             )
             
             if check_cmd.returncode != 0:
-                result['errors'].append("Asterisk is not running or not accessible")
-                return result
+                # Try without sudo (might work if running as root or asterisk user)
+                check_cmd = subprocess.run(
+                    ['asterisk', '-rx', 'core show version'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if check_cmd.returncode != 0:
+                    print(f"=== Asterisk check failed: {check_cmd.stderr} ===")
+                    result['errors'].append("Asterisk is not running or not accessible")
+                    return result
+            
+            print(f"=== Asterisk is running: {check_cmd.stdout.strip()[:50]}... ===")
             
             # For credential changes to take effect, we need to:
             # 1. Unregister and stop the registration
@@ -612,43 +622,40 @@ endpoint=zadarma-endpoint
             except Exception as e:
                 logger.warning(f"Could not read credentials file: {e}")
             
+            # Helper to run asterisk commands (with sudo for www-data user)
+            def run_ast(cmd: str, timeout: int = 10) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    ['sudo', 'asterisk', '-rx', cmd],
+                    capture_output=True, text=True, timeout=timeout
+                )
+            
             # Step 1: Unregister current registration
-            logger.info("Step 1: Sending unregister to Zadarma...")
-            unreg_result = subprocess.run(
-                ['asterisk', '-rx', 'pjsip send unregister zadarma-registration'],
-                capture_output=True, text=True, timeout=10
-            )
-            logger.info(f"Unregister result: {unreg_result.stdout.strip() if unreg_result.stdout else 'sent'}")
+            print("=== Step 1: Unregistering Zadarma ===")
+            unreg_result = run_ast('pjsip send unregister zadarma-registration')
+            print(f"Unregister: {unreg_result.stdout.strip() if unreg_result.stdout else 'sent'}")
             
             # Step 2: Wait for unregister to complete
             time.sleep(2)
             
             # Step 3: Check current auth settings BEFORE reload
-            auth_before = subprocess.run(
-                ['asterisk', '-rx', 'pjsip show auth zadarma-auth'],
-                capture_output=True, text=True, timeout=10
-            )
-            logger.info(f"Auth BEFORE reload:\n{auth_before.stdout}")
+            print("=== Step 3: Auth BEFORE reload ===")
+            auth_before = run_ast('pjsip show auth zadarma-auth')
+            for line in auth_before.stdout.split('\n'):
+                if 'username' in line.lower():
+                    print(f"  {line.strip()}")
             
             # Step 4: Reload the ENTIRE PJSIP stack including outbound registration
-            # This is the key - we need to reload res_pjsip_outbound_registration.so
-            logger.info("Step 4: Reloading PJSIP outbound registration module...")
+            print("=== Step 4: Reloading PJSIP modules ===")
             
             # First reload main pjsip (loads new auth)
-            pjsip_cmd = subprocess.run(
-                ['asterisk', '-rx', 'module reload res_pjsip.so'],
-                capture_output=True, text=True, timeout=30
-            )
-            logger.info(f"PJSIP reload: {pjsip_cmd.stdout.strip() if pjsip_cmd.stdout else 'OK'}")
+            pjsip_cmd = run_ast('module reload res_pjsip.so', timeout=30)
+            print(f"PJSIP reload: {pjsip_cmd.stdout.strip() if pjsip_cmd.stdout else 'OK'}")
             
             time.sleep(1)
             
             # Then reload outbound registration (this picks up new auth)
-            reg_module_cmd = subprocess.run(
-                ['asterisk', '-rx', 'module reload res_pjsip_outbound_registration.so'],
-                capture_output=True, text=True, timeout=30
-            )
-            logger.info(f"Outbound registration module reload: {reg_module_cmd.stdout.strip() if reg_module_cmd.stdout else 'OK'}")
+            reg_module_cmd = run_ast('module reload res_pjsip_outbound_registration.so', timeout=30)
+            print(f"Registration module reload: {reg_module_cmd.stdout.strip() if reg_module_cmd.stdout else 'OK'}")
             
             result['pjsip_reload'] = {
                 'returncode': pjsip_cmd.returncode,
@@ -660,18 +667,15 @@ endpoint=zadarma-endpoint
             time.sleep(3)
             
             # Step 6: Check auth settings AFTER reload
-            auth_after = subprocess.run(
-                ['asterisk', '-rx', 'pjsip show auth zadarma-auth'],
-                capture_output=True, text=True, timeout=10
-            )
-            logger.info(f"Auth AFTER reload:\n{auth_after.stdout}")
+            print("=== Step 6: Auth AFTER reload ===")
+            auth_after = run_ast('pjsip show auth zadarma-auth')
+            for line in auth_after.stdout.split('\n'):
+                if 'username' in line.lower():
+                    print(f"  {line.strip()}")
             
             # Step 7: Force re-registration with (potentially new) credentials
-            logger.info("Step 7: Triggering new registration...")
-            reg_cmd = subprocess.run(
-                ['asterisk', '-rx', 'pjsip send register zadarma-registration'],
-                capture_output=True, text=True, timeout=10
-            )
+            print("=== Step 7: Triggering new registration ===")
+            reg_cmd = run_ast('pjsip send register zadarma-registration')
             result['registration_reload'] = {
                 'returncode': reg_cmd.returncode,
                 'stdout': reg_cmd.stdout,
@@ -680,20 +684,18 @@ endpoint=zadarma-endpoint
             
             # Step 8: Wait and check registration status
             time.sleep(5)
-            status_cmd = subprocess.run(
-                ['asterisk', '-rx', 'pjsip show registrations'],
-                capture_output=True, text=True, timeout=10
-            )
-            logger.info(f"Registration status after reload:\n{status_cmd.stdout}")
+            print("=== Step 8: Registration status ===")
+            status_cmd = run_ast('pjsip show registrations')
+            for line in status_cmd.stdout.split('\n'):
+                if 'zadarma' in line.lower():
+                    print(f"  {line.strip()}")
             
             if pjsip_cmd.returncode != 0:
                 result['errors'].append(f"PJSIP reload failed: {pjsip_cmd.stderr}")
             
             # Reload dialplan
-            dialplan_cmd = subprocess.run(
-                ['asterisk', '-rx', 'dialplan reload'],
-                capture_output=True, text=True, timeout=30
-            )
+            print("=== Reloading dialplan ===")
+            dialplan_cmd = run_ast('dialplan reload', timeout=30)
             result['dialplan_reload'] = {
                 'returncode': dialplan_cmd.returncode,
                 'stdout': dialplan_cmd.stdout,
