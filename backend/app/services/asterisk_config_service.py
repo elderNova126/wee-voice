@@ -345,6 +345,7 @@ class AsteriskConfigService:
     def _get_any_phone_with_sip_credentials(self, db: Session) -> Optional[Dict[str, Any]]:
         """Get any phone number with SIP credentials (doesn't require agent assignment)"""
         try:
+            logger.info("Querying database for any phone with SIP credentials...")
             result = db.execute(text("""
                 SELECT 
                     id, phone_number, sip_username, sip_password, sip_domain
@@ -359,16 +360,27 @@ class AsteriskConfigService:
             """)).first()
             
             if result:
-                return {
+                phone_data = {
                     'id': result[0],
                     'phone_number': result[1],
                     'sip_username': result[2],
                     'sip_password': result[3],
                     'sip_domain': result[4]
                 }
-            return None
+                logger.info(f"Found phone with SIP credentials: id={phone_data['id']}, number={phone_data['phone_number']}, user={phone_data['sip_username']}")
+                return phone_data
+            else:
+                logger.warning("No phone numbers with SIP credentials found in database")
+                # Debug: count all phones and phones with credentials
+                total = db.execute(text("SELECT COUNT(*) FROM phone_numbers")).scalar()
+                with_creds = db.execute(text("""
+                    SELECT COUNT(*) FROM phone_numbers 
+                    WHERE sip_username IS NOT NULL AND sip_username != ''
+                """)).scalar()
+                logger.info(f"Database has {total} total phones, {with_creds} with sip_username set")
+                return None
         except Exception as e:
-            logger.error(f"Error fetching phone with SIP credentials: {e}")
+            logger.error(f"Error fetching phone with SIP credentials: {e}", exc_info=True)
             return None
     
     def generate_zadarma_credentials(self, db: Session = None, phones: List[Dict[str, Any]] = None) -> bool:
@@ -381,6 +393,8 @@ class AsteriskConfigService:
         
         Returns True on success, False if credentials not found.
         """
+        logger.info(f"generate_zadarma_credentials called: phones={len(phones) if phones else 0}, db={db is not None}")
+        
         sip_login = None
         sip_password = None
         sip_domain = None
@@ -388,34 +402,44 @@ class AsteriskConfigService:
         
         # First try to get credentials from the phones list (if provided)
         if phones:
+            logger.info(f"Checking {len(phones)} phones from list for SIP credentials")
             for phone in phones:
+                logger.debug(f"Phone {phone.get('phone_number')}: username={phone.get('sip_username')}, domain={phone.get('sip_domain')}")
                 if phone.get('sip_username') and phone.get('sip_password'):
                     sip_login = phone['sip_username']
                     sip_password = phone['sip_password']
                     sip_domain = phone.get('sip_domain', 'sip.zadarma.com')
                     source = f"phone number {phone['phone_number']}"
-                    logger.info(f"Using SIP credentials from {source}")
+                    logger.info(f"Found SIP credentials from {source}: user={sip_login}, domain={sip_domain}")
                     break
         
         # If no credentials from phones list, try to get ANY phone with SIP credentials
         if (not sip_login or not sip_password) and db:
+            logger.info("No credentials from phones list, checking database for any phone with SIP...")
             phone_with_creds = self._get_any_phone_with_sip_credentials(db)
             if phone_with_creds:
                 sip_login = phone_with_creds['sip_username']
                 sip_password = phone_with_creds['sip_password']
                 sip_domain = phone_with_creds.get('sip_domain', 'sip.zadarma.com')
                 source = f"phone number {phone_with_creds['phone_number']} (no agent)"
-                logger.info(f"Using SIP credentials from {source}")
+                logger.info(f"Found SIP credentials from {source}: user={sip_login}, domain={sip_domain}")
+            else:
+                logger.warning("No phone with SIP credentials found in database")
         
         # Fallback to environment variables
         if not sip_login or not sip_password:
+            logger.info("Checking environment variables for SIP credentials...")
             sip_login = os.getenv('ZADARMA_SIP_LOGIN')
             sip_password = os.getenv('ZADARMA_SIP_PASSWORD')
             sip_domain = os.getenv('ZADARMA_SIP_DOMAIN', 'sip.zadarma.com')
-            source = "environment variables"
+            if sip_login and sip_password:
+                source = "environment variables"
+                logger.info(f"Found SIP credentials from environment: user={sip_login}")
+            else:
+                logger.warning("No SIP credentials in environment variables")
         
         if not sip_login or not sip_password:
-            logger.warning("No SIP credentials found in phone numbers or environment variables")
+            logger.error("No SIP credentials found anywhere - phone numbers, database, or environment")
             return False
         
         content = f""";==============================================================================
@@ -448,16 +472,26 @@ endpoint=zadarma-endpoint
 """
         
         try:
+            logger.info(f"Writing Zadarma credentials to {self.zadarma_credentials_file}")
+            logger.info(f"File path exists: {self.zadarma_credentials_file.exists()}, parent exists: {self.zadarma_credentials_file.parent.exists()}")
+            
             self.zadarma_credentials_file.write_text(content)
+            
             # Set restrictive permissions (owner read/write only)
             try:
-                os.chmod(self.zadarma_credentials_file, 0o600)
-            except:
-                pass  # May fail on Windows
-            logger.info(f"Wrote Zadarma credentials to {self.zadarma_credentials_file} (from {source})")
+                os.chmod(self.zadarma_credentials_file, 0o640)
+                logger.info(f"Set permissions 640 on {self.zadarma_credentials_file}")
+            except Exception as perm_err:
+                logger.warning(f"Could not set permissions: {perm_err}")
+            
+            logger.info(f"Successfully wrote Zadarma credentials to {self.zadarma_credentials_file} (from {source})")
             return True
+        except PermissionError as e:
+            logger.error(f"Permission denied writing Zadarma credentials to {self.zadarma_credentials_file}: {e}")
+            logger.error(f"Check file ownership and permissions. Backend runs as www-data.")
+            return False
         except Exception as e:
-            logger.error(f"Failed to write Zadarma credentials: {e}")
+            logger.error(f"Failed to write Zadarma credentials to {self.zadarma_credentials_file}: {e}", exc_info=True)
             return False
     
     def write_config_files(self, pjsip_content: str, extensions_content: str) -> bool:
