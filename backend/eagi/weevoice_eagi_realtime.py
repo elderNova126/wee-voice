@@ -2,10 +2,11 @@
 """
 WeeVoice Real-Time EAGI Script for Asterisk AI Voice Agent
 
-This script uses the SAME agent configuration and Gemini integration
-as the web agent (FrenchVoiceAgentService).
+This script routes incoming calls to the correct AI agent based on the
+called DID (phone number). It supports multiple phone numbers, each with
+their own SIP configuration and assigned agent.
 
-Place in: /var/lib/asterisk/agi-bin/weevoice_eagi.py
+Place in: /var/lib/asterisk/agi-bin/weevoice_eagi_realtime.py
 """
 
 import os
@@ -17,6 +18,7 @@ import time
 import logging
 import signal
 import threading
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from collections import deque
@@ -62,12 +64,38 @@ FRAME_BYTES_24K = 960      # 20ms at 24kHz (480 samples * 2 bytes)
 
 # High quality mode - set via environment or channel variable
 # When True, sends 24kHz directly to Asterisk (for SIP/WebRTC channels)
-# HIGH_QUALITY_MODE = os.environ.get('WEEVOICE_HIGH_QUALITY', 'false').lower() == 'true'
-HIGH_QUALITY_MODE = 'true'
+HIGH_QUALITY_MODE = os.environ.get('WEEVOICE_HIGH_QUALITY', 'true').lower() == 'true'
 
 # Temp directory for audio files
 TEMP_AUDIO_DIR = Path('/tmp/weevoice_audio')
 TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def normalize_phone_number(number: str) -> str:
+    """
+    Normalize phone number for database lookup.
+    Handles various formats and returns E.164 format (+XXXXXXXXXXX)
+    """
+    if not number:
+        return ""
+    
+    # Remove all non-digit characters except +
+    normalized = re.sub(r'[^\d+]', '', number)
+    
+    # Handle empty string
+    if not normalized:
+        return ""
+    
+    # Ensure + prefix for international format
+    if not normalized.startswith('+'):
+        # If starts with 00, replace with +
+        if normalized.startswith('00'):
+            normalized = '+' + normalized[2:]
+        # If it looks like an international number (10+ digits), add +
+        elif len(normalized) >= 10:
+            normalized = '+' + normalized
+    
+    return normalized
 
 
 class AGI:
@@ -159,14 +187,15 @@ class AudioBuffer:
 
 class WeeVoiceEAGI:
     """
-    EAGI handler that uses the SAME FrenchVoiceAgentService as the web agent.
-    This ensures identical voice, prompts, and behavior.
+    EAGI handler that routes calls to the correct agent based on the called DID.
+    Supports multiple phone numbers with different SIP configurations.
     """
     
     def __init__(self):
         self.agi = AGI()
         self.call_id = ""
         self.caller_id = ""
+        self.called_did = ""  # The phone number that was called
         self.running = False
         self._audio_fd = None
         self._resample_state_in = None
@@ -175,6 +204,7 @@ class WeeVoiceEAGI:
         # These will be set from database
         self.agent = None
         self.call = None
+        self.phone_number = None  # PhoneNumber record
         self.agent_service = None
         self.db = None
         
@@ -224,56 +254,152 @@ class WeeVoiceEAGI:
             logger.error(f"Resample output error: {e}")
             return audio_24k
     
+    def _extract_called_did(self, env: Dict[str, str]) -> str:
+        """
+        Extract the called DID (phone number) from AGI environment.
+        
+        The DID can come from various sources depending on the call type:
+        - agi_extension: The dialed extension
+        - agi_dnid: The original dialed number
+        - EXTEN channel variable
+        - CALLERID(dnid): Dialed number ID
+        - FROM_DID channel variable (set in extensions.conf)
+        """
+        # Try FROM_DID first (custom variable set in extensions.conf)
+        from_did = self.agi.get_var('FROM_DID')
+        if from_did and from_did not in ('', 's', 'h'):
+            logger.info(f"Got DID from FROM_DID: {from_did}")
+            return normalize_phone_number(from_did)
+        
+        # Try agi_dnid (Dialed Number Identification)
+        dnid = env.get('agi_dnid', '')
+        if dnid and dnid not in ('', 's', 'unknown'):
+            logger.info(f"Got DID from agi_dnid: {dnid}")
+            return normalize_phone_number(dnid)
+        
+        # Try agi_extension
+        extension = env.get('agi_extension', '')
+        if extension and len(extension) >= 7:  # Likely a phone number, not internal ext
+            logger.info(f"Got DID from agi_extension: {extension}")
+            return normalize_phone_number(extension)
+        
+        # Try EXTEN channel variable
+        exten = self.agi.get_var('EXTEN')
+        if exten and len(exten) >= 7:
+            logger.info(f"Got DID from EXTEN: {exten}")
+            return normalize_phone_number(exten)
+        
+        # Try agi_calleridname (sometimes contains DID info)
+        callerid_name = env.get('agi_calleridname', '')
+        if callerid_name and callerid_name.startswith('+'):
+            logger.info(f"Got DID from agi_calleridname: {callerid_name}")
+            return normalize_phone_number(callerid_name)
+        
+        logger.warning("Could not extract DID from AGI environment")
+        return ""
+    
     def _setup_from_database(self) -> bool:
         """
-        Load agent and call from database - SAME as audiosocket_handler.py
-        This ensures we get the same agent configuration as web calls.
-        Falls back to environment variables if database is not available.
+        Load agent and phone number from database based on the called DID.
+        Routes calls to the correct agent based on which phone number was called.
         """
         try:
             # Import models
             from app.models.database import SessionLocal
             from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
+            from sqlalchemy import text
             
             logger.info("Connecting to database...")
             self.db = SessionLocal()
             
-            # Find phone number with SIP config (same logic as audiosocket_handler)
-            phone = self.db.query(PhoneNumber).filter(
-                PhoneNumber.agent_id.isnot(None),
-                PhoneNumber.sip_username.isnot(None)
-            ).first()
+            phone = None
             
-            if not phone:
-                logger.warning("No phone number with SIP config found, trying first agent...")
-                # Fallback: try to get any agent
-                self.agent = self.db.query(VoiceAgent).first()
-                if not self.agent:
-                    logger.error("No agents in database - will use fallback mode")
-                    return self._setup_fallback_mode()
-            else:
-                logger.info(f"Found phone: {phone.phone_number}, agent_id: {phone.agent_id}")
+            # First try to find phone number by the called DID
+            if self.called_did:
+                logger.info(f"Looking up phone number by DID: {self.called_did}")
                 
-                # Get agent (SAME as audiosocket_handler)
-                self.agent = self.db.query(VoiceAgent).filter(
-                    VoiceAgent.id == phone.agent_id
+                # Try exact match first
+                phone = self.db.query(PhoneNumber).filter(
+                    PhoneNumber.phone_number == self.called_did,
+                    PhoneNumber.agent_id.isnot(None)
                 ).first()
                 
-                if not self.agent:
-                    # Fallback to first agent
-                    self.agent = self.db.query(VoiceAgent).first()
+                # Try without + prefix
+                if not phone and self.called_did.startswith('+'):
+                    did_without_plus = self.called_did[1:]
+                    phone = self.db.query(PhoneNumber).filter(
+                        PhoneNumber.phone_number == did_without_plus,
+                        PhoneNumber.agent_id.isnot(None)
+                    ).first()
+                
+                # Try LIKE search (handles format variations)
+                if not phone:
+                    # Remove all non-digits for comparison
+                    did_digits = re.sub(r'\D', '', self.called_did)
+                    if len(did_digits) >= 7:
+                        # Search for numbers ending with these digits
+                        result = self.db.execute(text("""
+                            SELECT id FROM phone_numbers 
+                            WHERE REPLACE(REPLACE(REPLACE(phone_number, '+', ''), ' ', ''), '-', '') LIKE :pattern
+                            AND agent_id IS NOT NULL
+                            LIMIT 1
+                        """), {"pattern": f"%{did_digits[-10:]}"}).first()
+                        
+                        if result:
+                            phone = self.db.query(PhoneNumber).filter(
+                                PhoneNumber.id == result[0]
+                            ).first()
+                
+                if phone:
+                    logger.info(f"Found phone number: {phone.phone_number}, agent_id: {phone.agent_id}")
+                else:
+                    logger.warning(f"No phone number found for DID: {self.called_did}")
             
-            if not self.agent:
-                logger.error("No agent found in database")
+            # Fallback: Find any phone number with SIP config and agent
+            if not phone:
+                logger.warning("Falling back to first available phone number with SIP config...")
+                phone = self.db.query(PhoneNumber).filter(
+                    PhoneNumber.agent_id.isnot(None),
+                    PhoneNumber.sip_username.isnot(None)
+                ).first()
+                
+                if phone:
+                    logger.info(f"Using fallback phone: {phone.phone_number}, agent_id: {phone.agent_id}")
+            
+            if not phone:
+                logger.error("No phone numbers with agents configured in database")
                 return self._setup_fallback_mode()
             
-            logger.info(f"Using agent: {self.agent.name} (ID: {self.agent.id})")
-            logger.info(f"  - Language: {self.agent.language}")
-            logger.info(f"  - Voice Gender: {getattr(self.agent, 'voice_gender', 'default')}")
-            logger.info(f"  - Voice ID: {getattr(self.agent, 'voice_id', 'default')}")
-            logger.info(f"  - Greeting: {self.agent.greeting[:50] if self.agent.greeting else 'None'}...")
+            self.phone_number = phone
             
-            # Create call record (SAME as audiosocket_handler)
+            # Get the agent assigned to this phone number
+            self.agent = self.db.query(VoiceAgent).filter(
+                VoiceAgent.id == phone.agent_id
+            ).first()
+            
+            if not self.agent:
+                logger.error(f"Agent {phone.agent_id} not found for phone {phone.phone_number}")
+                # Try fallback to first active agent
+                self.agent = self.db.query(VoiceAgent).filter(
+                    VoiceAgent.is_active == True
+                ).first()
+            
+            if not self.agent:
+                logger.error("No agents found in database")
+                return self._setup_fallback_mode()
+            
+            logger.info(f"=" * 50)
+            logger.info(f"CALL ROUTING RESOLVED:")
+            logger.info(f"  Called DID: {self.called_did}")
+            logger.info(f"  Phone Number: {phone.phone_number} (ID: {phone.id})")
+            logger.info(f"  Agent: {self.agent.name} (ID: {self.agent.id})")
+            logger.info(f"  Language: {self.agent.language}")
+            logger.info(f"  Voice Gender: {getattr(self.agent, 'voice_gender', 'default')}")
+            logger.info(f"  Voice ID: {getattr(self.agent, 'voice_id', 'default')}")
+            logger.info(f"  Greeting: {self.agent.greeting[:50] if self.agent.greeting else 'None'}...")
+            logger.info(f"=" * 50)
+            
+            # Create call record
             self.call = Call(
                 user_id=self.agent.user_id,
                 agent_id=self.agent.id,
@@ -344,8 +470,8 @@ class WeeVoiceEAGI:
             self.db = None  # No database in fallback mode
             
             logger.info(f"Fallback agent: {self.agent.name}")
-            logger.info(f"  - Voice: {self.agent.voice_id}")
-            logger.info(f"  - Greeting: {self.agent.greeting[:50]}...")
+            logger.info(f"  Voice: {self.agent.voice_id}")
+            logger.info(f"  Greeting: {self.agent.greeting[:50]}...")
             
             return True
             
@@ -574,7 +700,7 @@ class WeeVoiceEAGI:
     async def run(self):
         """Main EAGI execution"""
         logger.info("=" * 60)
-        logger.info("WeeVoice EAGI Started (Using FrenchVoiceAgentService)")
+        logger.info("WeeVoice EAGI Started (Multi-Number Routing)")
         logger.info(f"Audio Mode: {'HIGH QUALITY (16kHz)' if HIGH_QUALITY_MODE else 'STANDARD (8kHz PSTN)'}")
         logger.info("=" * 60)
         
@@ -586,16 +712,25 @@ class WeeVoiceEAGI:
             self.caller_id = env.get('agi_callerid', 'Unknown')
             channel = env.get('agi_channel', 'unknown')
             
+            # Extract the called DID (phone number that was dialed)
+            self.called_did = self._extract_called_did(env)
+            
             logger.info(f"Call ID: {self.call_id}")
             logger.info(f"Caller: {self.caller_id}")
+            logger.info(f"Called DID: {self.called_did}")
             logger.info(f"Channel: {channel}")
             
-            # Step 1: Load agent from database (SAME as audiosocket_handler)
+            # Log all AGI variables for debugging
+            logger.debug("AGI Environment Variables:")
+            for key, value in env.items():
+                logger.debug(f"  {key}: {value}")
+            
+            # Step 1: Load agent from database based on called DID
             if not self._setup_from_database():
                 self.agi.verbose("WeeVoice: Database Error", 1)
                 return
             
-            # Step 2: Create FrenchVoiceAgentService (SAME as web agent)
+            # Step 2: Create FrenchVoiceAgentService
             if not self._setup_agent_service():
                 self.agi.verbose("WeeVoice: Agent Service Error", 1)
                 return

@@ -366,7 +366,7 @@ export const PhoneNumbersPage: React.FC = () => {
     
     setEditLoading(true);
     try {
-      await api.put(`/phone-numbers/${selectedNumber.id}`, {
+      const response = await api.put(`/phone-numbers/${selectedNumber.id}`, {
         business_name: editData.business_name,
         sip_websocket_url: editData.sip_websocket_url,
         sip_transport: editData.sip_transport,
@@ -383,11 +383,44 @@ export const PhoneNumbersPage: React.FC = () => {
       
       await loadPhoneNumbers();
       setShowEditModal(false);
-      toast.success('Phone number settings updated successfully');
+      
+      // Check if Asterisk config was updated
+      if (response.data?.asterisk_config_updated) {
+        toast.success('Phone number updated & Asterisk config regenerated!');
+      } else if (response.data?.asterisk_config_updated === false) {
+        toast.success('Phone number updated (Asterisk config update had issues)');
+      } else {
+        toast.success('Phone number settings updated successfully');
+      }
     } catch (error: any) {
       toast.error('Failed to update: ' + (error.response?.data?.detail || error.message));
     } finally {
       setEditLoading(false);
+    }
+  };
+
+  // Regenerate Asterisk configuration manually
+  const handleRegenerateAsteriskConfig = async () => {
+    try {
+      toast.loading('Regenerating Asterisk configuration...', { id: 'asterisk-regen' });
+      const response = await api.post('/asterisk/regenerate');
+      
+      if (response.data?.success) {
+        toast.success(
+          `Asterisk config regenerated for ${response.data.phone_numbers_count} phone number(s)`,
+          { id: 'asterisk-regen' }
+        );
+      } else {
+        toast.error(
+          'Configuration regeneration had issues: ' + (response.data?.errors?.join(', ') || 'Unknown error'),
+          { id: 'asterisk-regen' }
+        );
+      }
+    } catch (error: any) {
+      toast.error(
+        'Failed to regenerate config: ' + (error.response?.data?.detail || error.message),
+        { id: 'asterisk-regen' }
+      );
     }
   };
 
@@ -516,12 +549,19 @@ export const PhoneNumbersPage: React.FC = () => {
 
     setRequestLoading(true);
     try {
-      await api.post(`/phone-numbers/${selectedNumber.id}/activate/${selectedAgentId}`);
+      const response = await api.post(`/phone-numbers/${selectedNumber.id}/activate/${selectedAgentId}`);
       await loadPhoneNumbers();
       setShowAssignAgentModal(false);
       setSelectedNumber(null);
       setSelectedAgentId(null);
-      toast.success(t.phoneNumbers.agentAssignedSuccess);
+      
+      // Show appropriate success message
+      if (selectedNumber.has_sip_config) {
+        toast.success(t.phoneNumbers.agentAssignedSuccess + ' - Call routing updated!');
+      } else {
+        toast.success(t.phoneNumbers.agentAssignedSuccess);
+        toast('Configure SIP settings to enable call routing', { icon: 'ℹ️' });
+      }
     } catch (error: any) {
       toast.error(t.phoneNumbers.updateError + ': ' + (error.response?.data?.detail || error.message));
     } finally {
@@ -650,6 +690,29 @@ export const PhoneNumbersPage: React.FC = () => {
               </Button>
             </div>
           </div>
+          
+          {/* PBX Sync Info */}
+          {phoneNumbers.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-200/50 dark:border-gray-700/50">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                  <SignalIcon className="h-4 w-4 text-indigo-500" />
+                  <span>
+                    {phoneNumbers.filter(p => p.has_sip_config && p.agent_id).length} of {phoneNumbers.length} phone numbers ready for calls
+                  </span>
+                </div>
+                <button
+                  onClick={handleRegenerateAsteriskConfig}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {t?.phoneNumbers?.syncPBX || 'Sync with PBX'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -861,24 +924,38 @@ export const PhoneNumbersPage: React.FC = () => {
                     </p>
                   </div>
 
-                  {/* SIP Status */}
+                  {/* Call Routing Status */}
                   <div className="p-3 bg-gray-50 dark:bg-gray-700/30 rounded-xl">
                     <div className="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                       <SignalIcon className="h-3.5 w-3.5" />
-                      {t?.phoneNumbers?.sipStatus || 'SIP Status'}
+                      {t?.phoneNumbers?.callRouting || 'Call Routing'}
                     </div>
-                    {number.has_sip_config ? (
+                    {number.has_sip_config && number.agent_id ? (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
                         <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                          {t?.phoneNumbers?.configured || 'Configured'}
+                          {t?.phoneNumbers?.ready || 'Ready'}
+                        </span>
+                      </div>
+                    ) : number.has_sip_config ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-amber-500 rounded-full"></div>
+                        <span className="font-semibold text-amber-600 dark:text-amber-400">
+                          {t?.phoneNumbers?.needsAgent || 'Needs Agent'}
+                        </span>
+                      </div>
+                    ) : number.agent_id ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-amber-500 rounded-full"></div>
+                        <span className="font-semibold text-amber-600 dark:text-amber-400">
+                          {t?.phoneNumbers?.needsSIP || 'Needs SIP Config'}
                         </span>
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-amber-500 rounded-full"></div>
-                        <span className="font-semibold text-amber-600 dark:text-amber-400">
-                          {t?.phoneNumbers?.notConfigured || 'Not Configured'}
+                        <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                        <span className="font-semibold text-red-600 dark:text-red-400">
+                          {t?.phoneNumbers?.notReady || 'Not Ready'}
                         </span>
                       </div>
                     )}
@@ -1160,9 +1237,30 @@ export const PhoneNumbersPage: React.FC = () => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="max-w-lg w-full">
             <h2 className="text-2xl font-bold mb-4">{t?.phoneNumbers?.assignAgentToPhoneNumber || 'Assign Agent to Phone Number'}</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
               {t?.phoneNumbers?.chooseAgentDescription || 'Choose an agent to handle calls for'} <strong>{selectedNumber.phone_number}</strong>
             </p>
+            
+            {/* SIP Config Status Notice */}
+            {selectedNumber.has_sip_config ? (
+              <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                  <CheckCircleIcon className="w-5 h-5" />
+                  <span className="text-sm font-medium">SIP configured - calls will be routed after assigning</span>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                  <ExclamationTriangleIcon className="w-5 h-5" />
+                  <span className="text-sm font-medium">SIP not configured</span>
+                </div>
+                <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                  Configure SIP settings after assigning to enable call routing.
+                </p>
+              </div>
+            )}
+            
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium mb-2">{t?.phoneNumbers?.selectAnAgent || 'Select an Agent'}</label>
@@ -1394,9 +1492,36 @@ export const PhoneNumbersPage: React.FC = () => {
 
               {/* SIP Configuration */}
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b pb-2 mb-4">
-                  SIP Configuration
-                </h3>
+                <div className="flex items-center justify-between border-b pb-2 mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    SIP Configuration
+                  </h3>
+                  {selectedNumber?.has_sip_config ? (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                      <CheckCircleIcon className="w-3.5 h-3.5 mr-1" />
+                      Configured
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">
+                      <ExclamationTriangleIcon className="w-3.5 h-3.5 mr-1" />
+                      Not Configured
+                    </span>
+                  )}
+                </div>
+                
+                {/* Info box about Asterisk config */}
+                <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <SignalIcon className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm text-blue-700 dark:text-blue-300">
+                      <p className="font-medium">SIP settings enable call routing</p>
+                      <p className="text-blue-600 dark:text-blue-400 mt-1">
+                        When you save SIP configuration, the Asterisk PBX will be automatically updated to route calls to this phone number to your assigned AI agent.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium mb-2">WebSocket URL</label>
@@ -1450,6 +1575,19 @@ export const PhoneNumbersPage: React.FC = () => {
                     />
                   </div>
                 </div>
+                
+                {/* Agent Assignment Status */}
+                {!selectedNumber?.agent_id && (
+                  <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                      <ExclamationTriangleIcon className="w-5 h-5" />
+                      <span className="text-sm font-medium">No agent assigned</span>
+                    </div>
+                    <p className="text-sm text-amber-600 dark:text-amber-500 mt-1">
+                      Assign an AI agent to this phone number to enable call handling.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Busy Settings */}

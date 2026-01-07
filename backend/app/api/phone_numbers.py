@@ -424,19 +424,34 @@ async def add_existing_phone_number(
     )
     
     # Add SIP configuration if provided
+    has_sip_config = False
     if request.sip_config:
         phone_record.sip_websocket_url = request.sip_config.websocket_url
         phone_record.sip_transport = request.sip_config.transport
         phone_record.sip_username = request.sip_config.username
         phone_record.sip_password = request.sip_config.password
         phone_record.sip_domain = request.sip_config.domain
+        has_sip_config = True
         logger.info(f"SIP configuration set for phone number: {normalized_phone}")
     
     db.add(phone_record)
     db.commit()
     db.refresh(phone_record)
     
-    logger.info(f"Added phone number {normalized_phone} with SIP config: {bool(request.sip_config)}")
+    logger.info(f"Added phone number {normalized_phone} with SIP config: {has_sip_config}")
+    
+    # Regenerate Asterisk config if SIP configuration was provided
+    if has_sip_config:
+        try:
+            from app.services.asterisk_config_service import get_asterisk_config_service
+            asterisk_service = get_asterisk_config_service()
+            result = asterisk_service.regenerate_config(db)
+            if result['success']:
+                logger.info("Asterisk configuration regenerated after adding phone number")
+            else:
+                logger.warning(f"Asterisk config regeneration had issues: {result.get('errors', [])}")
+        except Exception as e:
+            logger.error(f"Error regenerating Asterisk config: {e}")
     
     return phone_record
 
@@ -539,6 +554,19 @@ async def activate_phone_number_for_agent(
     
     logger.info(f"Assigned phone number {phone_number.phone_number} to agent {agent_id}")
     
+    # Regenerate Asterisk config if phone number has SIP configuration
+    if phone_number.sip_username and phone_number.sip_domain:
+        try:
+            from app.services.asterisk_config_service import get_asterisk_config_service
+            asterisk_service = get_asterisk_config_service()
+            result = asterisk_service.regenerate_config(db)
+            if result['success']:
+                logger.info("Asterisk configuration regenerated after agent assignment")
+            else:
+                logger.warning(f"Asterisk config regeneration had issues: {result.get('errors', [])}")
+        except Exception as e:
+            logger.error(f"Error regenerating Asterisk config: {e}")
+    
     return {"message": "Phone number activated successfully"}
 
 
@@ -561,6 +589,9 @@ async def delete_phone_number(
             detail="Phone number not found"
         )
     
+    # Check if phone had SIP config (need to regenerate Asterisk config)
+    had_sip_config = bool(phone_number.sip_username and phone_number.sip_domain)
+    
     # Delete phone number
     db.execute(
         text("DELETE FROM phone_numbers WHERE id = :id"),
@@ -569,6 +600,19 @@ async def delete_phone_number(
     db.commit()
     
     logger.info(f"Deleted phone number {phone_number.phone_number} (ID: {phone_number_id})")
+    
+    # Regenerate Asterisk config if deleted phone had SIP configuration
+    if had_sip_config:
+        try:
+            from app.services.asterisk_config_service import get_asterisk_config_service
+            asterisk_service = get_asterisk_config_service()
+            result = asterisk_service.regenerate_config(db)
+            if result['success']:
+                logger.info("Asterisk configuration regenerated after phone number deletion")
+            else:
+                logger.warning(f"Asterisk config regeneration had issues: {result.get('errors', [])}")
+        except Exception as e:
+            logger.error(f"Error regenerating Asterisk config: {e}")
     
     return {"message": "Phone number deleted successfully"}
 
@@ -726,20 +770,33 @@ async def update_phone_number(
             detail="Phone number not found"
         )
     
+    # Track if SIP config changed (to trigger Asterisk config regeneration)
+    sip_config_changed = False
+    
     # Update fields if provided
     if updates.business_name is not None:
         phone_number.business_name = updates.business_name
     
     # SIP Configuration
     if updates.sip_websocket_url is not None:
+        if phone_number.sip_websocket_url != updates.sip_websocket_url:
+            sip_config_changed = True
         phone_number.sip_websocket_url = updates.sip_websocket_url
     if updates.sip_transport is not None:
+        if phone_number.sip_transport != updates.sip_transport:
+            sip_config_changed = True
         phone_number.sip_transport = updates.sip_transport
     if updates.sip_username is not None:
+        if phone_number.sip_username != updates.sip_username:
+            sip_config_changed = True
         phone_number.sip_username = updates.sip_username
     if updates.sip_password is not None:
+        if phone_number.sip_password != updates.sip_password:
+            sip_config_changed = True
         phone_number.sip_password = updates.sip_password
     if updates.sip_domain is not None:
+        if phone_number.sip_domain != updates.sip_domain:
+            sip_config_changed = True
         phone_number.sip_domain = updates.sip_domain
     
     # Busy settings
@@ -763,6 +820,23 @@ async def update_phone_number(
     
     logger.info(f"Updated phone number {phone_number.phone_number}")
     
+    # Regenerate Asterisk config if SIP settings changed
+    asterisk_config_result = None
+    if sip_config_changed:
+        logger.info(f"SIP configuration changed for {phone_number.phone_number}, regenerating Asterisk config...")
+        try:
+            from app.services.asterisk_config_service import get_asterisk_config_service
+            asterisk_service = get_asterisk_config_service()
+            asterisk_config_result = asterisk_service.regenerate_config(db)
+            
+            if asterisk_config_result['success']:
+                logger.info("Asterisk configuration regenerated successfully")
+            else:
+                logger.warning(f"Asterisk config regeneration had issues: {asterisk_config_result.get('errors', [])}")
+        except Exception as e:
+            logger.error(f"Error regenerating Asterisk config: {e}")
+            asterisk_config_result = {"success": False, "errors": [str(e)]}
+    
     # Parse JSON fields for response
     response = {
         "id": phone_number.id,
@@ -780,7 +854,14 @@ async def update_phone_number(
         "allowed_countries": json.loads(phone_number.allowed_countries) if phone_number.allowed_countries else [],
     }
     
-    return {"success": True, "message": "Phone number updated", "data": response}
+    result = {"success": True, "message": "Phone number updated", "data": response}
+    
+    if asterisk_config_result:
+        result["asterisk_config_updated"] = asterisk_config_result['success']
+        if not asterisk_config_result['success']:
+            result["asterisk_config_errors"] = asterisk_config_result.get('errors', [])
+    
+    return result
 
 
 @router.post("/{phone_number_id}/busy-audio")
