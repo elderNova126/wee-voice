@@ -459,10 +459,13 @@ ZADEOF
     chmod 664 "$ASTERISK_CONF/pjsip_weevoice.conf"
     chmod 664 "$ASTERISK_CONF/extensions_weevoice.conf"
     chmod 640 "$ASTERISK_CONF/pjsip_zadarma_credentials.conf"
-    log_info "✓ Asterisk include files created"
     
     # Add www-data to asterisk group so backend can write to Asterisk configs
     usermod -a -G asterisk www-data 2>/dev/null || true
+    
+    # Make asterisk config directory group-writable so backend can create backup files
+    chmod g+w "$ASTERISK_CONF"
+    log_info "✓ Asterisk include files created with proper permissions"
     
     # Reload Asterisk configuration
     asterisk -rx "core reload" > /dev/null 2>&1 || true
