@@ -586,23 +586,26 @@ endpoint=zadarma-endpoint
         }
         
         try:
+            # Full path to asterisk binary (must match sudoers config)
+            ASTERISK_BIN = '/usr/sbin/asterisk'
+            
+            # Helper to run asterisk commands (with sudo for www-data user)
+            def run_ast(cmd: str, timeout: int = 10) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    ['sudo', ASTERISK_BIN, '-rx', cmd],
+                    capture_output=True, text=True, timeout=timeout
+                )
+            
             # Check if Asterisk is running
-            # Try with sudo first (for www-data user), fallback to direct if that fails
-            check_cmd = subprocess.run(
-                ['sudo', 'asterisk', '-rx', 'core show version'],
-                capture_output=True, text=True, timeout=10
-            )
+            print("=== Checking Asterisk connection ===")
+            check_cmd = run_ast('core show version')
             
             if check_cmd.returncode != 0:
-                # Try without sudo (might work if running as root or asterisk user)
-                check_cmd = subprocess.run(
-                    ['asterisk', '-rx', 'core show version'],
-                    capture_output=True, text=True, timeout=10
-                )
-                if check_cmd.returncode != 0:
-                    print(f"=== Asterisk check failed: {check_cmd.stderr} ===")
-                    result['errors'].append("Asterisk is not running or not accessible")
-                    return result
+                print(f"=== Asterisk check failed: returncode={check_cmd.returncode} ===")
+                print(f"=== stdout: {check_cmd.stdout} ===")
+                print(f"=== stderr: {check_cmd.stderr} ===")
+                result['errors'].append("Asterisk is not running or not accessible")
+                return result
             
             print(f"=== Asterisk is running: {check_cmd.stdout.strip()[:50]}... ===")
             
@@ -621,13 +624,6 @@ endpoint=zadarma-endpoint
                         break
             except Exception as e:
                 logger.warning(f"Could not read credentials file: {e}")
-            
-            # Helper to run asterisk commands (with sudo for www-data user)
-            def run_ast(cmd: str, timeout: int = 10) -> subprocess.CompletedProcess:
-                return subprocess.run(
-                    ['sudo', 'asterisk', '-rx', cmd],
-                    capture_output=True, text=True, timeout=timeout
-                )
             
             # Step 1: Unregister current registration
             print("=== Step 1: Unregistering Zadarma ===")
