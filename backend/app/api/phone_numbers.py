@@ -366,7 +366,8 @@ def phone_number_to_response(phone: PhoneNumber, db: Session = None, current_use
         "sip_username": phone.sip_username,
         "sip_password": phone.sip_password,
         "sip_domain": phone.sip_domain,
-        "has_sip_config": bool(phone.sip_websocket_url and phone.sip_username and phone.sip_password and phone.sip_domain),
+        # For Zadarma trunk, we only need username, password, domain (not websocket_url)
+        "has_sip_config": bool(phone.sip_username and phone.sip_password and phone.sip_domain),
         # Busy line behavior
         "busy_action": phone.busy_action.value if hasattr(phone.busy_action, 'value') else (phone.busy_action or "busy_tone"),
         "busy_audio_file_url": phone.busy_audio_file_url,

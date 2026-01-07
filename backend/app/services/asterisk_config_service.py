@@ -47,16 +47,19 @@ class AsteriskConfigService:
     def _get_phone_numbers_with_sip(self, db: Session) -> List[Dict[str, Any]]:
         """Get all phone numbers with complete SIP configuration from database"""
         try:
+            # NOTE: sip_websocket_url is NOT required for Zadarma trunk
+            # Only sip_username, sip_password, sip_domain are needed
             result = db.execute(text("""
                 SELECT 
                     id, user_id, agent_id, phone_number, country_code, number_type,
                     sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
                     status, business_name
                 FROM phone_numbers
-                WHERE sip_websocket_url IS NOT NULL 
-                  AND sip_username IS NOT NULL 
+                WHERE sip_username IS NOT NULL 
                   AND sip_password IS NOT NULL
                   AND sip_domain IS NOT NULL
+                  AND sip_username != ''
+                  AND sip_password != ''
                   AND agent_id IS NOT NULL
                 ORDER BY id
             """)).fetchall()
