@@ -10,6 +10,7 @@ managed dynamically without manual Asterisk configuration.
 import os
 import subprocess
 import logging
+import time
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
@@ -475,7 +476,35 @@ endpoint=zadarma-endpoint
             logger.info(f"Writing Zadarma credentials to {self.zadarma_credentials_file}")
             logger.info(f"File path exists: {self.zadarma_credentials_file.exists()}, parent exists: {self.zadarma_credentials_file.parent.exists()}")
             
+            # Log what we're writing (mask password for security)
+            masked_password = sip_password[:2] + '***' + sip_password[-2:] if len(sip_password) > 4 else '****'
+            logger.info(f"Writing credentials: username={sip_login}, password={masked_password}, domain={sip_domain}")
+            
+            # Read current content for comparison
+            old_content = ""
+            if self.zadarma_credentials_file.exists():
+                try:
+                    old_content = self.zadarma_credentials_file.read_text()
+                    logger.info(f"Current file has {len(old_content)} bytes")
+                except Exception as e:
+                    logger.warning(f"Could not read current file: {e}")
+            
+            # Write new content
             self.zadarma_credentials_file.write_text(content)
+            logger.info(f"Wrote {len(content)} bytes to file")
+            
+            # Verify the write by reading back
+            verify_content = self.zadarma_credentials_file.read_text()
+            if verify_content == content:
+                logger.info("VERIFIED: File content matches what we wrote")
+            else:
+                logger.error(f"MISMATCH: File content ({len(verify_content)} bytes) doesn't match written content ({len(content)} bytes)!")
+            
+            # Check if content actually changed
+            if old_content == content:
+                logger.warning("Note: File content was already the same (no actual change)")
+            else:
+                logger.info("File content has changed from previous version")
             
             # Set restrictive permissions (owner read/write only)
             try:
@@ -558,31 +587,78 @@ endpoint=zadarma-endpoint
                 result['errors'].append("Asterisk is not running or not accessible")
                 return result
             
-            # First, unregister the current Zadarma registration to force re-registration with new credentials
-            logger.info("Unregistering Zadarma to apply new credentials...")
-            unreg_cmd = subprocess.run(
+            # For credential changes to take effect, we need to:
+            # 1. Unregister and stop the registration
+            # 2. Reload the outbound registration module (not just pjsip)
+            # 3. This forces it to re-read credentials and re-authenticate
+            
+            # Read current credentials file for logging
+            try:
+                cred_content = self.zadarma_credentials_file.read_text()
+                # Extract just the username line for logging
+                for line in cred_content.split('\n'):
+                    if 'username=' in line:
+                        logger.info(f"Current credentials file has: {line.strip()}")
+                        break
+            except Exception as e:
+                logger.warning(f"Could not read credentials file: {e}")
+            
+            # Step 1: Unregister current registration
+            logger.info("Step 1: Sending unregister to Zadarma...")
+            unreg_result = subprocess.run(
                 ['asterisk', '-rx', 'pjsip send unregister zadarma-registration'],
                 capture_output=True, text=True, timeout=10
             )
-            if unreg_cmd.returncode == 0:
-                logger.info("Unregistered Zadarma successfully")
-            else:
-                logger.warning(f"Unregister command returned: {unreg_cmd.stderr or unreg_cmd.stdout}")
+            logger.info(f"Unregister result: {unreg_result.stdout.strip() if unreg_result.stdout else 'sent'}")
             
-            # Reload PJSIP to load new credentials
-            logger.info("Reloading PJSIP configuration...")
+            # Step 2: Wait for unregister to complete
+            time.sleep(2)
+            
+            # Step 3: Check current auth settings BEFORE reload
+            auth_before = subprocess.run(
+                ['asterisk', '-rx', 'pjsip show auth zadarma-auth'],
+                capture_output=True, text=True, timeout=10
+            )
+            logger.info(f"Auth BEFORE reload:\n{auth_before.stdout}")
+            
+            # Step 4: Reload the ENTIRE PJSIP stack including outbound registration
+            # This is the key - we need to reload res_pjsip_outbound_registration.so
+            logger.info("Step 4: Reloading PJSIP outbound registration module...")
+            
+            # First reload main pjsip (loads new auth)
             pjsip_cmd = subprocess.run(
-                ['asterisk', '-rx', 'pjsip reload'],
+                ['asterisk', '-rx', 'module reload res_pjsip.so'],
                 capture_output=True, text=True, timeout=30
             )
+            logger.info(f"PJSIP reload: {pjsip_cmd.stdout.strip() if pjsip_cmd.stdout else 'OK'}")
+            
+            time.sleep(1)
+            
+            # Then reload outbound registration (this picks up new auth)
+            reg_module_cmd = subprocess.run(
+                ['asterisk', '-rx', 'module reload res_pjsip_outbound_registration.so'],
+                capture_output=True, text=True, timeout=30
+            )
+            logger.info(f"Outbound registration module reload: {reg_module_cmd.stdout.strip() if reg_module_cmd.stdout else 'OK'}")
+            
             result['pjsip_reload'] = {
                 'returncode': pjsip_cmd.returncode,
                 'stdout': pjsip_cmd.stdout,
                 'stderr': pjsip_cmd.stderr
             }
             
-            # Force re-registration with new credentials
-            logger.info("Sending registration request with new credentials...")
+            # Step 5: Wait for module reload to complete
+            time.sleep(3)
+            
+            # Step 6: Check auth settings AFTER reload
+            auth_after = subprocess.run(
+                ['asterisk', '-rx', 'pjsip show auth zadarma-auth'],
+                capture_output=True, text=True, timeout=10
+            )
+            logger.info(f"Auth AFTER reload:\n{auth_after.stdout}")
+            
+            # Step 7: Force re-registration with (potentially new) credentials
+            logger.info("Step 7: Triggering new registration...")
             reg_cmd = subprocess.run(
                 ['asterisk', '-rx', 'pjsip send register zadarma-registration'],
                 capture_output=True, text=True, timeout=10
@@ -592,10 +668,14 @@ endpoint=zadarma-endpoint
                 'stdout': reg_cmd.stdout,
                 'stderr': reg_cmd.stderr
             }
-            if reg_cmd.returncode == 0:
-                logger.info("Registration request sent successfully")
-            else:
-                logger.warning(f"Registration command returned: {reg_cmd.stderr or reg_cmd.stdout}")
+            
+            # Step 8: Wait and check registration status
+            time.sleep(5)
+            status_cmd = subprocess.run(
+                ['asterisk', '-rx', 'pjsip show registrations'],
+                capture_output=True, text=True, timeout=10
+            )
+            logger.info(f"Registration status after reload:\n{status_cmd.stdout}")
             
             if pjsip_cmd.returncode != 0:
                 result['errors'].append(f"PJSIP reload failed: {pjsip_cmd.stderr}")
