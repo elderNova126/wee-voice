@@ -16,6 +16,8 @@ import {
   PlayIcon,
   PencilIcon,
   MicrophoneIcon,
+  PhoneArrowUpRightIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, callsAPI } from '@/lib/api'
@@ -67,6 +69,14 @@ interface Call {
   has_messages: boolean
 }
 
+interface PhoneNumber {
+  phone_number: string
+  is_registered: boolean
+  agent_id?: number
+  status?: string
+  country_code?: string
+}
+
 type TabType = 'overview' | 'leads' | 'calls'
 
 export default function AgentDetailPage() {
@@ -80,6 +90,8 @@ export default function AgentDetailPage() {
   const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<TabType>('overview')
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [showCallModal, setShowCallModal] = useState(false)
 
   useEffect(() => {
     if (agentId) {
@@ -281,6 +293,28 @@ export default function AgentDetailPage() {
           leads={leads} 
           formatRelativeDate={formatRelativeDate}
           getSentimentIcon={getSentimentIcon}
+          onCallLead={(lead) => {
+            setSelectedLead(lead)
+            setShowCallModal(true)
+          }}
+        />
+      )}
+      
+      {/* Outbound Call Modal */}
+      {showCallModal && selectedLead && agent && (
+        <OutboundCallModal
+          lead={selectedLead}
+          agentId={agent.id}
+          agentName={agent.name}
+          onClose={() => {
+            setShowCallModal(false)
+            setSelectedLead(null)
+          }}
+          onSuccess={() => {
+            setShowCallModal(false)
+            setSelectedLead(null)
+            loadAgentData()
+          }}
         />
       )}
       
@@ -442,11 +476,13 @@ function OverviewTab({ stats }: { stats: AgentStats }) {
 function LeadsTab({ 
   leads, 
   formatRelativeDate,
-  getSentimentIcon
+  getSentimentIcon,
+  onCallLead
 }: { 
   leads: Lead[]
   formatRelativeDate: (date: string | null) => string
   getSentimentIcon: (sentiment: string | null) => React.ReactNode
+  onCallLead: (lead: Lead) => void
 }) {
   if (leads.length === 0) {
     return (
@@ -482,6 +518,9 @@ function LeadsTab({
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Status
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                Actions
               </th>
             </tr>
           </thead>
@@ -525,6 +564,16 @@ function LeadsTab({
                       <ExclamationTriangleIcon className="h-5 w-5 text-amber-500" title="Action Required" />
                     )}
                   </div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right">
+                  <button
+                    onClick={() => onCallLead(lead)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white text-sm font-medium shadow-sm hover:shadow-md transition-all"
+                    title="Call this lead"
+                  >
+                    <PhoneArrowUpRightIcon className="h-4 w-4" />
+                    Call
+                  </button>
                 </td>
               </tr>
             ))}
@@ -630,6 +679,260 @@ function CallsTab({
       >
         View all calls →
       </Link>
+    </div>
+  )
+}
+
+// Outbound Call Modal
+function OutboundCallModal({
+  lead,
+  agentId,
+  agentName,
+  onClose,
+  onSuccess
+}: {
+  lead: Lead
+  agentId: number
+  agentName: string
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([])
+  const [selectedPhone, setSelectedPhone] = useState<string>('')
+  const [loading, setLoading] = useState(true)
+  const [calling, setCalling] = useState(false)
+  const [callStatus, setCallStatus] = useState<'idle' | 'calling' | 'connected' | 'error'>('idle')
+  const [errorMessage, setErrorMessage] = useState('')
+
+  useEffect(() => {
+    loadPhoneNumbers()
+  }, [])
+
+  const loadPhoneNumbers = async () => {
+    try {
+      const response = await callsAPI.getAvailablePhoneNumbers(agentId)
+      const numbers = response.data.phone_numbers || []
+      setPhoneNumbers(numbers)
+      if (numbers.length > 0) {
+        setSelectedPhone(numbers[0].phone_number)
+      }
+    } catch (error) {
+      console.error('Failed to load phone numbers:', error)
+      toast.error('Failed to load available phone numbers')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCall = async () => {
+    if (!selectedPhone) {
+      toast.error('Please select a phone number to call from')
+      return
+    }
+
+    setCalling(true)
+    setCallStatus('calling')
+    setErrorMessage('')
+
+    try {
+      const response = await callsAPI.makeOutboundCall({
+        from_phone_number: selectedPhone,
+        to_number: lead.phone,
+        agent_id: agentId
+      })
+
+      if (response.data.success) {
+        setCallStatus('connected')
+        toast.success('Call initiated successfully!')
+        setTimeout(() => {
+          onSuccess()
+        }, 2000)
+      } else {
+        setCallStatus('error')
+        setErrorMessage(response.data.message || 'Failed to initiate call')
+        toast.error(response.data.message || 'Failed to initiate call')
+      }
+    } catch (error: any) {
+      setCallStatus('error')
+      const message = error?.response?.data?.detail || 'Failed to initiate call'
+      setErrorMessage(message)
+      toast.error(message)
+    } finally {
+      setCalling(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 z-10 border border-gray-200 dark:border-gray-700">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+            Call Lead
+          </h3>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          >
+            <XMarkIcon className="h-5 w-5 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Lead Info */}
+        <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 mb-6">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-white font-bold text-lg">
+              {lead.name ? lead.name.charAt(0).toUpperCase() : '#'}
+            </div>
+            <div>
+              <p className="font-medium text-gray-900 dark:text-white">
+                {lead.name || 'Unknown'}
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {lead.phone}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Agent Info */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            AI Agent
+          </label>
+          <div className="flex items-center gap-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+            <MicrophoneIcon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+              {agentName}
+            </span>
+          </div>
+        </div>
+
+        {/* Phone Number Selection */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Call From
+          </label>
+          {loading ? (
+            <div className="p-3 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse">
+              <div className="h-5 bg-gray-300 dark:bg-gray-600 rounded w-3/4" />
+            </div>
+          ) : phoneNumbers.length === 0 ? (
+            <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+              <p className="text-sm text-amber-800 dark:text-amber-200">
+                No phone number assigned to this agent. Please assign an active phone number to <strong>{agentName}</strong> first.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {phoneNumbers.map((phone) => (
+                <label
+                  key={phone.phone_number}
+                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    selectedPhone === phone.phone_number
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="phone"
+                    value={phone.phone_number}
+                    checked={selectedPhone === phone.phone_number}
+                    onChange={(e) => setSelectedPhone(e.target.value)}
+                    className="text-green-600 focus:ring-green-500"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        {phone.phone_number}
+                      </span>
+                      {phone.country_code && (
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          ({phone.country_code})
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${
+                        phone.status === 'active' 
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                          : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+                      }`}>
+                        {phone.status || 'unknown'}
+                      </span>
+                      {phone.is_registered && (
+                        <span className="text-xs text-green-600 dark:text-green-400">
+                          ✓ SIP Ready
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Status Display */}
+        {callStatus === 'calling' && (
+          <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+            <div className="flex items-center gap-3">
+              <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent" />
+              <span className="text-sm text-blue-800 dark:text-blue-200">
+                Initiating call...
+              </span>
+            </div>
+          </div>
+        )}
+
+        {callStatus === 'connected' && (
+          <div className="mb-6 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+            <div className="flex items-center gap-3">
+              <PhoneIcon className="h-5 w-5 text-green-600 animate-pulse" />
+              <span className="text-sm text-green-800 dark:text-green-200">
+                Call initiated! The AI agent is now handling the call.
+              </span>
+            </div>
+          </div>
+        )}
+
+        {callStatus === 'error' && (
+          <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+            <p className="text-sm text-red-800 dark:text-red-200">
+              {errorMessage}
+            </p>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-medium hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleCall}
+            disabled={calling || !selectedPhone || phoneNumbers.length === 0 || callStatus === 'connected'}
+            className="flex-1 inline-flex justify-center items-center gap-2 px-4 py-3 rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-medium shadow-lg hover:shadow-xl disabled:shadow-none transition-all"
+          >
+            {calling ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                Calling...
+              </>
+            ) : (
+              <>
+                <PhoneArrowUpRightIcon className="h-5 w-5" />
+                Start Call
+              </>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

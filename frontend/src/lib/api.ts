@@ -86,7 +86,7 @@ export const agentsAPI = {
 
 // Calls API
 export const callsAPI = {
-  list: (params?: { page?: number; per_page?: number; status?: string; action_required?: boolean; favorite?: boolean; search?: string }) => 
+  list: (params?: { page?: number; per_page?: number; status?: string; action_required?: boolean; favorite?: boolean; search?: string; agent_id?: number }) => 
     api.get('/calls/', { params }),
   
   get: (id: number) => api.get(`/calls/${id}`),
@@ -114,6 +114,15 @@ export const callsAPI = {
   
   bulkToggleFavorite: (callIds: number[], isFavorite: boolean) => 
     api.post('/calls/bulk/favorite', { call_ids: callIds, is_favorite: isFavorite }),
+  
+  // Outbound calls
+  makeOutboundCall: (data: { from_phone_number: string; to_number: string; agent_id: number }) =>
+    api.post('/calls/outbound', data),
+  
+  getAvailablePhoneNumbers: (agentId?: number) => 
+    api.get('/calls/outbound/phone-numbers', { params: agentId ? { agent_id: agentId } : {} }),
+  
+  hangupCall: (id: number) => api.post(`/calls/${id}/hangup`),
 }
 
 // Libraries API

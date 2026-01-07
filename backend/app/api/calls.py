@@ -1008,40 +1008,57 @@ async def make_outbound_call(
 
 @router.get("/outbound/phone-numbers")
 async def get_available_phone_numbers(
+    agent_id: Optional[int] = Query(None, description="Filter by agent ID"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
     Get list of phone numbers available for outbound calls.
     
-    Returns phone numbers that are registered with the SIP server
-    and can be used to make outbound calls.
+    Returns phone numbers from the database that are in ACTIVE or APPROVED status.
+    If agent_id is provided, only returns phone numbers assigned to that agent.
+    Also indicates if they're currently registered with the SIP server.
     """
+    from app.models.zadarma import PhoneNumber, PhoneNumberStatus
+    
+    # Get registered SIP phone numbers (runtime)
+    sip_registered = set()
     try:
         from app.services.sip_call_handler import sip_call_handler
-        
-        phone_numbers = sip_call_handler.get_registered_phone_numbers()
-        
-        # Filter by user's phone numbers (unless admin)
-        if not current_user.is_superuser:
-            from app.models import PhoneNumber
-            user_phones = db.query(PhoneNumber.phone_number).filter(
-                PhoneNumber.user_id == current_user.id
-            ).all()
-            user_phone_set = {p[0] for p in user_phones}
-            phone_numbers = [p for p in phone_numbers if p["phone_number"] in user_phone_set]
-        
-        return {
-            "phone_numbers": phone_numbers,
-            "count": len(phone_numbers)
-        }
-        
-    except ImportError:
-        return {
-            "phone_numbers": [],
-            "count": 0,
-            "error": "SIP call handler not available"
-        }
+        registered = sip_call_handler.get_registered_phone_numbers()
+        sip_registered = {p["phone_number"] for p in registered}
+    except (ImportError, Exception) as e:
+        logger.warning(f"SIP call handler not available: {e}")
+    
+    # Query phone numbers from database
+    query = db.query(PhoneNumber).filter(
+        PhoneNumber.status.in_([PhoneNumberStatus.ACTIVE, PhoneNumberStatus.APPROVED])
+    )
+    
+    # Filter by user's phone numbers (unless admin)
+    if not current_user.is_superuser:
+        query = query.filter(PhoneNumber.user_id == current_user.id)
+    
+    # Filter by agent if specified
+    if agent_id is not None:
+        query = query.filter(PhoneNumber.agent_id == agent_id)
+    
+    db_phones = query.all()
+    
+    phone_numbers = []
+    for phone in db_phones:
+        phone_numbers.append({
+            "phone_number": phone.phone_number,
+            "is_registered": phone.phone_number in sip_registered,
+            "agent_id": phone.agent_id,
+            "status": phone.status.value if hasattr(phone.status, 'value') else phone.status,
+            "country_code": phone.country_code
+        })
+    
+    return {
+        "phone_numbers": phone_numbers,
+        "count": len(phone_numbers)
+    }
 
 
 @router.post("/{call_id}/hangup")
