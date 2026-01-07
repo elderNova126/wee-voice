@@ -339,24 +339,48 @@ class AsteriskConfigService:
         
         return '\n'.join(config_lines)
     
-    def generate_zadarma_credentials(self) -> bool:
+    def generate_zadarma_credentials(self, phones: List[Dict[str, Any]] = None) -> bool:
         """
-        Generate Zadarma credentials file from environment variables.
+        Generate Zadarma credentials file from phone number SIP settings.
+        Uses the first phone number with SIP credentials configured.
+        Falls back to environment variables if no phone has credentials.
+        
         This file is #tryinclude'd from pjsip.conf.
         
         Returns True on success, False if credentials not found.
         """
-        sip_login = os.getenv('ZADARMA_SIP_LOGIN')
-        sip_password = os.getenv('ZADARMA_SIP_PASSWORD')
+        sip_login = None
+        sip_password = None
+        sip_domain = None
+        source = None
+        
+        # First try to get credentials from phone numbers
+        if phones:
+            for phone in phones:
+                if phone.get('sip_username') and phone.get('sip_password'):
+                    sip_login = phone['sip_username']
+                    sip_password = phone['sip_password']
+                    sip_domain = phone.get('sip_domain', 'sip.zadarma.com')
+                    source = f"phone number {phone['phone_number']}"
+                    logger.info(f"Using SIP credentials from {source}")
+                    break
+        
+        # Fallback to environment variables
+        if not sip_login or not sip_password:
+            sip_login = os.getenv('ZADARMA_SIP_LOGIN')
+            sip_password = os.getenv('ZADARMA_SIP_PASSWORD')
+            sip_domain = os.getenv('ZADARMA_SIP_DOMAIN', 'sip.zadarma.com')
+            source = "environment variables"
         
         if not sip_login or not sip_password:
-            logger.warning("ZADARMA_SIP_LOGIN or ZADARMA_SIP_PASSWORD not set in environment")
+            logger.warning("No SIP credentials found in phone numbers or environment variables")
             return False
         
         content = f""";==============================================================================
 ; Zadarma SIP Authentication
 ; Generated: {datetime.utcnow().isoformat()}
-; DO NOT EDIT - This file is auto-generated from environment variables
+; Source: {source}
+; DO NOT EDIT - This file is auto-generated from phone number SIP settings
 ;==============================================================================
 
 [zadarma-auth]
@@ -369,8 +393,11 @@ password={sip_password}
         try:
             self.zadarma_credentials_file.write_text(content)
             # Set restrictive permissions (owner read/write only)
-            os.chmod(self.zadarma_credentials_file, 0o600)
-            logger.info(f"Wrote Zadarma credentials to {self.zadarma_credentials_file}")
+            try:
+                os.chmod(self.zadarma_credentials_file, 0o600)
+            except:
+                pass  # May fail on Windows
+            logger.info(f"Wrote Zadarma credentials to {self.zadarma_credentials_file} (from {source})")
             return True
         except Exception as e:
             logger.error(f"Failed to write Zadarma credentials: {e}")
@@ -401,9 +428,6 @@ password={sip_password}
             
             self.extensions_file.write_text(extensions_content)
             logger.info(f"Wrote extensions config to {self.extensions_file}")
-            
-            # Also generate Zadarma credentials file if env vars are set
-            self.generate_zadarma_credentials()
             
             return True
             
@@ -537,6 +561,11 @@ password={sip_password}
             else:
                 result['errors'].append("Failed to write config files")
                 return result
+            
+            # Generate Zadarma credentials from phone number SIP settings
+            result['zadarma_credentials_written'] = self.generate_zadarma_credentials(phones)
+            if not result['zadarma_credentials_written']:
+                result['errors'].append("No SIP credentials found - configure SIP settings in Phone Numbers page")
             
             # Reload Asterisk
             reload_result = self.reload_asterisk()
