@@ -238,6 +238,13 @@ export interface Translations {
     deleteWarningAgent: string
     deleting: string
     phoneNumberDeletedSuccess: string
+    // Call Routing
+    callRouting: string
+    ready: string
+    needsAgent: string
+    needsSIP: string
+    notReady: string
+    syncPBX: string
   }
 
   // API Keys
@@ -1116,6 +1123,13 @@ const translations: Record<Language, Translations> = {
       deleteWarningAgent: 'Ce numéro est actuellement assigné à un agent.',
       deleting: 'Suppression...',
       phoneNumberDeletedSuccess: 'Numéro de téléphone supprimé avec succès',
+      // Call Routing
+      callRouting: 'Routage d\'appels',
+      ready: 'Prêt',
+      needsAgent: 'Agent requis',
+      needsSIP: 'Config SIP requise',
+      notReady: 'Non prêt',
+      syncPBX: 'Synchroniser avec PBX',
     },
     apiKeys: {
       title: 'Clés API',
@@ -1956,6 +1970,13 @@ const translations: Record<Language, Translations> = {
       deleteWarningAgent: 'This phone number is currently assigned to an agent.',
       deleting: 'Deleting...',
       phoneNumberDeletedSuccess: 'Phone number deleted successfully',
+      // Call Routing
+      callRouting: 'Call Routing',
+      ready: 'Ready',
+      needsAgent: 'Needs Agent',
+      needsSIP: 'Needs SIP Config',
+      notReady: 'Not Ready',
+      syncPBX: 'Sync with PBX',
     },
     apiKeys: {
       title: 'API Keys',
