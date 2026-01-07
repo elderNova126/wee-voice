@@ -394,8 +394,7 @@ class AsteriskConfigService:
         
         Returns True on success, False if credentials not found.
         """
-        print(f"=== generate_zadarma_credentials CALLED === phones={len(phones) if phones else 0}, db={db is not None}")
-        logger.info(f"generate_zadarma_credentials called: phones={len(phones) if phones else 0}, db={db is not None}")
+        logger.info(f"Generating Zadarma credentials: {len(phones) if phones else 0} phones")
         
         sip_login = None
         sip_password = None
@@ -479,38 +478,10 @@ endpoint=zadarma-endpoint
             
             # Log what we're writing (mask password for security)
             masked_password = sip_password[:2] + '***' + sip_password[-2:] if len(sip_password) > 4 else '****'
-            print(f"=== WRITING CREDENTIALS === username={sip_login}, password={masked_password}, domain={sip_domain}")
-            logger.info(f"Writing credentials: username={sip_login}, password={masked_password}, domain={sip_domain}")
-            
-            # Read current content for comparison
-            old_content = ""
-            if self.zadarma_credentials_file.exists():
-                try:
-                    old_content = self.zadarma_credentials_file.read_text()
-                    print(f"=== Current file has {len(old_content)} bytes ===")
-                    logger.info(f"Current file has {len(old_content)} bytes")
-                except Exception as e:
-                    print(f"=== Could not read current file: {e} ===")
-                    logger.warning(f"Could not read current file: {e}")
+            logger.info(f"Writing credentials: username={sip_login}, domain={sip_domain}")
             
             # Write new content
-            print(f"=== WRITING TO FILE: {self.zadarma_credentials_file} ===")
             self.zadarma_credentials_file.write_text(content)
-            print(f"=== WROTE {len(content)} bytes ===")
-            logger.info(f"Wrote {len(content)} bytes to file")
-            
-            # Verify the write by reading back
-            verify_content = self.zadarma_credentials_file.read_text()
-            if verify_content == content:
-                logger.info("VERIFIED: File content matches what we wrote")
-            else:
-                logger.error(f"MISMATCH: File content ({len(verify_content)} bytes) doesn't match written content ({len(content)} bytes)!")
-            
-            # Check if content actually changed
-            if old_content == content:
-                logger.warning("Note: File content was already the same (no actual change)")
-            else:
-                logger.info("File content has changed from previous version")
             
             # Set restrictive permissions (owner read/write only)
             try:
@@ -574,8 +545,7 @@ endpoint=zadarma-endpoint
         
         Returns status dict with success/failure and details.
         """
-        print("=== reload_asterisk CALLED ===")
-        logger.info("=== reload_asterisk START ===")
+        logger.info("Reloading Asterisk configuration")
         
         result = {
             'success': False,
@@ -597,61 +567,28 @@ endpoint=zadarma-endpoint
                 )
             
             # Check if Asterisk is running
-            print("=== Checking Asterisk connection ===")
             check_cmd = run_ast('core show version')
             
             if check_cmd.returncode != 0:
-                print(f"=== Asterisk check failed: returncode={check_cmd.returncode} ===")
-                print(f"=== stdout: {check_cmd.stdout} ===")
-                print(f"=== stderr: {check_cmd.stderr} ===")
+                logger.error(f"Asterisk not accessible: {check_cmd.stderr}")
                 result['errors'].append("Asterisk is not running or not accessible")
                 return result
-            
-            print(f"=== Asterisk is running: {check_cmd.stdout.strip()[:50]}... ===")
             
             # For credential changes to take effect, we need to:
             # 1. Unregister and stop the registration
             # 2. Reload the outbound registration module (not just pjsip)
             # 3. This forces it to re-read credentials and re-authenticate
             
-            # Read current credentials file for logging
-            try:
-                cred_content = self.zadarma_credentials_file.read_text()
-                # Extract just the username line for logging
-                for line in cred_content.split('\n'):
-                    if 'username=' in line:
-                        logger.info(f"Current credentials file has: {line.strip()}")
-                        break
-            except Exception as e:
-                logger.warning(f"Could not read credentials file: {e}")
-            
-            # Step 1: Unregister current registration
-            print("=== Step 1: Unregistering Zadarma ===")
-            unreg_result = run_ast('pjsip send unregister zadarma-registration')
-            print(f"Unregister: {unreg_result.stdout.strip() if unreg_result.stdout else 'sent'}")
-            
-            # Step 2: Wait for unregister to complete
+            # Unregister current registration
+            run_ast('pjsip send unregister zadarma-registration')
             time.sleep(2)
             
-            # Step 3: Check current auth settings BEFORE reload
-            print("=== Step 3: Auth BEFORE reload ===")
-            auth_before = run_ast('pjsip show auth zadarma-auth')
-            for line in auth_before.stdout.split('\n'):
-                if 'username' in line.lower():
-                    print(f"  {line.strip()}")
-            
-            # Step 4: Reload the ENTIRE PJSIP stack including outbound registration
-            print("=== Step 4: Reloading PJSIP modules ===")
-            
-            # First reload main pjsip (loads new auth)
+            # Reload PJSIP modules to pick up new credentials
             pjsip_cmd = run_ast('module reload res_pjsip.so', timeout=30)
-            print(f"PJSIP reload: {pjsip_cmd.stdout.strip() if pjsip_cmd.stdout else 'OK'}")
-            
             time.sleep(1)
             
-            # Then reload outbound registration (this picks up new auth)
-            reg_module_cmd = run_ast('module reload res_pjsip_outbound_registration.so', timeout=30)
-            print(f"Registration module reload: {reg_module_cmd.stdout.strip() if reg_module_cmd.stdout else 'OK'}")
+            # Reload outbound registration module
+            run_ast('module reload res_pjsip_outbound_registration.so', timeout=30)
             
             result['pjsip_reload'] = {
                 'returncode': pjsip_cmd.returncode,
@@ -659,18 +596,10 @@ endpoint=zadarma-endpoint
                 'stderr': pjsip_cmd.stderr
             }
             
-            # Step 5: Wait for module reload to complete
+            # Wait for module reload to complete
             time.sleep(3)
             
-            # Step 6: Check auth settings AFTER reload
-            print("=== Step 6: Auth AFTER reload ===")
-            auth_after = run_ast('pjsip show auth zadarma-auth')
-            for line in auth_after.stdout.split('\n'):
-                if 'username' in line.lower():
-                    print(f"  {line.strip()}")
-            
-            # Step 7: Force re-registration with (potentially new) credentials
-            print("=== Step 7: Triggering new registration ===")
+            # Force re-registration with new credentials
             reg_cmd = run_ast('pjsip send register zadarma-registration')
             result['registration_reload'] = {
                 'returncode': reg_cmd.returncode,
@@ -678,19 +607,13 @@ endpoint=zadarma-endpoint
                 'stderr': reg_cmd.stderr
             }
             
-            # Step 8: Wait and check registration status
+            # Wait for registration to complete
             time.sleep(5)
-            print("=== Step 8: Registration status ===")
-            status_cmd = run_ast('pjsip show registrations')
-            for line in status_cmd.stdout.split('\n'):
-                if 'zadarma' in line.lower():
-                    print(f"  {line.strip()}")
             
             if pjsip_cmd.returncode != 0:
                 result['errors'].append(f"PJSIP reload failed: {pjsip_cmd.stderr}")
             
             # Reload dialplan
-            print("=== Reloading dialplan ===")
             dialplan_cmd = run_ast('dialplan reload', timeout=30)
             result['dialplan_reload'] = {
                 'returncode': dialplan_cmd.returncode,
@@ -736,8 +659,7 @@ endpoint=zadarma-endpoint
         
         Returns status dict with details.
         """
-        print("=== ASTERISK CONFIG SERVICE: regenerate_config CALLED ===")
-        logger.info("=== ASTERISK regenerate_config START ===")
+        logger.info("Regenerating Asterisk configuration")
         
         result = {
             'success': False,

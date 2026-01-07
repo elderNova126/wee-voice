@@ -760,9 +760,6 @@ async def update_phone_number(
     db: Session = Depends(get_db)
 ):
     """Update phone number settings including SIP config, busy settings, and restrictions"""
-    print(f"=== UPDATE PHONE NUMBER CALLED === id={phone_number_id}, user={current_user.id}")
-    print(f"Updates received: sip_username={updates.sip_username}, sip_password={'***' if updates.sip_password else None}, sip_domain={updates.sip_domain}")
-    logger.info(f"=== UPDATE PHONE NUMBER === id={phone_number_id}")
     
     phone_number = db.query(PhoneNumber).filter(
         PhoneNumber.id == phone_number_id,
@@ -832,14 +829,11 @@ async def update_phone_number(
     
     asterisk_config_result = None
     if should_regenerate:
-        print(f"=== REGENERATING ASTERISK CONFIG === phone={phone_number.phone_number}, changed={sip_config_changed}, has_creds={has_sip_creds}")
-        logger.info(f"Regenerating Asterisk config for {phone_number.phone_number} (changed={sip_config_changed}, has_creds={has_sip_creds})")
+        logger.info(f"Regenerating Asterisk config for {phone_number.phone_number}")
         try:
             from app.services.asterisk_config_service import get_asterisk_config_service
             asterisk_service = get_asterisk_config_service()
-            print(f"=== CALLING regenerate_config ===")
             asterisk_config_result = asterisk_service.regenerate_config(db)
-            print(f"=== regenerate_config RETURNED: {asterisk_config_result} ===")
             
             if asterisk_config_result['success']:
                 logger.info(f"Asterisk configuration regenerated successfully: {asterisk_config_result.get('phone_numbers_count', 0)} phones, zadarma_creds={asterisk_config_result.get('zadarma_credentials_written', False)}")
