@@ -532,12 +532,18 @@ endpoint=zadarma-endpoint
     def reload_asterisk(self) -> Dict[str, Any]:
         """
         Reload Asterisk configuration to apply changes.
+        For registration changes to take effect, we need to:
+        1. Unregister the current registration
+        2. Reload PJSIP config
+        3. The new registration will start automatically
+        
         Returns status dict with success/failure and details.
         """
         result = {
             'success': False,
             'pjsip_reload': None,
             'dialplan_reload': None,
+            'registration_reload': None,
             'errors': []
         }
         
@@ -552,7 +558,19 @@ endpoint=zadarma-endpoint
                 result['errors'].append("Asterisk is not running or not accessible")
                 return result
             
-            # Reload PJSIP
+            # First, unregister the current Zadarma registration to force re-registration with new credentials
+            logger.info("Unregistering Zadarma to apply new credentials...")
+            unreg_cmd = subprocess.run(
+                ['asterisk', '-rx', 'pjsip send unregister zadarma-registration'],
+                capture_output=True, text=True, timeout=10
+            )
+            if unreg_cmd.returncode == 0:
+                logger.info("Unregistered Zadarma successfully")
+            else:
+                logger.warning(f"Unregister command returned: {unreg_cmd.stderr or unreg_cmd.stdout}")
+            
+            # Reload PJSIP to load new credentials
+            logger.info("Reloading PJSIP configuration...")
             pjsip_cmd = subprocess.run(
                 ['asterisk', '-rx', 'pjsip reload'],
                 capture_output=True, text=True, timeout=30
@@ -562,6 +580,22 @@ endpoint=zadarma-endpoint
                 'stdout': pjsip_cmd.stdout,
                 'stderr': pjsip_cmd.stderr
             }
+            
+            # Force re-registration with new credentials
+            logger.info("Sending registration request with new credentials...")
+            reg_cmd = subprocess.run(
+                ['asterisk', '-rx', 'pjsip send register zadarma-registration'],
+                capture_output=True, text=True, timeout=10
+            )
+            result['registration_reload'] = {
+                'returncode': reg_cmd.returncode,
+                'stdout': reg_cmd.stdout,
+                'stderr': reg_cmd.stderr
+            }
+            if reg_cmd.returncode == 0:
+                logger.info("Registration request sent successfully")
+            else:
+                logger.warning(f"Registration command returned: {reg_cmd.stderr or reg_cmd.stdout}")
             
             if pjsip_cmd.returncode != 0:
                 result['errors'].append(f"PJSIP reload failed: {pjsip_cmd.stderr}")
