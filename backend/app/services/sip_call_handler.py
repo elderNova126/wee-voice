@@ -133,6 +133,18 @@ class SIPCallHandler:
             logger.info(f"📞 Registering SIP for {phone.phone_number} ({phone.sip_username}@{phone.sip_domain})")
             logger.info(f"   WebSocket: {phone.sip_websocket_url}")
             
+            # Validate WebSocket URL
+            if not phone.sip_websocket_url:
+                logger.error(f"   ❌ No WebSocket URL configured for {phone.phone_number}")
+                return False
+            
+            # Log helpful info
+            from urllib.parse import urlparse
+            parsed = urlparse(phone.sip_websocket_url)
+            if parsed.hostname in ['weevoice.weedoo.com', 'your-server.com']:
+                logger.warning(f"   ⚠️ WebSocket URL uses placeholder hostname. Update to actual server address.")
+                logger.warning(f"   💡 If Asterisk is on same server, use: ws://localhost:8089/ws")
+            
             # Create SIP client for this phone number
             sip_client = SIPClientService(
                 ws_url=phone.sip_websocket_url,

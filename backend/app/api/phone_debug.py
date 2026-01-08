@@ -22,6 +22,7 @@ def safe_query_phone_numbers_for_user(db: Session, user_id: int) -> list:
         result = db.execute(text("""
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
                    sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
+                   provider_sip_username, provider_sip_password, provider_sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address,
                    created_at, updated_at, activated_at
@@ -43,16 +44,19 @@ def safe_query_phone_numbers_for_user(db: Session, user_id: int) -> list:
             phone.sip_username = row[8]
             phone.sip_password = row[9]
             phone.sip_domain = row[10]
-            phone.status = row[11]
-            phone.status_message = row[12]
-            phone.monthly_cost = row[13]
-            phone.per_minute_cost = row[14]
-            phone.business_name = row[15]
-            phone.business_type = row[16]
-            phone.business_address = row[17]
-            phone.created_at = row[18]
-            phone.updated_at = row[19]
-            phone.activated_at = row[20]
+            phone.provider_sip_username = row[11]
+            phone.provider_sip_password = row[12]
+            phone.provider_sip_domain = row[13]
+            phone.status = row[14]
+            phone.status_message = row[15]
+            phone.monthly_cost = row[16]
+            phone.per_minute_cost = row[17]
+            phone.business_name = row[18]
+            phone.business_type = row[19]
+            phone.business_address = row[20]
+            phone.created_at = row[21]
+            phone.updated_at = row[22]
+            phone.activated_at = row[23]
             phones.append(phone)
         return phones
     except Exception as e:
@@ -93,7 +97,16 @@ async def debug_phone_numbers(
             "last_9_digits": digits_only[-9:] if len(digits_only) >= 9 else digits_only,
             "last_10_digits": digits_only[-10:] if len(digits_only) >= 10 else digits_only,
             "agent": agent_info,
-            "has_sip_config": bool(phone.sip_websocket_url and phone.sip_username and phone.sip_password)
+            # Provider SIP (for INBOUND calls - Zadarma registration)
+            "has_provider_sip_config": bool(
+                getattr(phone, 'provider_sip_username', None) and 
+                getattr(phone, 'provider_sip_password', None) and 
+                getattr(phone, 'provider_sip_domain', None)
+            ),
+            "provider_sip_domain": getattr(phone, 'provider_sip_domain', None),
+            # Asterisk WebSocket SIP (for OUTBOUND calls)
+            "has_outbound_sip_config": bool(phone.sip_websocket_url and phone.sip_username and phone.sip_password),
+            "sip_websocket_url": phone.sip_websocket_url,
         })
     
     return {

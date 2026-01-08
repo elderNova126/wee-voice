@@ -59,7 +59,12 @@ interface PhoneNumber {
   agent_id: number | null;
   created_at: string;
   activated_at: string | null;
-  // SIP Configuration
+  // Provider SIP Configuration (for INBOUND calls - Zadarma registration)
+  provider_sip_username?: string | null;
+  provider_sip_password?: string | null;
+  provider_sip_domain?: string | null;
+  has_provider_sip_config?: boolean;
+  // Asterisk WebSocket SIP Configuration (for OUTBOUND calls)
   sip_websocket_url?: string | null;
   sip_transport?: string | null;
   sip_username?: string | null;
@@ -101,6 +106,11 @@ interface VerificationDocument {
 
 interface EditDataType {
   business_name: string;
+  // Provider SIP (for INBOUND calls)
+  provider_sip_username: string;
+  provider_sip_password: string;
+  provider_sip_domain: string;
+  // Asterisk WebSocket SIP (for OUTBOUND calls)
   sip_websocket_url: string;
   sip_transport: string;
   sip_username: string;
@@ -186,6 +196,11 @@ export const PhoneNumbersPage: React.FC = () => {
   
   const [editData, setEditData] = useState<EditDataType>({
     business_name: '',
+    // Provider SIP (for INBOUND calls)
+    provider_sip_username: '',
+    provider_sip_password: '',
+    provider_sip_domain: '',
+    // Asterisk WebSocket SIP (for OUTBOUND calls)
     sip_websocket_url: '',
     sip_transport: 'WSS',
     sip_username: '',
@@ -368,6 +383,11 @@ export const PhoneNumbersPage: React.FC = () => {
     try {
       const response = await api.put(`/phone-numbers/${selectedNumber.id}`, {
         business_name: editData.business_name,
+        // Provider SIP (for INBOUND calls - Zadarma registration)
+        provider_sip_username: editData.provider_sip_username || undefined,
+        provider_sip_password: editData.provider_sip_password || undefined,
+        provider_sip_domain: editData.provider_sip_domain || undefined,
+        // Asterisk WebSocket SIP (for OUTBOUND calls)
         sip_websocket_url: editData.sip_websocket_url,
         sip_transport: editData.sip_transport,
         sip_username: editData.sip_username,
@@ -384,12 +404,19 @@ export const PhoneNumbersPage: React.FC = () => {
       await loadPhoneNumbers();
       setShowEditModal(false);
       
-      // Check if SIP credentials were configured - reload SIP registrations for outbound calls
-      const hasSipConfig = editData.sip_websocket_url && editData.sip_username && editData.sip_password && editData.sip_domain;
-      if (hasSipConfig) {
+      // Check if provider SIP credentials were configured (for inbound via Asterisk)
+      const hasProviderSipConfig = editData.provider_sip_username && editData.provider_sip_password && editData.provider_sip_domain;
+      // Check if outbound SIP credentials were configured (for outbound via WebSocket)
+      const hasOutboundSipConfig = editData.sip_websocket_url && editData.sip_username && editData.sip_password && editData.sip_domain;
+      
+      if (hasOutboundSipConfig) {
         try {
           await api.post('/calls/outbound/sip-reload');
-          toast.success('Phone number updated & SIP registered for outbound calls!');
+          if (hasProviderSipConfig) {
+            toast.success('Phone number updated! Inbound (Asterisk) & Outbound (WebSocket) SIP configured.');
+          } else {
+            toast.success('Phone number updated & SIP registered for outbound calls!');
+          }
         } catch (sipError) {
           // SIP reload failed, but phone number was saved
           if (response.data?.asterisk_config_updated) {
@@ -398,6 +425,8 @@ export const PhoneNumbersPage: React.FC = () => {
             toast.success('Phone number updated. SIP reload may require server restart.');
           }
         }
+      } else if (hasProviderSipConfig && response.data?.asterisk_config_updated) {
+        toast.success('Phone number updated! Asterisk configured for inbound calls.');
       } else if (response.data?.asterisk_config_updated) {
         toast.success('Phone number updated & Asterisk config regenerated!');
       } else if (response.data?.asterisk_config_updated === false) {
@@ -441,6 +470,11 @@ export const PhoneNumbersPage: React.FC = () => {
     setSelectedNumber(number);
     setEditData({
       business_name: number.business_name || '',
+      // Provider SIP (for INBOUND calls)
+      provider_sip_username: number.provider_sip_username || '',
+      provider_sip_password: number.provider_sip_password || '',
+      provider_sip_domain: number.provider_sip_domain || '',
+      // Asterisk WebSocket SIP (for OUTBOUND calls)
       sip_websocket_url: number.sip_websocket_url || '',
       sip_transport: number.sip_transport || 'WSS',
       sip_username: number.sip_username || '',
@@ -1503,11 +1537,77 @@ export const PhoneNumbersPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* SIP Configuration */}
+              {/* INBOUND SIP Configuration (Provider/Zadarma) */}
               <div>
                 <div className="flex items-center justify-between border-b pb-2 mb-4">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                    SIP Configuration
+                    📥 Inbound SIP (Provider)
+                  </h3>
+                  {selectedNumber?.has_provider_sip_config ? (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                      <CheckCircleIcon className="w-3.5 h-3.5 mr-1" />
+                      Configured
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">
+                      <ExclamationTriangleIcon className="w-3.5 h-3.5 mr-1" />
+                      Not Configured
+                    </span>
+                  )}
+                </div>
+                
+                {/* Info box about Provider SIP */}
+                <div className="mb-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <PhoneIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm text-indigo-700 dark:text-indigo-300">
+                      <p className="font-medium">For receiving incoming calls</p>
+                      <p className="text-indigo-600 dark:text-indigo-400 mt-1">
+                        These are your SIP provider credentials (e.g., Zadarma). Asterisk uses them to register with your provider and receive incoming calls.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Provider Username</label>
+                    <input
+                      type="text"
+                      value={editData.provider_sip_username}
+                      onChange={(e) => setEditData({...editData, provider_sip_username: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      placeholder="e.g., 123456_1"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Provider Password</label>
+                    <input
+                      type="password"
+                      value={editData.provider_sip_password}
+                      onChange={(e) => setEditData({...editData, provider_sip_password: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      placeholder="Your provider password"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Provider Domain</label>
+                    <input
+                      type="text"
+                      value={editData.provider_sip_domain}
+                      onChange={(e) => setEditData({...editData, provider_sip_domain: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      placeholder="sip.zadarma.com"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* OUTBOUND SIP Configuration (Asterisk WebSocket) */}
+              <div>
+                <div className="flex items-center justify-between border-b pb-2 mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    📤 Outbound SIP (Asterisk WebSocket)
                   </h3>
                   {selectedNumber?.has_sip_config ? (
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
@@ -1522,20 +1622,17 @@ export const PhoneNumbersPage: React.FC = () => {
                   )}
                 </div>
                 
-                {/* Info box about Asterisk config */}
+                {/* Info box about Asterisk WebSocket */}
                 <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
                   <div className="flex items-start gap-2">
                     <SignalIcon className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
                     <div className="text-sm text-blue-700 dark:text-blue-300">
-                      <p className="font-medium">SIP Configuration for Inbound & Outbound Calls</p>
+                      <p className="font-medium">For making outbound calls from web</p>
                       <p className="text-blue-600 dark:text-blue-400 mt-1">
-                        <strong>Inbound:</strong> Routes incoming calls to your AI agent via Asterisk.
-                      </p>
-                      <p className="text-blue-600 dark:text-blue-400 mt-1">
-                        <strong>Outbound:</strong> Enables making calls to leads from the Agent Detail page.
+                        These are your Asterisk internal extension credentials. The backend uses them to connect via WebSocket and make outbound calls.
                       </p>
                       <p className="text-blue-600 dark:text-blue-400 mt-2 text-xs">
-                        Use your Asterisk/SIP provider credentials. WebSocket URL should point to your Asterisk server (e.g., wss://server:8089/ws).
+                        <strong>For local Asterisk:</strong> Use <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">ws://localhost:8089/ws</code> with extension <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">55555</code>
                       </p>
                     </div>
                   </div>
@@ -1549,7 +1646,7 @@ export const PhoneNumbersPage: React.FC = () => {
                       value={editData.sip_websocket_url}
                       onChange={(e) => setEditData({...editData, sip_websocket_url: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                      placeholder="wss://server:8089/ws"
+                      placeholder="ws://localhost:8089/ws"
                     />
                   </div>
                   <div>
@@ -1559,12 +1656,12 @@ export const PhoneNumbersPage: React.FC = () => {
                       onChange={(e) => setEditData({...editData, sip_transport: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                     >
-                      <option value="WSS">WSS (Secure WebSocket)</option>
                       <option value="WS">WS (WebSocket)</option>
+                      <option value="WSS">WSS (Secure WebSocket)</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-2">SIP Username</label>
+                    <label className="block text-sm font-medium mb-2">Extension Username</label>
                     <input
                       type="text"
                       value={editData.sip_username}
@@ -1574,23 +1671,23 @@ export const PhoneNumbersPage: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-2">SIP Password</label>
+                    <label className="block text-sm font-medium mb-2">Extension Password</label>
                     <input
                       type="password"
                       value={editData.sip_password}
                       onChange={(e) => setEditData({...editData, sip_password: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                      placeholder="Enter SIP password"
+                      placeholder="Extension password"
                     />
                   </div>
                   <div className="md:col-span-2">
-                    <label className="block text-sm font-medium mb-2">SIP Domain</label>
+                    <label className="block text-sm font-medium mb-2">Asterisk Domain</label>
                     <input
                       type="text"
                       value={editData.sip_domain}
                       onChange={(e) => setEditData({...editData, sip_domain: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                      placeholder="weevoice.example.com"
+                      placeholder="localhost"
                     />
                   </div>
                 </div>
