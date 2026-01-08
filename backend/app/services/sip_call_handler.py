@@ -353,7 +353,8 @@ class SIPCallHandler:
         from_phone_number: str, 
         to_number: str, 
         agent_id: int,
-        user_id: int
+        user_id: int,
+        script_data: Optional[dict] = None
     ) -> Optional[dict]:
         """
         Initiate an outbound call
@@ -363,6 +364,7 @@ class SIPCallHandler:
             to_number: The number to call
             agent_id: The AI agent to use for the call
             user_id: The user initiating the call
+            script_data: Optional outbound script data (opening_message, main_content, etc.)
             
         Returns:
             dict with call info if successful, None if failed
@@ -415,7 +417,7 @@ class SIPCallHandler:
                 logger.info(f"✅ Created outbound call record: ID={call.id}")
                 
                 # Create bridge (will start when call is answered)
-                bridge = SIPCallBridge(sip_call, sip_client, agent, call, db, phone_record)
+                bridge = SIPCallBridge(sip_call, sip_client, agent, call, db, phone_record, script_data=script_data)
                 bridge.is_outbound = True  # Mark as outbound
                 self.active_handlers[sip_call.call_id] = bridge
                 
@@ -505,13 +507,14 @@ class SIPCallBridge:
     
     def __init__(self, sip_call: SIPCallSession, sip_client: SIPClientService, 
                  agent: VoiceAgent, call: Call, db: Session, 
-                 phone_record: PhoneNumber):
+                 phone_record: PhoneNumber, script_data: Optional[dict] = None):
         self.sip_call = sip_call
         self.sip_client = sip_client
         self.agent = agent
         self.call = call
         self.db = db
         self.phone_record = phone_record
+        self.script_data = script_data  # Outbound script for the call
         
         self.agent_service: Optional[FrenchVoiceAgentService] = None
         self.is_running = False
@@ -520,12 +523,18 @@ class SIPCallBridge:
         logger.info(f"Created SIP bridge for call {call.id}")
         logger.info(f"  Phone: {phone_record.phone_number}")
         logger.info(f"  Agent: {agent.name} (ID: {agent.id})")
+        if script_data:
+            logger.info(f"  Script: {script_data.get('name', 'unnamed')}")
     
     async def start(self):
         """Start the audio bridge"""
         try:
-            # Initialize Gemini agent service
-            self.agent_service = FrenchVoiceAgentService(self.agent, self.call)
+            # Initialize Gemini agent service with optional script
+            self.agent_service = FrenchVoiceAgentService(
+                self.agent, 
+                self.call,
+                script_data=self.script_data
+            )
             
             # Start Gemini session
             success = await self.agent_service.start_session()

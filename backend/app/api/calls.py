@@ -923,6 +923,7 @@ class OutboundCallRequest(BaseModel):
     from_phone_number: str  # Phone number to call from (must be registered)
     to_number: str  # Number to call
     agent_id: int  # AI agent to use
+    script_id: Optional[int] = None  # Optional outbound script to use
 
 
 class OutboundCallResponse(BaseModel):
@@ -953,8 +954,9 @@ async def make_outbound_call(
     - from_phone_number must be a registered phone number with SIP credentials
     - agent_id must be an agent owned by the current user (or any agent for admins)
     - The phone number's SIP client must be registered with the SIP server
+    - script_id (optional) - an outbound script to use for the call
     """
-    logger.info(f"Outbound call request: {request.from_phone_number} -> {request.to_number} (agent: {request.agent_id})")
+    logger.info(f"Outbound call request: {request.from_phone_number} -> {request.to_number} (agent: {request.agent_id}, script: {request.script_id})")
     
     # Verify agent exists and user has access
     agent = db.query(VoiceAgent).filter(VoiceAgent.id == request.agent_id).first()
@@ -963,6 +965,38 @@ async def make_outbound_call(
     
     if not current_user.is_superuser and agent.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    
+    # Get script if specified
+    script_data = None
+    if request.script_id:
+        from app.models import OutboundScript
+        script = db.query(OutboundScript).filter(
+            OutboundScript.id == request.script_id,
+            OutboundScript.agent_id == request.agent_id,
+            OutboundScript.is_active == True
+        ).first()
+        
+        if not script:
+            raise HTTPException(status_code=404, detail="Script not found or inactive")
+        
+        # Record script use
+        script.use_count += 1
+        script.last_used_at = datetime.utcnow()
+        db.commit()
+        
+        # Build script data for the call
+        script_data = {
+            "id": script.id,
+            "name": script.name,
+            "opening_message": script.opening_message,
+            "main_content": script.main_content,
+            "closing_message": script.closing_message,
+            "tone": script.tone,
+            "objective": script.objective,
+            "key_points": script.key_points,
+            "objection_handling": script.objection_handling
+        }
+        logger.info(f"Using outbound script: {script.name} (ID: {script.id})")
     
     # Import SIP call handler
     try:
@@ -981,12 +1015,13 @@ async def make_outbound_call(
             detail=f"Phone number {request.from_phone_number} is not registered for SIP calls"
         )
     
-    # Make the outbound call
+    # Make the outbound call with optional script
     result = await sip_call_handler.make_outbound_call(
         from_phone_number=request.from_phone_number,
         to_number=request.to_number,
         agent_id=request.agent_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        script_data=script_data
     )
     
     if not result:

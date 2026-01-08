@@ -82,6 +82,25 @@ export const agentsAPI = {
   getStats: (id: number) => api.get(`/agents/${id}/stats`),
   
   getLeads: (id: number) => api.get(`/agents/${id}/leads`),
+  
+  // Outbound Scripts
+  listScripts: (agentId: number, activeOnly: boolean = false) =>
+    api.get(`/agents/${agentId}/scripts`, { params: { active_only: activeOnly } }),
+  
+  getScript: (agentId: number, scriptId: number) =>
+    api.get(`/agents/${agentId}/scripts/${scriptId}`),
+  
+  createScript: (agentId: number, data: any) =>
+    api.post(`/agents/${agentId}/scripts`, data),
+  
+  updateScript: (agentId: number, scriptId: number, data: any) =>
+    api.put(`/agents/${agentId}/scripts/${scriptId}`, data),
+  
+  deleteScript: (agentId: number, scriptId: number) =>
+    api.delete(`/agents/${agentId}/scripts/${scriptId}`),
+  
+  toggleScriptFavorite: (agentId: number, scriptId: number) =>
+    api.post(`/agents/${agentId}/scripts/${scriptId}/toggle-favorite`),
 }
 
 // Calls API
@@ -116,7 +135,7 @@ export const callsAPI = {
     api.post('/calls/bulk/favorite', { call_ids: callIds, is_favorite: isFavorite }),
   
   // Outbound calls
-  makeOutboundCall: (data: { from_phone_number: string; to_number: string; agent_id: number }) =>
+  makeOutboundCall: (data: { from_phone_number: string; to_number: string; agent_id: number; script_id?: number }) =>
     api.post('/calls/outbound', data),
   
   getAvailablePhoneNumbers: (agentId?: number) => 

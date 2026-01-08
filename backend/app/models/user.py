@@ -65,4 +65,5 @@ class User(Base):
     verification_documents = relationship("VerificationDocument", back_populates="user", cascade="all, delete-orphan")
     callback_requests = relationship("CallbackRequest", back_populates="user", cascade="all, delete-orphan")
     agent_collaborations = relationship("AgentCollaborator", primaryjoin="User.id == AgentCollaborator.user_id", back_populates="user", cascade="all, delete-orphan")
+    outbound_scripts = relationship("OutboundScript", back_populates="user", cascade="all, delete-orphan")
 

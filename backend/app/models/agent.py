@@ -75,4 +75,5 @@ class VoiceAgent(Base):
     documents = relationship("Document", back_populates="agent", cascade="all, delete-orphan")
     phone_number = relationship("PhoneNumber", back_populates="agent", uselist=False)
     callback_requests = relationship("CallbackRequest", back_populates="agent", cascade="all, delete-orphan")
+    outbound_scripts = relationship("OutboundScript", back_populates="agent", cascade="all, delete-orphan")
 

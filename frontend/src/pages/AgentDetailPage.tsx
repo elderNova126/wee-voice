@@ -18,7 +18,12 @@ import {
   MicrophoneIcon,
   PhoneArrowUpRightIcon,
   XMarkIcon,
+  DocumentTextIcon,
+  PlusIcon,
+  TrashIcon,
+  StarIcon,
 } from '@heroicons/react/24/outline'
+import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, callsAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
@@ -77,7 +82,26 @@ interface PhoneNumber {
   country_code?: string
 }
 
-type TabType = 'overview' | 'leads' | 'calls'
+interface OutboundScript {
+  id: number
+  agent_id: number
+  name: string
+  description: string | null
+  opening_message: string
+  main_content: string | null
+  closing_message: string | null
+  tone: string
+  objective: string | null
+  key_points: string | null
+  objection_handling: string | null
+  is_active: boolean
+  is_favorite: boolean
+  use_count: number
+  last_used_at: string | null
+  created_at: string
+}
+
+type TabType = 'overview' | 'leads' | 'calls' | 'scripts'
 
 export default function AgentDetailPage() {
   const t = useTranslation()
@@ -88,10 +112,13 @@ export default function AgentDetailPage() {
   const [stats, setStats] = useState<AgentStats | null>(null)
   const [leads, setLeads] = useState<Lead[]>([])
   const [calls, setCalls] = useState<Call[]>([])
+  const [scripts, setScripts] = useState<OutboundScript[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<TabType>('overview')
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
   const [showCallModal, setShowCallModal] = useState(false)
+  const [showScriptModal, setShowScriptModal] = useState(false)
+  const [editingScript, setEditingScript] = useState<OutboundScript | null>(null)
 
   useEffect(() => {
     if (agentId) {
@@ -104,17 +131,19 @@ export default function AgentDetailPage() {
     
     setLoading(true)
     try {
-      const [agentRes, statsRes, leadsRes, callsRes] = await Promise.all([
+      const [agentRes, statsRes, leadsRes, callsRes, scriptsRes] = await Promise.all([
         agentsAPI.get(parseInt(agentId)),
         agentsAPI.getStats(parseInt(agentId)),
         agentsAPI.getLeads(parseInt(agentId)),
-        callsAPI.list({ agent_id: parseInt(agentId), per_page: 20 })
+        callsAPI.list({ agent_id: parseInt(agentId), per_page: 20 }),
+        agentsAPI.listScripts(parseInt(agentId))
       ])
       
       setAgent(agentRes.data)
       setStats(statsRes.data)
       setLeads(leadsRes.data.leads)
       setCalls(callsRes.data.items)
+      setScripts(scriptsRes.data)
     } catch (error) {
       console.error('Failed to load agent data:', error)
       toast.error('Failed to load agent data')
@@ -264,7 +293,7 @@ export default function AgentDetailPage() {
       {/* Tabs */}
       <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
         <nav className="flex space-x-4">
-          {(['overview', 'leads', 'calls'] as TabType[]).map((tab) => (
+          {(['overview', 'leads', 'calls', 'scripts'] as TabType[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -277,7 +306,13 @@ export default function AgentDetailPage() {
               {tab === 'overview' && <ChartBarIcon className="h-4 w-4 inline mr-2" />}
               {tab === 'leads' && <UserGroupIcon className="h-4 w-4 inline mr-2" />}
               {tab === 'calls' && <PhoneIcon className="h-4 w-4 inline mr-2" />}
+              {tab === 'scripts' && <DocumentTextIcon className="h-4 w-4 inline mr-2" />}
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === 'scripts' && scripts.length > 0 && (
+                <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full">
+                  {scripts.length}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -300,12 +335,37 @@ export default function AgentDetailPage() {
         />
       )}
       
+      {activeTab === 'calls' && (
+        <CallsTab 
+          calls={calls}
+          formatDate={formatDate}
+          getSentimentIcon={getSentimentIcon}
+        />
+      )}
+      
+      {activeTab === 'scripts' && agent && (
+        <ScriptsTab
+          scripts={scripts}
+          agentId={agent.id}
+          onCreateNew={() => {
+            setEditingScript(null)
+            setShowScriptModal(true)
+          }}
+          onEdit={(script) => {
+            setEditingScript(script)
+            setShowScriptModal(true)
+          }}
+          onRefresh={loadAgentData}
+        />
+      )}
+      
       {/* Outbound Call Modal */}
       {showCallModal && selectedLead && agent && (
         <OutboundCallModal
           lead={selectedLead}
           agentId={agent.id}
           agentName={agent.name}
+          scripts={scripts.filter(s => s.is_active)}
           onClose={() => {
             setShowCallModal(false)
             setSelectedLead(null)
@@ -318,11 +378,20 @@ export default function AgentDetailPage() {
         />
       )}
       
-      {activeTab === 'calls' && (
-        <CallsTab 
-          calls={calls}
-          formatDate={formatDate}
-          getSentimentIcon={getSentimentIcon}
+      {/* Script Edit Modal */}
+      {showScriptModal && agent && (
+        <ScriptModal
+          agentId={agent.id}
+          script={editingScript}
+          onClose={() => {
+            setShowScriptModal(false)
+            setEditingScript(null)
+          }}
+          onSave={() => {
+            setShowScriptModal(false)
+            setEditingScript(null)
+            loadAgentData()
+          }}
         />
       )}
     </DashboardLayout>
@@ -688,17 +757,20 @@ function OutboundCallModal({
   lead,
   agentId,
   agentName,
+  scripts,
   onClose,
   onSuccess
 }: {
   lead: Lead
   agentId: number
   agentName: string
+  scripts: OutboundScript[]
   onClose: () => void
   onSuccess: () => void
 }) {
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([])
   const [selectedPhone, setSelectedPhone] = useState<string>('')
+  const [selectedScript, setSelectedScript] = useState<OutboundScript | null>(null)
   const [loading, setLoading] = useState(true)
   const [calling, setCalling] = useState(false)
   const [callStatus, setCallStatus] = useState<'idle' | 'calling' | 'connected' | 'error'>('idle')
@@ -706,7 +778,12 @@ function OutboundCallModal({
 
   useEffect(() => {
     loadPhoneNumbers()
-  }, [])
+    // Pre-select favorite script if available
+    const favoriteScript = scripts.find(s => s.is_favorite)
+    if (favoriteScript) {
+      setSelectedScript(favoriteScript)
+    }
+  }, [scripts])
 
   const loadPhoneNumbers = async () => {
     try {
@@ -738,7 +815,8 @@ function OutboundCallModal({
       const response = await callsAPI.makeOutboundCall({
         from_phone_number: selectedPhone,
         to_number: lead.phone,
-        agent_id: agentId
+        agent_id: agentId,
+        script_id: selectedScript?.id
       })
 
       if (response.data.success) {
@@ -807,6 +885,87 @@ function OutboundCallModal({
               {agentName}
             </span>
           </div>
+        </div>
+
+        {/* Script Selection */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Call Script (Optional)
+          </label>
+          {scripts.length === 0 ? (
+            <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                No outbound scripts created yet. The agent will use its default behavior.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-40 overflow-y-auto">
+              {/* No Script Option */}
+              <label
+                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  !selectedScript
+                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                    : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="script"
+                  checked={!selectedScript}
+                  onChange={() => setSelectedScript(null)}
+                  className="text-purple-600 focus:ring-purple-500"
+                />
+                <div className="flex-1">
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    No script (default behavior)
+                  </span>
+                </div>
+              </label>
+              
+              {/* Available Scripts */}
+              {scripts.map((script) => (
+                <label
+                  key={script.id}
+                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    selectedScript?.id === script.id
+                      ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="script"
+                    checked={selectedScript?.id === script.id}
+                    onChange={() => setSelectedScript(script)}
+                    className="text-purple-600 focus:ring-purple-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 dark:text-white truncate">
+                        {script.name}
+                      </span>
+                      {script.is_favorite && (
+                        <StarIconSolid className="h-4 w-4 text-yellow-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    {script.description && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+                        {script.description}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
+                        {script.tone}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        Used {script.use_count}x
+                      </span>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Phone Number Selection */}
@@ -928,6 +1087,452 @@ function OutboundCallModal({
               <>
                 <PhoneArrowUpRightIcon className="h-5 w-5" />
                 Start Call
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Scripts Tab Component
+function ScriptsTab({
+  scripts,
+  agentId,
+  onCreateNew,
+  onEdit,
+  onRefresh
+}: {
+  scripts: OutboundScript[]
+  agentId: number
+  onCreateNew: () => void
+  onEdit: (script: OutboundScript) => void
+  onRefresh: () => void
+}) {
+  const handleToggleFavorite = async (script: OutboundScript) => {
+    try {
+      await agentsAPI.toggleScriptFavorite(agentId, script.id)
+      onRefresh()
+    } catch (error) {
+      console.error('Failed to toggle favorite:', error)
+      toast.error('Failed to update favorite status')
+    }
+  }
+
+  const handleDelete = async (script: OutboundScript) => {
+    if (!confirm(`Are you sure you want to delete "${script.name}"?`)) return
+    
+    try {
+      await agentsAPI.deleteScript(agentId, script.id)
+      toast.success('Script deleted')
+      onRefresh()
+    } catch (error) {
+      console.error('Failed to delete script:', error)
+      toast.error('Failed to delete script')
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+            Outbound Call Scripts
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+            Create and manage scripts for outbound calls. Scripts guide the AI agent's conversation.
+          </p>
+        </div>
+        <button
+          onClick={onCreateNew}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transition-all"
+        >
+          <PlusIcon className="h-5 w-5" />
+          New Script
+        </button>
+      </div>
+
+      {/* Scripts List */}
+      {scripts.length === 0 ? (
+        <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <DocumentTextIcon className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+          <h4 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+            No scripts yet
+          </h4>
+          <p className="text-gray-600 dark:text-gray-400 mb-6 max-w-sm mx-auto">
+            Create your first outbound call script to guide AI conversations with leads.
+          </p>
+          <button
+            onClick={onCreateNew}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors"
+          >
+            <PlusIcon className="h-5 w-5" />
+            Create Your First Script
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {scripts.map((script) => (
+            <div
+              key={script.id}
+              className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
+                      {script.name}
+                    </h4>
+                    <button
+                      onClick={() => handleToggleFavorite(script)}
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                      title={script.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+                    >
+                      {script.is_favorite ? (
+                        <StarIconSolid className="h-5 w-5 text-yellow-500" />
+                      ) : (
+                        <StarIcon className="h-5 w-5 text-gray-400 hover:text-yellow-500" />
+                      )}
+                    </button>
+                    {!script.is_active && (
+                      <span className="px-2 py-0.5 text-xs font-medium rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
+                        Inactive
+                      </span>
+                    )}
+                  </div>
+                  
+                  {script.description && (
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                      {script.description}
+                    </p>
+                  )}
+                  
+                  {/* Opening Message Preview */}
+                  <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 mb-3">
+                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Opening:</p>
+                    <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">
+                      "{script.opening_message}"
+                    </p>
+                  </div>
+                  
+                  {/* Meta Info */}
+                  <div className="flex flex-wrap items-center gap-3 text-sm">
+                    <span className="px-2 py-1 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
+                      {script.tone}
+                    </span>
+                    {script.objective && (
+                      <span className="text-gray-600 dark:text-gray-400">
+                        Goal: {script.objective.slice(0, 50)}{script.objective.length > 50 ? '...' : ''}
+                      </span>
+                    )}
+                    <span className="text-gray-500 dark:text-gray-500">
+                      Used {script.use_count}x
+                    </span>
+                    {script.last_used_at && (
+                      <span className="text-gray-400 dark:text-gray-500">
+                        Last: {new Date(script.last_used_at).toLocaleDateString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Actions */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => onEdit(script)}
+                    className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
+                    title="Edit script"
+                  >
+                    <PencilIcon className="h-5 w-5" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(script)}
+                    className="p-2 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                    title="Delete script"
+                  >
+                    <TrashIcon className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Script Modal Component
+function ScriptModal({
+  agentId,
+  script,
+  onClose,
+  onSave
+}: {
+  agentId: number
+  script: OutboundScript | null
+  onClose: () => void
+  onSave: () => void
+}) {
+  const [saving, setSaving] = useState(false)
+  const [formData, setFormData] = useState({
+    name: script?.name || '',
+    description: script?.description || '',
+    opening_message: script?.opening_message || '',
+    main_content: script?.main_content || '',
+    closing_message: script?.closing_message || '',
+    tone: script?.tone || 'professional',
+    objective: script?.objective || '',
+    key_points: script?.key_points || '',
+    objection_handling: script?.objection_handling || '',
+    is_active: script?.is_active ?? true,
+    is_favorite: script?.is_favorite ?? false
+  })
+
+  const toneOptions = [
+    { value: 'professional', label: 'Professional', desc: 'Formal and business-like' },
+    { value: 'friendly', label: 'Friendly', desc: 'Warm and approachable' },
+    { value: 'casual', label: 'Casual', desc: 'Relaxed and conversational' },
+    { value: 'formal', label: 'Formal', desc: 'Very proper and respectful' },
+    { value: 'enthusiastic', label: 'Enthusiastic', desc: 'Energetic and excited' }
+  ]
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    if (!formData.name.trim()) {
+      toast.error('Please enter a script name')
+      return
+    }
+    if (!formData.opening_message.trim()) {
+      toast.error('Please enter an opening message')
+      return
+    }
+
+    setSaving(true)
+    try {
+      if (script) {
+        await agentsAPI.updateScript(agentId, script.id, formData)
+        toast.success('Script updated successfully')
+      } else {
+        await agentsAPI.createScript(agentId, formData)
+        toast.success('Script created successfully')
+      }
+      onSave()
+    } catch (error: any) {
+      console.error('Failed to save script:', error)
+      toast.error(error?.response?.data?.detail || 'Failed to save script')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden z-10 border border-gray-200 dark:border-gray-700">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+          <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+            {script ? 'Edit Script' : 'New Outbound Script'}
+          </h3>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          >
+            <XMarkIcon className="h-5 w-5 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
+          <div className="space-y-6">
+            {/* Basic Info */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Script Name *
+                </label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="e.g., Product Demo Intro"
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+              
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Description
+                </label>
+                <input
+                  type="text"
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Brief description of when to use this script"
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Tone
+                </label>
+                <select
+                  value={formData.tone}
+                  onChange={(e) => setFormData({ ...formData, tone: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                >
+                  {toneOptions.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} - {opt.desc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Call Objective
+                </label>
+                <input
+                  type="text"
+                  value={formData.objective}
+                  onChange={(e) => setFormData({ ...formData, objective: e.target.value })}
+                  placeholder="e.g., Schedule a demo"
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            {/* Script Content */}
+            <div className="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-6">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+                Script Content
+              </h4>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Opening Message * <span className="text-gray-400 font-normal">(What the agent says first)</span>
+                </label>
+                <textarea
+                  value={formData.opening_message}
+                  onChange={(e) => setFormData({ ...formData, opening_message: e.target.value })}
+                  placeholder="Hello! This is [Agent Name] from [Company]. Am I speaking with [Lead Name]? I'm calling because..."
+                  rows={3}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Main Content <span className="text-gray-400 font-normal">(Key talking points)</span>
+                </label>
+                <textarea
+                  value={formData.main_content}
+                  onChange={(e) => setFormData({ ...formData, main_content: e.target.value })}
+                  placeholder="Main points to cover during the call..."
+                  rows={4}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Closing Message <span className="text-gray-400 font-normal">(How to wrap up)</span>
+                </label>
+                <textarea
+                  value={formData.closing_message}
+                  onChange={(e) => setFormData({ ...formData, closing_message: e.target.value })}
+                  placeholder="Thank you for your time. To summarize..."
+                  rows={2}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            {/* Advanced Settings */}
+            <div className="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-6">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+                Advanced Settings
+              </h4>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Key Points <span className="text-gray-400 font-normal">(One per line)</span>
+                </label>
+                <textarea
+                  value={formData.key_points}
+                  onChange={(e) => setFormData({ ...formData, key_points: e.target.value })}
+                  placeholder="- Introduce the product&#10;- Ask about current challenges&#10;- Present solution benefits"
+                  rows={3}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Objection Handling
+                </label>
+                <textarea
+                  value={formData.objection_handling}
+                  onChange={(e) => setFormData({ ...formData, objection_handling: e.target.value })}
+                  placeholder="How to respond to common objections like 'I'm not interested' or 'Call me back later'..."
+                  rows={3}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+              </div>
+
+              {/* Toggles */}
+              <div className="flex flex-wrap gap-6">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.is_active}
+                    onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                    className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Active</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.is_favorite}
+                    onChange={(e) => setFormData({ ...formData, is_favorite: e.target.checked })}
+                    className="rounded border-gray-300 text-yellow-500 focus:ring-yellow-500"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Mark as favorite</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </form>
+
+        {/* Footer */}
+        <div className="flex gap-3 p-6 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 px-4 py-3 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving}
+            className="flex-1 inline-flex justify-center items-center gap-2 px-4 py-3 rounded-lg bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-medium shadow-lg hover:shadow-xl disabled:shadow-none transition-all"
+          >
+            {saving ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                Saving...
+              </>
+            ) : (
+              <>
+                {script ? 'Update Script' : 'Create Script'}
               </>
             )}
           </button>
