@@ -1009,11 +1009,23 @@ async def make_outbound_call(
     if request.from_phone_number not in sip_call_handler.sip_clients:
         # List available phone numbers for debugging
         available = list(sip_call_handler.sip_clients.keys())
-        logger.error(f"Phone number {request.from_phone_number} not registered. Available: {available}")
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Phone number {request.from_phone_number} is not registered for SIP calls"
-        )
+        logger.error(f"Phone number {request.from_phone_number} not registered. Available SIP clients: {available}")
+        
+        # Try to find a similar number (might be format mismatch)
+        requested_digits = ''.join(c for c in request.from_phone_number if c.isdigit())
+        for avail_num in available:
+            avail_digits = ''.join(c for c in avail_num if c.isdigit())
+            if requested_digits == avail_digits or requested_digits.endswith(avail_digits) or avail_digits.endswith(requested_digits):
+                logger.error(f"Found similar number: {avail_num} (requested: {request.from_phone_number})")
+                # Use the matching number instead
+                request.from_phone_number = avail_num
+                break
+        else:
+            # No match found - provide helpful error
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Phone number {request.from_phone_number} is not registered for SIP calls. Available: {available}. Check if the phone has SIP credentials configured (sip_websocket_url, sip_username, sip_password, sip_domain)."
+            )
     
     # Make the outbound call with optional script
     result = await sip_call_handler.make_outbound_call(
@@ -1039,6 +1051,74 @@ async def make_outbound_call(
         to_number=result.get("to_number"),
         agent_id=result.get("agent_id")
     )
+
+
+@router.get("/outbound/sip-status")
+async def get_sip_status(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Debug endpoint to check SIP handler status.
+    Shows which phone numbers are registered with the SIP handler.
+    """
+    try:
+        from app.services.sip_call_handler import sip_call_handler
+        
+        registered = []
+        for phone_num, client in sip_call_handler.sip_clients.items():
+            phone_record = sip_call_handler.phone_records.get(phone_num)
+            registered.append({
+                "phone_number": phone_num,
+                "is_registered": getattr(client, 'is_registered', False),
+                "agent_id": phone_record.agent_id if phone_record else None,
+                "sip_username": phone_record.sip_username if phone_record else None,
+                "sip_domain": phone_record.sip_domain if phone_record else None
+            })
+        
+        return {
+            "sip_handler_active": True,
+            "registered_count": len(registered),
+            "registered_phones": registered,
+            "message": "SIP handler is running" if registered else "No phones registered with SIP handler"
+        }
+    except Exception as e:
+        logger.error(f"Error checking SIP status: {e}")
+        return {
+            "sip_handler_active": False,
+            "registered_count": 0,
+            "registered_phones": [],
+            "message": f"SIP handler error: {str(e)}"
+        }
+
+
+@router.post("/outbound/sip-reload")
+async def reload_sip_registrations(
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Reload SIP phone registrations.
+    Use this after adding/updating phone numbers with SIP credentials.
+    """
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        from app.services.sip_call_handler import sip_call_handler
+        
+        await sip_call_handler.reload_phone_numbers()
+        
+        # Get updated status
+        registered = list(sip_call_handler.sip_clients.keys())
+        
+        return {
+            "success": True,
+            "message": f"SIP registrations reloaded. {len(registered)} phone(s) registered.",
+            "registered_phones": registered
+        }
+    except Exception as e:
+        logger.error(f"Error reloading SIP registrations: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload SIP: {str(e)}")
 
 
 @router.get("/outbound/phone-numbers")

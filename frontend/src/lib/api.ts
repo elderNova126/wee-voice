@@ -141,6 +141,10 @@ export const callsAPI = {
   getAvailablePhoneNumbers: (agentId?: number) => 
     api.get('/calls/outbound/phone-numbers', { params: agentId ? { agent_id: agentId } : {} }),
   
+  getSipStatus: () => api.get('/calls/outbound/sip-status'),
+  
+  reloadSipRegistrations: () => api.post('/calls/outbound/sip-reload'),
+  
   hangupCall: (id: number) => api.post(`/calls/${id}/hangup`),
 }
 
