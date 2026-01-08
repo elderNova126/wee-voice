@@ -1099,10 +1099,8 @@ async def reload_sip_registrations(
     """
     Reload SIP phone registrations.
     Use this after adding/updating phone numbers with SIP credentials.
+    Any authenticated user can trigger this to reload their own phone numbers.
     """
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
     try:
         from app.services.sip_call_handler import sip_call_handler
         

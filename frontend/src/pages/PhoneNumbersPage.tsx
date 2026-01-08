@@ -384,8 +384,21 @@ export const PhoneNumbersPage: React.FC = () => {
       await loadPhoneNumbers();
       setShowEditModal(false);
       
-      // Check if Asterisk config was updated
-      if (response.data?.asterisk_config_updated) {
+      // Check if SIP credentials were configured - reload SIP registrations for outbound calls
+      const hasSipConfig = editData.sip_websocket_url && editData.sip_username && editData.sip_password && editData.sip_domain;
+      if (hasSipConfig) {
+        try {
+          await api.post('/calls/outbound/sip-reload');
+          toast.success('Phone number updated & SIP registered for outbound calls!');
+        } catch (sipError) {
+          // SIP reload failed, but phone number was saved
+          if (response.data?.asterisk_config_updated) {
+            toast.success('Phone number updated & Asterisk configured. SIP reload pending - may require server restart.');
+          } else {
+            toast.success('Phone number updated. SIP reload may require server restart.');
+          }
+        }
+      } else if (response.data?.asterisk_config_updated) {
         toast.success('Phone number updated & Asterisk config regenerated!');
       } else if (response.data?.asterisk_config_updated === false) {
         toast.success('Phone number updated (Asterisk config update had issues)');
@@ -1514,9 +1527,15 @@ export const PhoneNumbersPage: React.FC = () => {
                   <div className="flex items-start gap-2">
                     <SignalIcon className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
                     <div className="text-sm text-blue-700 dark:text-blue-300">
-                      <p className="font-medium">SIP settings enable call routing</p>
+                      <p className="font-medium">SIP Configuration for Inbound & Outbound Calls</p>
                       <p className="text-blue-600 dark:text-blue-400 mt-1">
-                        When you save SIP configuration, the Asterisk PBX will be automatically updated to route calls to this phone number to your assigned AI agent.
+                        <strong>Inbound:</strong> Routes incoming calls to your AI agent via Asterisk.
+                      </p>
+                      <p className="text-blue-600 dark:text-blue-400 mt-1">
+                        <strong>Outbound:</strong> Enables making calls to leads from the Agent Detail page.
+                      </p>
+                      <p className="text-blue-600 dark:text-blue-400 mt-2 text-xs">
+                        Use your Asterisk/SIP provider credentials. WebSocket URL should point to your Asterisk server (e.g., wss://server:8089/ws).
                       </p>
                     </div>
                   </div>
