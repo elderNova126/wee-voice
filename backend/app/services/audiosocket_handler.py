@@ -1070,11 +1070,81 @@ class AudioSocketSession:
                 return []
         return []
     
+    def _is_suspicious_caller_id(self, caller_phone: str) -> tuple[bool, str]:
+        """
+        Detect suspicious/fake caller IDs often used by spammers and probing attacks.
+        
+        Returns:
+            tuple: (is_suspicious: bool, reason: str)
+        """
+        import re
+        
+        if not caller_phone:
+            return True, "Empty caller ID"
+        
+        # Clean the number - remove common prefixes and special chars
+        clean_number = re.sub(r'[^\d]', '', caller_phone)
+        
+        # Skip check for valid-looking international numbers (10+ digits)
+        if len(clean_number) >= 10:
+            return False, ""
+        
+        # Block very short numbers (less than 6 digits, except emergency)
+        emergency_numbers = {'911', '112', '999', '100', '101', '102', '15', '17', '18'}
+        if len(clean_number) < 6 and clean_number not in emergency_numbers:
+            # Check if it's all the same digit (777, 888, 8888, etc.)
+            if len(set(clean_number)) == 1 and len(clean_number) >= 3:
+                return True, f"Repeated digit pattern: {caller_phone}"
+            
+            # Check for sequential patterns (1234, 4321)
+            if clean_number in ('1234', '12345', '123456', '4321', '54321', '654321'):
+                return True, f"Sequential pattern: {caller_phone}"
+            
+            # Block other very short suspicious numbers
+            if len(clean_number) <= 4:
+                return True, f"Suspiciously short caller ID: {caller_phone}"
+        
+        # Block numbers that are just repeated digits (like 77777777, 88888888)
+        if len(clean_number) >= 3 and len(set(clean_number)) == 1:
+            return True, f"All repeated digits: {caller_phone}"
+        
+        # Block common fake/test patterns
+        fake_patterns = [
+            r'^0+$',           # All zeros
+            r'^1{5,}$',        # 11111+
+            r'^2{5,}$',        # 22222+
+            r'^3{5,}$',        # 33333+
+            r'^4{5,}$',        # 44444+
+            r'^5{5,}$',        # 55555+
+            r'^6{5,}$',        # 66666+
+            r'^7{5,}$',        # 77777+
+            r'^8{5,}$',        # 88888+
+            r'^9{5,}$',        # 99999+
+            r'^123456789',     # Sequential
+            r'^987654321',     # Reverse sequential
+        ]
+        
+        for pattern in fake_patterns:
+            if re.match(pattern, clean_number):
+                return True, f"Matches fake pattern: {caller_phone}"
+        
+        return False, ""
+    
     def _is_caller_blocked(self, phone, caller_phone: str) -> bool:
         """Check if caller is blocked based on phone number restrictions"""
         print(f"[RESTRICT] === _is_caller_blocked() CALLED ===", flush=True)
         print(f"[RESTRICT] caller_phone: {caller_phone}", flush=True)
         print(f"[RESTRICT] phone.restriction_mode: '{phone.restriction_mode}'", flush=True)
+        
+        # =====================================================================
+        # SECURITY: Check for suspicious/fake caller IDs FIRST (always enabled)
+        # This blocks probe calls with fake numbers like 888, 777, 8888, etc.
+        # =====================================================================
+        is_suspicious, reason = self._is_suspicious_caller_id(caller_phone)
+        if is_suspicious:
+            logger.warning(f"[SECURITY] BLOCKED suspicious caller ID: {caller_phone} - {reason}")
+            print(f"[SECURITY] BLOCKED suspicious caller ID: {caller_phone} - {reason}", flush=True)
+            return True
         
         restriction_mode = phone.restriction_mode or 'none'
         

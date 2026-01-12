@@ -98,6 +98,65 @@ def normalize_phone_number(number: str) -> str:
     return normalized
 
 
+def is_suspicious_caller_id(caller_phone: str) -> tuple:
+    """
+    Detect suspicious/fake caller IDs often used by spammers and probing attacks.
+    
+    Returns:
+        tuple: (is_suspicious: bool, reason: str)
+    """
+    if not caller_phone:
+        return True, "Empty caller ID"
+    
+    # Clean the number - remove common prefixes and special chars
+    clean_number = re.sub(r'[^\d]', '', caller_phone)
+    
+    # Skip check for valid-looking international numbers (10+ digits)
+    if len(clean_number) >= 10:
+        return False, ""
+    
+    # Block very short numbers (less than 6 digits, except emergency)
+    emergency_numbers = {'911', '112', '999', '100', '101', '102', '15', '17', '18'}
+    if len(clean_number) < 6 and clean_number not in emergency_numbers:
+        # Check if it's all the same digit (777, 888, 8888, etc.)
+        if len(set(clean_number)) == 1 and len(clean_number) >= 3:
+            return True, f"Repeated digit pattern: {caller_phone}"
+        
+        # Check for sequential patterns (1234, 4321)
+        if clean_number in ('1234', '12345', '123456', '4321', '54321', '654321'):
+            return True, f"Sequential pattern: {caller_phone}"
+        
+        # Block other very short suspicious numbers
+        if len(clean_number) <= 4:
+            return True, f"Suspiciously short caller ID: {caller_phone}"
+    
+    # Block numbers that are just repeated digits (like 77777777, 88888888)
+    if len(clean_number) >= 3 and len(set(clean_number)) == 1:
+        return True, f"All repeated digits: {caller_phone}"
+    
+    # Block common fake/test patterns
+    fake_patterns = [
+        r'^0+$',           # All zeros
+        r'^1{5,}$',        # 11111+
+        r'^2{5,}$',        # 22222+
+        r'^3{5,}$',        # 33333+
+        r'^4{5,}$',        # 44444+
+        r'^5{5,}$',        # 55555+
+        r'^6{5,}$',        # 66666+
+        r'^7{5,}$',        # 77777+
+        r'^8{5,}$',        # 88888+
+        r'^9{5,}$',        # 99999+
+        r'^123456789',     # Sequential
+        r'^987654321',     # Reverse sequential
+    ]
+    
+    for pattern in fake_patterns:
+        if re.match(pattern, clean_number):
+            return True, f"Matches fake pattern: {caller_phone}"
+    
+    return False, ""
+
+
 class AGI:
     """Minimal AGI protocol handler"""
     
@@ -719,6 +778,17 @@ class WeeVoiceEAGI:
             logger.info(f"Caller: {self.caller_id}")
             logger.info(f"Called DID: {self.called_did}")
             logger.info(f"Channel: {channel}")
+            
+            # =====================================================================
+            # SECURITY: Check for suspicious/fake caller IDs (probe attack defense)
+            # Blocks calls from spoofed numbers like 888, 777, 8888, etc.
+            # =====================================================================
+            is_suspicious, reason = is_suspicious_caller_id(self.caller_id)
+            if is_suspicious:
+                logger.warning(f"[SECURITY] BLOCKED suspicious caller ID: {self.caller_id} - {reason}")
+                self.agi.verbose(f"WeeVoice: Blocked suspicious caller - {reason}", 1)
+                # Return early - don't process this call
+                return
             
             # Log all AGI variables for debugging
             logger.debug("AGI Environment Variables:")
