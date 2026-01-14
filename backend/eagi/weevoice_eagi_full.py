@@ -447,6 +447,14 @@ class EAGIHandler:
             log(f"PCM to ulaw error: {e}")
             return pcm_data
     
+    def _pcm_to_alaw(self, pcm_data: bytes) -> bytes:
+        """Convert PCM16 to A-law for Asterisk (used by some SIP providers like Zadarma)"""
+        try:
+            return audioop.lin2alaw(pcm_data, 2)
+        except Exception as e:
+            log(f"PCM to alaw error: {e}")
+            return pcm_data
+    
     # ========================================================================
     # AUDIO FILE HANDLING
     # ========================================================================
@@ -455,29 +463,49 @@ class EAGIHandler:
         """
         Write audio to file for playback, return filename without extension.
         
+        Creates BOTH ulaw and alaw versions so Asterisk can pick the matching codec.
+        This avoids transcoding which can cause timing issues.
+        
         IMPORTANT: Adds silence padding at the end of each file to mask the gap
         between sequential STREAM FILE commands. This prevents audible dropouts.
         """
         filename = f"{AUDIO_TMP_DIR}/{self.session_id}_{file_id}"
         ulaw_path = f"{filename}.ulaw"
+        alaw_path = f"{filename}.alaw"
+        sln_path = f"{filename}.sln"  # Also create slin for best compatibility
         
         try:
-            # Convert to µ-law (Asterisk native format)
-            ulaw_data = self._pcm_to_ulaw(audio_data)
-            
             # Add silence padding at the end to mask inter-file gaps
             # The gap between STREAM FILE commands is typically 20-50ms
             # We add 60ms of silence to ensure smooth transitions
+            PADDING_SAMPLES = 480  # 60ms at 8kHz
+            
+            # Convert to µ-law
+            ulaw_data = self._pcm_to_ulaw(audio_data)
             if add_padding:
-                # 60ms of µ-law silence at 8kHz = 480 samples
                 # In µ-law encoding, 0xFF (255) represents zero amplitude (silence)
-                # This is the standard µ-law silence byte
-                PADDING_SAMPLES = 480
-                silence_padding = bytes([0xFF] * PADDING_SAMPLES)
-                ulaw_data = ulaw_data + silence_padding
+                ulaw_data = ulaw_data + bytes([0xFF] * PADDING_SAMPLES)
             
             with open(ulaw_path, 'wb') as f:
                 f.write(ulaw_data)
+            
+            # Convert to A-law (for Zadarma and other providers that prefer alaw)
+            alaw_data = self._pcm_to_alaw(audio_data)
+            if add_padding:
+                # In A-law encoding, 0xD5 (213) represents zero amplitude (silence)
+                alaw_data = alaw_data + bytes([0xD5] * PADDING_SAMPLES)
+            
+            with open(alaw_path, 'wb') as f:
+                f.write(alaw_data)
+            
+            # Also write raw slin (signed linear 8kHz) as fallback
+            sln_data = audio_data
+            if add_padding:
+                # slin silence is 0x00 bytes (2 bytes per sample)
+                sln_data = sln_data + bytes([0x00] * PADDING_SAMPLES * 2)
+            
+            with open(sln_path, 'wb') as f:
+                f.write(sln_data)
             
             return filename
             
@@ -613,12 +641,25 @@ class EAGIHandler:
             audio_8k = self._resample_24k_to_8k(audio_24k)
             log(f"Greeting resampled to 8kHz: {len(audio_8k)} bytes")
             
-            # Write to file
+            # Write to file in MULTIPLE formats for codec compatibility
+            # This avoids transcoding delays that can cause audio issues
             greeting_file = f"{AUDIO_TMP_DIR}/{self.session_id}_greeting"
-            ulaw_data = self._pcm_to_ulaw(audio_8k)
             
+            # µ-law (common in North America)
+            ulaw_data = self._pcm_to_ulaw(audio_8k)
             with open(f"{greeting_file}.ulaw", 'wb') as f:
                 f.write(ulaw_data)
+            
+            # A-law (common in Europe, used by Zadarma)
+            alaw_data = self._pcm_to_alaw(audio_8k)
+            with open(f"{greeting_file}.alaw", 'wb') as f:
+                f.write(alaw_data)
+            
+            # slin (signed linear - best quality, Asterisk native)
+            with open(f"{greeting_file}.sln", 'wb') as f:
+                f.write(audio_8k)
+            
+            log(f"Greeting saved in ulaw/alaw/sln formats")
             
             # Play via STREAM FILE (blocking but quick for greeting)
             log(f"Playing greeting via STREAM FILE...")
