@@ -25,7 +25,10 @@ class ConfigRegenerateResponse(BaseModel):
     success: bool
     message: str
     phone_numbers_count: int = 0
+    phones_with_websocket_sip: int = 0  # For pjsip_weevoice.conf
+    phones_with_provider_sip: int = 0   # For pjsip_zadarma_credentials.conf
     files_written: bool = False
+    zadarma_credentials_written: bool = False
     asterisk_reloaded: bool = False
     errors: list = []
     generated_at: str = ""
@@ -33,8 +36,9 @@ class ConfigRegenerateResponse(BaseModel):
 
 class ConfigStatusResponse(BaseModel):
     """Response for config status request"""
-    pjsip_file: Dict[str, Any]
-    extensions_file: Dict[str, Any]
+    pjsip_file: Dict[str, Any]           # pjsip_weevoice.conf (WebSocket endpoints)
+    extensions_file: Dict[str, Any]       # extensions_weevoice.conf (routing)
+    zadarma_credentials_file: Dict[str, Any] = {}  # pjsip_zadarma_credentials.conf
 
 
 @router.post("/regenerate", response_model=ConfigRegenerateResponse)
@@ -54,19 +58,23 @@ async def regenerate_asterisk_config(
     
     Requires admin privileges or ownership of at least one phone number.
     """
-    # Check if user is admin or has phone numbers
+    # Check if user is admin or has phone numbers with SIP config
     if not current_user.is_superuser:
-        # Check if user has any phone numbers with SIP config
+        # Check if user has any phone numbers with SIP config (either provider or WebSocket)
         from app.models import PhoneNumber
+        from sqlalchemy import or_
         user_phones = db.query(PhoneNumber).filter(
             PhoneNumber.user_id == current_user.id,
-            PhoneNumber.sip_username.isnot(None)
+            or_(
+                PhoneNumber.sip_username.isnot(None),
+                PhoneNumber.provider_sip_username.isnot(None)
+            )
         ).count()
         
         if user_phones == 0:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You need at least one phone number with SIP configuration to regenerate config"
+                detail="You need at least one phone number with SIP configuration (provider or WebSocket) to regenerate config"
             )
     
     logger.info(f"User {current_user.email} requesting Asterisk config regeneration")
@@ -87,7 +95,10 @@ async def regenerate_asterisk_config(
         success=result['success'],
         message=message,
         phone_numbers_count=result['phone_numbers_count'],
+        phones_with_websocket_sip=result.get('phones_with_websocket_sip', 0),
+        phones_with_provider_sip=result.get('phones_with_provider_sip', 0),
         files_written=result['files_written'],
+        zadarma_credentials_written=result.get('zadarma_credentials_written', False),
         asterisk_reloaded=result['asterisk_reloaded'],
         errors=result['errors'],
         generated_at=result['generated_at']
@@ -217,10 +228,16 @@ async def list_configured_phone_numbers(
                 "id": p['id'],
                 "phone_number": p['phone_number'],
                 "agent_id": p['agent_id'],
-                "sip_domain": p['sip_domain'],
-                "sip_username": p['sip_username'],
                 "business_name": p['business_name'],
-                "status": p['status']
+                "status": p['status'],
+                # Provider SIP (for Zadarma/inbound) - goes to pjsip_zadarma_credentials.conf
+                "provider_sip_username": p.get('provider_sip_username'),
+                "provider_sip_domain": p.get('provider_sip_domain'),
+                "has_provider_sip": bool(p.get('provider_sip_username') and p.get('provider_sip_password')),
+                # WebSocket SIP (for outbound) - goes to pjsip_weevoice.conf
+                "sip_domain": p.get('sip_domain'),
+                "sip_username": p.get('sip_username'),
+                "has_websocket_sip": bool(p.get('sip_username') and p.get('sip_password') and p.get('sip_domain'))
             }
             for p in phones
         ]
