@@ -684,19 +684,25 @@ class EAGIHandler:
     # ========================================================================
     
     async def _capture_and_send(self):
-        """Capture audio from FD3 and send to backend in batches for efficiency"""
+        """Capture audio from FD3 and send to backend in batches for efficiency.
+        
+        CRITICAL FIX: We MUST drain FD3 continuously, even during greeting playback!
+        If we don't read from FD3, the buffer fills up and causes backpressure,
+        resulting in 'write() failed: Resource temporarily unavailable' during STREAM FILE.
+        
+        During greeting: Read and DISCARD audio (don't send to Gemini)
+        After greeting: Read and SEND audio to Gemini
+        """
         log("CAPTURE: Starting audio capture from Asterisk")
         
         if not self._audio_fd:
             log("CAPTURE: Audio FD3 not available")
             return
         
-        # CRITICAL: Wait for greeting to finish before sending audio to Gemini
-        # This prevents Gemini from responding to background noise during greeting
-        if not self._greeting_done.is_set():
-            log("CAPTURE: Waiting for greeting to finish before capturing audio...")
-            await self._greeting_done.wait()
-            log("CAPTURE: Greeting done, starting audio capture")
+        # NOTE: We start reading immediately but only SEND after greeting
+        greeting_done = self._greeting_done.is_set()
+        if not greeting_done:
+            log("CAPTURE: Draining FD3 during greeting (discarding audio)")
         
         frame_count = 0
         buffer = b''
@@ -755,11 +761,20 @@ class EAGIHandler:
                         send_buffer += audio_16k
                         frame_count += 1
                 
+                # Check if greeting is now done (transition from draining to sending)
+                if not greeting_done and self._greeting_done.is_set():
+                    greeting_done = True
+                    log("CAPTURE: Greeting finished, now sending audio to Gemini")
+                    # Clear any buffered audio from during greeting - we don't want to send that
+                    send_buffer = b''
+                
                 # Send when buffer is full OR timeout reached (whichever comes first)
+                # BUT only if greeting is done - during greeting we just drain and discard
                 current_time = time.time()
                 should_send = (
-                    len(send_buffer) >= SEND_BATCH_SIZE or 
-                    (len(send_buffer) > 0 and current_time - last_send_time >= MAX_SEND_DELAY)
+                    greeting_done and  # Only send AFTER greeting is done
+                    (len(send_buffer) >= SEND_BATCH_SIZE or 
+                     (len(send_buffer) > 0 and current_time - last_send_time >= MAX_SEND_DELAY))
                 )
                 
                 if should_send and self.ws:
@@ -776,6 +791,9 @@ class EAGIHandler:
                         if self.running:
                             log(f"CAPTURE: WebSocket send error: {e}")
                         break
+                elif not greeting_done and len(send_buffer) > SEND_BATCH_SIZE * 2:
+                    # During greeting, discard buffered audio to prevent memory buildup
+                    send_buffer = b''
                 
                 # Yield to other tasks
                 await asyncio.sleep(0)  # Minimal yield
