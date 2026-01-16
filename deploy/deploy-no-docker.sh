@@ -529,7 +529,7 @@ if [ "$USE_APACHE" = true ]; then
     # Check if SSL cert exists
     if [ "$USE_SSL" = true ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
         log_info "SSL certificate found, configuring HTTPS..."
-        cat > /etc/apache2/sites-available/weevoice.conf << EOF
+        cat > /etc/apache2/sites-available/${DOMAIN}.conf << EOF
 <VirtualHost *:80>
     ServerName $DOMAIN
     RewriteEngine On
@@ -577,7 +577,7 @@ if [ "$USE_APACHE" = true ]; then
 EOF
     else
         log_info "Configuring HTTP (no SSL cert found)..."
-        cat > /etc/apache2/sites-available/weevoice.conf << EOF
+        cat > /etc/apache2/sites-available/${DOMAIN}.conf << EOF
 <VirtualHost *:80>
     ServerName $DOMAIN
 
@@ -613,7 +613,7 @@ EOF
     fi
     
     # Enable site and test
-    a2ensite weevoice.conf > /dev/null 2>&1
+    a2ensite ${DOMAIN}.conf > /dev/null 2>&1
     apachectl configtest
     
 else
