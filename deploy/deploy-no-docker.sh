@@ -131,8 +131,17 @@ mkdir -p /var/log/weevoice
 mkdir -p "$AGI_BIN"
 
 # Copy application files (exclude node_modules and dist to avoid conflicts)
-rsync -av --exclude='node_modules' --exclude='dist' --exclude='.git' ../backend/ /opt/weevoice/backend/
-rsync -av --exclude='node_modules' --exclude='dist' --exclude='.git' ../frontend/ /opt/weevoice/frontend/
+log_info "Copying application files..."
+if ! rsync -av --exclude='node_modules' --exclude='dist' --exclude='.git' ../backend/ /opt/weevoice/backend/; then
+    log_error "Failed to copy backend files"
+    exit 1
+fi
+
+if ! rsync -av --exclude='node_modules' --exclude='dist' --exclude='.git' ../frontend/ /opt/weevoice/frontend/; then
+    log_error "Failed to copy frontend files"
+    exit 1
+fi
+log_info "✓ Files copied successfully"
 
 # =============================================================================
 # Step 3: Setup Backend
@@ -232,39 +241,72 @@ VITE_API_URL=$PROTOCOL://$DOMAIN
 EOF
 
 # Install dependencies
+log_info "Installing frontend dependencies..."
 if [ -f "yarn.lock" ]; then
     log_info "Using Yarn..."
-    npm install -g yarn > /dev/null 2>&1
-    yarn install --frozen-lockfile
+    if ! npm install -g yarn > /dev/null 2>&1; then
+        log_error "Failed to install Yarn globally"
+        exit 1
+    fi
+    if ! yarn install --frozen-lockfile; then
+        log_error "Yarn install failed!"
+        exit 1
+    fi
 else
-    npm ci --silent
+    log_info "Using npm..."
+    if ! npm ci; then
+        log_error "npm ci failed!"
+        exit 1
+    fi
 fi
 
+# Verify node_modules was created
+if [ ! -d "node_modules" ]; then
+    log_error "node_modules directory not created - dependency installation failed!"
+    exit 1
+fi
+log_info "✓ Dependencies installed successfully"
+
 # Clean previous build to avoid stale files
+log_info "Cleaning previous build..."
 rm -rf dist
 
-# Build (skip TypeScript check to avoid strict errors)
-log_info "Building frontend..."
-npx vite build
+# Build frontend
+log_info "Building frontend (this may take a minute)..."
+if ! npm run build; then
+    log_error "Frontend build failed! Check errors above."
+    exit 1
+fi
 
 # Verify build output
 if [ ! -f "dist/index.html" ]; then
     log_error "Frontend build failed - dist/index.html not found!"
+    log_error "Build output:"
+    ls -la dist/ 2>/dev/null || echo "dist/ directory does not exist"
     exit 1
 fi
 
 # Check if assets directory exists
 if [ ! -d "dist/assets" ]; then
-    log_warn "⚠ dist/assets directory not found - assets may not have been built correctly"
+    log_error "✗ dist/assets directory not found - build incomplete!"
+    log_error "Files in dist/:"
+    ls -la dist/ 2>/dev/null
+    exit 1
 else
-    ASSET_COUNT=$(find dist/assets -type f | wc -l)
+    ASSET_COUNT=$(find dist/assets -type f 2>/dev/null | wc -l)
+    if [ "$ASSET_COUNT" -eq 0 ]; then
+        log_error "✗ No asset files found in dist/assets/ - build incomplete!"
+        exit 1
+    fi
     log_info "✓ Build complete: $ASSET_COUNT asset files in dist/assets/"
 fi
 
 # Set proper permissions for Apache
-chown -R www-data:www-data dist
+log_info "Setting file permissions..."
+chown -R www-data:www-data dist node_modules
 find dist -type d -exec chmod 755 {} \;
 find dist -type f -exec chmod 644 {} \;
+log_info "✓ Permissions set"
 
 # =============================================================================
 # Step 5: Setup EAGI (Asterisk Voice Agent)
@@ -666,25 +708,35 @@ EOF
         AllowOverride None
         Require all granted
         
-        RewriteEngine On
-        RewriteBase /
-        RewriteCond %{REQUEST_FILENAME} !-f
-        RewriteCond %{REQUEST_FILENAME} !-d
-        RewriteCond %{REQUEST_URI} !^/api
-        RewriteRule ^ index.html [L]
+        # Cache static assets
+        <FilesMatch "\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$">
+            Header set Cache-Control "public, max-age=31536000, immutable"
+        </FilesMatch>
     </Directory>
-
-    # WebSocket FIRST (before regular API proxy)
+    
+    # WebSocket FIRST (before regular API proxy and SPA routing)
     RewriteEngine On
     RewriteCond %{HTTP:Upgrade} =websocket [NC]
-    RewriteRule ^/api/(.*)\$ ws://127.0.0.1:8000/api/\$1 [P,L]
-
-    # API proxy
+    RewriteRule ^/api/(.*)$ ws://127.0.0.1:8000/api/$1 [P,L]
+    
+    # API proxy (before SPA routing)
     ProxyPreserveHost On
     ProxyPass /api http://127.0.0.1:8000/api
     ProxyPassReverse /api http://127.0.0.1:8000/api
-
     ProxyTimeout 86400
+    
+    # SPA routing - serve index.html for non-file/non-api requests (must be last)
+    # IMPORTANT: Check if file exists using DOCUMENT_ROOT + REQUEST_URI
+    RewriteCond %{REQUEST_URI} ^/api
+    RewriteRule ^ - [L]
+    
+    # Check if the requested file exists in DocumentRoot
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} -f [OR]
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} -d
+    RewriteRule ^ - [L]
+    
+    # Everything else goes to index.html for SPA routing
+    RewriteRule ^ /index.html [L]
 </VirtualHost>
 EOF
     fi
