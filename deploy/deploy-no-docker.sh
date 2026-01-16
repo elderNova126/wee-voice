@@ -549,24 +549,31 @@ if [ "$USE_APACHE" = true ]; then
         AllowOverride None
         Require all granted
         
-        RewriteEngine On
-        RewriteBase /
-        RewriteCond %{REQUEST_FILENAME} !-f
-        RewriteCond %{REQUEST_FILENAME} !-d
-        RewriteCond %{REQUEST_URI} !^/api
-        RewriteRule ^ index.html [L]
+        # Cache static assets
+        <FilesMatch "\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$">
+            Header set Cache-Control "public, max-age=31536000, immutable"
+        </FilesMatch>
     </Directory>
     
-    # WebSocket
+    # WebSocket FIRST (before regular API proxy and SPA routing)
+    RewriteEngine On
     RewriteCond %{HTTP:Upgrade} =websocket [NC]
-    RewriteRule ^/api/(.*)\$ ws://127.0.0.1:8000/api/\$1 [P,L]
+    RewriteRule ^/api/(.*)$ ws://127.0.0.1:8000/api/$1 [P,L]
     
-    # API proxy
+    # API proxy (before SPA routing)
     ProxyPreserveHost On
     ProxyPass /api http://127.0.0.1:8000/api
     ProxyPassReverse /api http://127.0.0.1:8000/api
-    
     ProxyTimeout 86400
+    
+    # SPA routing - serve index.html for non-file/non-api requests (must be last)
+    # Only rewrite if it's not an API call, not assets, and not an existing file
+    RewriteCond %{REQUEST_URI} !^/api
+    RewriteCond %{REQUEST_URI} !^/assets/
+    RewriteCond %{REQUEST_URI} !\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json)$
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ /index.html [L]
 </VirtualHost>
 
 <VirtualHost *:443>
@@ -585,26 +592,32 @@ if [ "$USE_APACHE" = true ]; then
         AllowOverride None
         Require all granted
         
-        # SPA routing - serve index.html for non-file/non-api requests
-        RewriteEngine On
-        RewriteBase /
-        RewriteCond %{REQUEST_FILENAME} !-f
-        RewriteCond %{REQUEST_FILENAME} !-d
-        RewriteCond %{REQUEST_URI} !^/api
-        RewriteRule ^ index.html [L]
+        # Cache static assets
+        <FilesMatch "\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$">
+            Header set Cache-Control "public, max-age=31536000, immutable"
+        </FilesMatch>
     </Directory>
-
-    # WebSocket FIRST (before regular API proxy)
+    
+    # WebSocket FIRST (before regular API proxy and SPA routing)
     RewriteEngine On
     RewriteCond %{HTTP:Upgrade} =websocket [NC]
-    RewriteRule ^/api/(.*)\$ ws://127.0.0.1:8000/api/\$1 [P,L]
+    RewriteRule ^/api/(.*)$ ws://127.0.0.1:8000/api/$1 [P,L]
 
-    # API proxy
+    # API proxy (before SPA routing)
     ProxyPreserveHost On
     ProxyPass /api http://127.0.0.1:8000/api
     ProxyPassReverse /api http://127.0.0.1:8000/api
-
     ProxyTimeout 86400
+    
+    # SPA routing - serve index.html for non-file/non-api requests (must be last)
+    # Only rewrite if it's not an API call, not assets, and not an existing file
+    RewriteCond %{REQUEST_URI} !^/api
+    RewriteCond %{REQUEST_URI} !^/assets/
+    RewriteCond %{REQUEST_URI} !\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json)$
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ /index.html [L]
+    
     RequestHeader set X-Forwarded-Proto "https"
 </VirtualHost>
 EOF
@@ -919,12 +932,24 @@ echo "  Rebuild:      cd /opt/weevoice/frontend && npm ci && npm run build"
 if [ "$USE_APACHE" = true ]; then
     echo "  Apache status: systemctl status apache2"
     echo "  Apache logs:  tail -f /var/log/apache2/error.log"
+    echo "  Access logs:  tail -f /var/log/apache2/access.log"
     echo "  Test local:  curl http://127.0.0.1/"
+    echo "  Test HTTPS:  curl -k https://$DOMAIN/"
+    echo "  Test assets: curl -I https://$DOMAIN/assets/index-*.js"
 else
     echo "  Nginx status: systemctl status nginx"
     echo "  Nginx logs:   tail -f /var/log/nginx/error.log"
     echo "  Test local:  curl http://127.0.0.1/"
+    echo "  Test HTTPS:  curl -k https://$DOMAIN/"
+    echo "  Test assets: curl -I https://$DOMAIN/assets/index-*.js"
 fi
+echo ""
+echo "Browser Debugging (if blank page):"
+echo "  1. Open browser DevTools (F12)"
+echo "  2. Check Console tab for JavaScript errors"
+echo "  3. Check Network tab - look for failed requests (red)"
+echo "  4. Verify assets load: https://$DOMAIN/assets/index-*.js"
+echo "  5. Check API connection: https://$DOMAIN/api/v1/health"
 echo ""
 echo "Asterisk Commands:"
 echo "  Verify:  asterisk -rx 'pjsip show endpoints'"
