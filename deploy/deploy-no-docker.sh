@@ -130,9 +130,9 @@ mkdir -p /opt/weevoice/{backend,frontend,data,uploads}
 mkdir -p /var/log/weevoice
 mkdir -p "$AGI_BIN"
 
-# Copy application files
-cp -r ../backend/* /opt/weevoice/backend/
-cp -r ../frontend/* /opt/weevoice/frontend/
+# Copy application files (exclude node_modules and dist to avoid conflicts)
+rsync -av --exclude='node_modules' --exclude='dist' --exclude='.git' ../backend/ /opt/weevoice/backend/
+rsync -av --exclude='node_modules' --exclude='dist' --exclude='.git' ../frontend/ /opt/weevoice/frontend/
 
 # =============================================================================
 # Step 3: Setup Backend
@@ -240,9 +240,31 @@ else
     npm ci --silent
 fi
 
+# Clean previous build to avoid stale files
+rm -rf dist
+
 # Build (skip TypeScript check to avoid strict errors)
 log_info "Building frontend..."
 npx vite build
+
+# Verify build output
+if [ ! -f "dist/index.html" ]; then
+    log_error "Frontend build failed - dist/index.html not found!"
+    exit 1
+fi
+
+# Check if assets directory exists
+if [ ! -d "dist/assets" ]; then
+    log_warn "⚠ dist/assets directory not found - assets may not have been built correctly"
+else
+    ASSET_COUNT=$(find dist/assets -type f | wc -l)
+    log_info "✓ Build complete: $ASSET_COUNT asset files in dist/assets/"
+fi
+
+# Set proper permissions for Apache
+chown -R www-data:www-data dist
+find dist -type d -exec chmod 755 {} \;
+find dist -type f -exec chmod 644 {} \;
 
 # =============================================================================
 # Step 5: Setup EAGI (Asterisk Voice Agent)
@@ -567,12 +589,16 @@ if [ "$USE_APACHE" = true ]; then
     ProxyTimeout 86400
     
     # SPA routing - serve index.html for non-file/non-api requests (must be last)
-    # Only rewrite if it's not an API call, not assets, and not an existing file
-    RewriteCond %{REQUEST_URI} !^/api
-    RewriteCond %{REQUEST_URI} !^/assets/
-    RewriteCond %{REQUEST_URI} !\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json)$
-    RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteCond %{REQUEST_FILENAME} !-d
+    # IMPORTANT: Check if file exists using DOCUMENT_ROOT + REQUEST_URI (REQUEST_FILENAME doesn't work with DocumentRoot)
+    RewriteCond %{REQUEST_URI} ^/api
+    RewriteRule ^ - [L]
+    
+    # Check if the requested file exists in DocumentRoot
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} -f [OR]
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} -d
+    RewriteRule ^ - [L]
+    
+    # Everything else goes to index.html for SPA routing
     RewriteRule ^ /index.html [L]
 </VirtualHost>
 
@@ -610,12 +636,16 @@ if [ "$USE_APACHE" = true ]; then
     ProxyTimeout 86400
     
     # SPA routing - serve index.html for non-file/non-api requests (must be last)
-    # Only rewrite if it's not an API call, not assets, and not an existing file
-    RewriteCond %{REQUEST_URI} !^/api
-    RewriteCond %{REQUEST_URI} !^/assets/
-    RewriteCond %{REQUEST_URI} !\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json)$
-    RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteCond %{REQUEST_FILENAME} !-d
+    # IMPORTANT: Check if file exists using DOCUMENT_ROOT + REQUEST_URI (REQUEST_FILENAME doesn't work with DocumentRoot)
+    RewriteCond %{REQUEST_URI} ^/api
+    RewriteRule ^ - [L]
+    
+    # Check if the requested file exists in DocumentRoot
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} -f [OR]
+    RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI} -d
+    RewriteRule ^ - [L]
+    
+    # Everything else goes to index.html for SPA routing
     RewriteRule ^ /index.html [L]
     
     RequestHeader set X-Forwarded-Proto "https"
