@@ -532,13 +532,46 @@ if [ "$USE_APACHE" = true ]; then
         cat > /etc/apache2/sites-available/${DOMAIN}.conf << EOF
 <VirtualHost *:80>
     ServerName $DOMAIN
+    ServerAlias localhost 127.0.0.1
+    
+    # Only redirect to HTTPS if not localhost/127.0.0.1 (for testing)
     RewriteEngine On
     RewriteCond %{HTTPS} off
+    RewriteCond %{HTTP_HOST} !^localhost [NC]
+    RewriteCond %{HTTP_HOST} !^127\.0\.0\.1 [NC]
     RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+    
+    # Serve frontend for localhost (no SSL needed for local testing)
+    DocumentRoot /opt/weevoice/frontend/dist
+    
+    <Directory /opt/weevoice/frontend/dist>
+        Options -Indexes +FollowSymLinks
+        AllowOverride None
+        Require all granted
+        
+        RewriteEngine On
+        RewriteBase /
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteCond %{REQUEST_URI} !^/api
+        RewriteRule ^ index.html [L]
+    </Directory>
+    
+    # WebSocket
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/api/(.*)\$ ws://127.0.0.1:8000/api/\$1 [P,L]
+    
+    # API proxy
+    ProxyPreserveHost On
+    ProxyPass /api http://127.0.0.1:8000/api
+    ProxyPassReverse /api http://127.0.0.1:8000/api
+    
+    ProxyTimeout 86400
 </VirtualHost>
 
 <VirtualHost *:443>
     ServerName $DOMAIN
+    ServerAlias localhost 127.0.0.1
 
     SSLEngine on
     SSLCertificateFile /etc/letsencrypt/live/$DOMAIN/fullchain.pem
@@ -580,6 +613,7 @@ EOF
         cat > /etc/apache2/sites-available/${DOMAIN}.conf << EOF
 <VirtualHost *:80>
     ServerName $DOMAIN
+    ServerAlias localhost 127.0.0.1
 
     # Serve frontend static files directly
     DocumentRoot /opt/weevoice/frontend/dist
@@ -786,14 +820,62 @@ if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
 fi
 
 # =============================================================================
-# Verify EAGI API
+# Verify Services
 # =============================================================================
 echo ""
-log_info "Verifying EAGI API..."
+log_info "Verifying services..."
+
+# Check backend
 if curl -s "http://127.0.0.1:8000/api/v1/eagi/config" > /dev/null 2>&1; then
-    log_info "✓ EAGI API is responding"
+    log_info "✓ Backend API is responding"
 else
-    log_warn "⚠ EAGI API not responding yet - backend may still be starting"
+    log_warn "⚠ Backend API not responding yet - backend may still be starting"
+fi
+
+# Check frontend build
+if [ -d "/opt/weevoice/frontend/dist" ] && [ -f "/opt/weevoice/frontend/dist/index.html" ]; then
+    FRONTEND_FILES=$(find /opt/weevoice/frontend/dist -type f | wc -l)
+    log_info "✓ Frontend build found ($FRONTEND_FILES files in dist/)"
+else
+    log_error "✗ Frontend build missing! Expected: /opt/weevoice/frontend/dist/index.html"
+    log_error "  Run: cd /opt/weevoice/frontend && npm ci && npm run build"
+fi
+
+# Check web server
+if [ "$USE_APACHE" = true ]; then
+    if systemctl is-active --quiet apache2; then
+        log_info "✓ Apache2 is running"
+    else
+        log_error "✗ Apache2 is not running! Run: systemctl start apache2"
+    fi
+    
+    # Check if site is enabled
+    if [ -L "/etc/apache2/sites-enabled/${DOMAIN}.conf" ] || [ -L "/etc/apache2/sites-enabled/000-${DOMAIN}.conf" ]; then
+        log_info "✓ Apache site ${DOMAIN}.conf is enabled"
+    else
+        log_warn "⚠ Apache site ${DOMAIN}.conf may not be enabled"
+        log_warn "  Run: a2ensite ${DOMAIN}.conf && systemctl reload apache2"
+    fi
+    
+    # Test frontend via web server
+    if curl -s "http://127.0.0.1/" | grep -q "html\|<!DOCTYPE" 2>/dev/null; then
+        log_info "✓ Frontend is accessible via Apache (http://127.0.0.1/)"
+    else
+        log_warn "⚠ Frontend not accessible via Apache - check configuration"
+    fi
+else
+    if systemctl is-active --quiet nginx; then
+        log_info "✓ Nginx is running"
+    else
+        log_error "✗ Nginx is not running! Run: systemctl start nginx"
+    fi
+    
+    # Test frontend via web server
+    if curl -s "http://127.0.0.1/" | grep -q "html\|<!DOCTYPE" 2>/dev/null; then
+        log_info "✓ Frontend is accessible via Nginx (http://127.0.0.1/)"
+    else
+        log_warn "⚠ Frontend not accessible via Nginx - check configuration"
+    fi
 fi
 
 # =============================================================================
@@ -830,6 +912,19 @@ echo "  Status:  supervisorctl status"
 echo "  Logs:    tail -f /var/log/weevoice/backend.out.log"
 echo "  EAGI:    tail -f /var/log/weevoice/eagi.log"
 echo "  Restart: supervisorctl restart weevoice-backend"
+echo ""
+echo "Frontend Troubleshooting:"
+echo "  Check build:  ls -la /opt/weevoice/frontend/dist/"
+echo "  Rebuild:      cd /opt/weevoice/frontend && npm ci && npm run build"
+if [ "$USE_APACHE" = true ]; then
+    echo "  Apache status: systemctl status apache2"
+    echo "  Apache logs:  tail -f /var/log/apache2/error.log"
+    echo "  Test local:  curl http://127.0.0.1/"
+else
+    echo "  Nginx status: systemctl status nginx"
+    echo "  Nginx logs:   tail -f /var/log/nginx/error.log"
+    echo "  Test local:  curl http://127.0.0.1/"
+fi
 echo ""
 echo "Asterisk Commands:"
 echo "  Verify:  asterisk -rx 'pjsip show endpoints'"
