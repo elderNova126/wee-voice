@@ -55,12 +55,25 @@ class PhoneNumber(Base):
     country_code = Column(String, nullable=False)  # e.g., "US", "FR", "UK"
     number_type = Column(String, nullable=False)  # "local", "toll-free", "mobile"
     
-    # SIP Configuration for incoming calls
-    sip_websocket_url = Column(String, nullable=True)
+    # =========================================================================
+    # PROVIDER SIP Configuration (for INBOUND calls)
+    # These credentials are used by Asterisk to register with your SIP provider
+    # (e.g., Zadarma) to receive incoming calls on this phone number.
+    # =========================================================================
+    provider_sip_username = Column(String, nullable=True)  # e.g., 123456_1 (Zadarma login)
+    provider_sip_password = Column(String, nullable=True)  # Zadarma SIP password
+    provider_sip_domain = Column(String, nullable=True)    # e.g., sip.zadarma.com
+    
+    # =========================================================================
+    # ASTERISK WebSocket SIP Configuration (for OUTBOUND calls)
+    # These credentials are used by the Python SIP client to connect to YOUR
+    # Asterisk server via WebSocket to make outbound calls.
+    # =========================================================================
+    sip_websocket_url = Column(String, nullable=True)      # e.g., ws://localhost:8089/ws
     sip_transport = Column(String, default='WSS', nullable=True)
-    sip_username = Column(String, nullable=True)
-    sip_password = Column(String, nullable=True)
-    sip_domain = Column(String, nullable=True)
+    sip_username = Column(String, nullable=True)           # e.g., 55555 (internal extension)
+    sip_password = Column(String, nullable=True)           # Internal extension password
+    sip_domain = Column(String, nullable=True)             # e.g., localhost
     
     # Status
     status = Column(Enum(PhoneNumberStatus, values_callable=lambda x: [e.value for e in x]), default=PhoneNumberStatus.PENDING)

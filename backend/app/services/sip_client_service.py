@@ -117,17 +117,48 @@ class SIPClientService:
     
     async def connect(self) -> bool:
         """Connect to SIP WebSocket server"""
+        import ssl
+        import socket
+        
         try:
             print(f"[SIP Client] Connecting to: {self.ws_url}")
             logger.info(f"Connecting to SIP server: {self.ws_url}")
             
+            # Parse URL to check host resolution
+            from urllib.parse import urlparse
+            parsed = urlparse(self.ws_url)
+            host = parsed.hostname
+            
+            # Check if host is resolvable
+            try:
+                socket.gethostbyname(host)
+                logger.info(f"DNS resolved: {host}")
+            except socket.gaierror as dns_error:
+                logger.error(f"DNS resolution failed for {host}: {dns_error}")
+                logger.error(f"HINT: If Asterisk is on the same server, use ws://localhost:8089/ws")
+                logger.error(f"HINT: Or use the server's IP address instead of hostname")
+                return False
+            
+            # Configure SSL for WSS connections
+            ssl_context = None
+            if self.ws_url.startswith("wss://"):
+                ssl_context = ssl.create_default_context()
+                # Allow self-signed certificates for internal servers
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+                logger.info("Using WSS with relaxed SSL verification (for self-signed certs)")
+            
             # SIP over WebSocket requires the 'sip' subprotocol
-            self.ws = await websockets.connect(
-                self.ws_url,
-                subprotocols=["sip"],
-                ping_interval=30,
-                ping_timeout=10
-            )
+            connect_kwargs = {
+                "subprotocols": ["sip"],
+                "ping_interval": 30,
+                "ping_timeout": 10,
+                "close_timeout": 5
+            }
+            if ssl_context:
+                connect_kwargs["ssl"] = ssl_context
+            
+            self.ws = await websockets.connect(self.ws_url, **connect_kwargs)
             self.is_connected = True
             print("[SIP Client] ✅ WebSocket connected!")
             logger.info("✅ Connected to SIP WebSocket server")
@@ -147,8 +178,21 @@ class SIPClientService:
             
             return success
             
+        except socket.gaierror as e:
+            logger.error(f"DNS resolution failed for SIP server: {e}")
+            logger.error(f"URL: {self.ws_url}")
+            logger.error(f"SOLUTION: Use ws://localhost:8089/ws if Asterisk is on same server")
+            self.is_connected = False
+            return False
+        except ConnectionRefusedError as e:
+            logger.error(f"Connection refused to SIP server: {e}")
+            logger.error(f"URL: {self.ws_url}")
+            logger.error(f"SOLUTION: Check that Asterisk is running and WebSocket transport is enabled on port 8089")
+            self.is_connected = False
+            return False
         except Exception as e:
             logger.error(f"Failed to connect to SIP server: {e}")
+            logger.error(f"URL: {self.ws_url}")
             self.is_connected = False
             return False
     

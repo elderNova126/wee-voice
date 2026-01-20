@@ -46,22 +46,24 @@ class AsteriskConfigService:
         self.zadarma_credentials_file = Path(os.path.join(ASTERISK_CONFIG_DIR, 'pjsip_zadarma_credentials.conf'))
         
     def _get_phone_numbers_with_sip(self, db: Session) -> List[Dict[str, Any]]:
-        """Get all phone numbers with complete SIP configuration from database"""
+        """Get all phone numbers with SIP configuration from database"""
         try:
-            # NOTE: sip_websocket_url is NOT required for Zadarma trunk
-            # Only sip_username, sip_password, sip_domain are needed
+            # Fetch both provider SIP (for inbound) and Asterisk WebSocket SIP (for outbound)
             result = db.execute(text("""
                 SELECT 
                     id, user_id, agent_id, phone_number, country_code, number_type,
                     sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
+                    provider_sip_username, provider_sip_password, provider_sip_domain,
                     status, business_name
                 FROM phone_numbers
-                WHERE sip_username IS NOT NULL 
-                  AND sip_password IS NOT NULL
-                  AND sip_domain IS NOT NULL
-                  AND sip_username != ''
-                  AND sip_password != ''
-                  AND agent_id IS NOT NULL
+                WHERE agent_id IS NOT NULL
+                  AND (
+                    -- Has provider SIP for inbound
+                    (provider_sip_username IS NOT NULL AND provider_sip_username != '')
+                    OR
+                    -- Has Asterisk WebSocket SIP for outbound
+                    (sip_username IS NOT NULL AND sip_username != '')
+                  )
                 ORDER BY id
             """)).fetchall()
             
@@ -74,13 +76,18 @@ class AsteriskConfigService:
                     'phone_number': row[3],
                     'country_code': row[4],
                     'number_type': row[5],
+                    # Asterisk WebSocket SIP (for outbound calls)
                     'sip_websocket_url': row[6],
                     'sip_transport': row[7] or 'WSS',
                     'sip_username': row[8],
                     'sip_password': row[9],
                     'sip_domain': row[10],
-                    'status': row[11],
-                    'business_name': row[12]
+                    # Provider SIP (for inbound calls - Zadarma registration)
+                    'provider_sip_username': row[11],
+                    'provider_sip_password': row[12],
+                    'provider_sip_domain': row[13],
+                    'status': row[14],
+                    'business_name': row[15]
                 })
             
             return phones
@@ -343,19 +350,19 @@ class AsteriskConfigService:
         
         return '\n'.join(config_lines)
     
-    def _get_any_phone_with_sip_credentials(self, db: Session) -> Optional[Dict[str, Any]]:
-        """Get any phone number with SIP credentials (doesn't require agent assignment)"""
+    def _get_any_phone_with_provider_sip_credentials(self, db: Session) -> Optional[Dict[str, Any]]:
+        """Get any phone number with PROVIDER SIP credentials (for Zadarma registration)"""
         try:
-            logger.info("Querying database for any phone with SIP credentials...")
+            logger.info("Querying database for any phone with provider SIP credentials...")
             result = db.execute(text("""
                 SELECT 
-                    id, phone_number, sip_username, sip_password, sip_domain
+                    id, phone_number, provider_sip_username, provider_sip_password, provider_sip_domain
                 FROM phone_numbers
-                WHERE sip_username IS NOT NULL 
-                  AND sip_password IS NOT NULL
-                  AND sip_domain IS NOT NULL
-                  AND sip_username != ''
-                  AND sip_password != ''
+                WHERE provider_sip_username IS NOT NULL 
+                  AND provider_sip_password IS NOT NULL
+                  AND provider_sip_domain IS NOT NULL
+                  AND provider_sip_username != ''
+                  AND provider_sip_password != ''
                 ORDER BY id
                 LIMIT 1
             """)).first()
@@ -364,33 +371,35 @@ class AsteriskConfigService:
                 phone_data = {
                     'id': result[0],
                     'phone_number': result[1],
-                    'sip_username': result[2],
-                    'sip_password': result[3],
-                    'sip_domain': result[4]
+                    'provider_sip_username': result[2],
+                    'provider_sip_password': result[3],
+                    'provider_sip_domain': result[4]
                 }
-                logger.info(f"Found phone with SIP credentials: id={phone_data['id']}, number={phone_data['phone_number']}, user={phone_data['sip_username']}")
+                logger.info(f"Found phone with provider SIP credentials: id={phone_data['id']}, number={phone_data['phone_number']}, user={phone_data['provider_sip_username']}")
                 return phone_data
             else:
-                logger.warning("No phone numbers with SIP credentials found in database")
+                logger.warning("No phone numbers with provider SIP credentials found in database")
                 # Debug: count all phones and phones with credentials
                 total = db.execute(text("SELECT COUNT(*) FROM phone_numbers")).scalar()
-                with_creds = db.execute(text("""
+                with_provider_creds = db.execute(text("""
                     SELECT COUNT(*) FROM phone_numbers 
-                    WHERE sip_username IS NOT NULL AND sip_username != ''
+                    WHERE provider_sip_username IS NOT NULL AND provider_sip_username != ''
                 """)).scalar()
-                logger.info(f"Database has {total} total phones, {with_creds} with sip_username set")
+                logger.info(f"Database has {total} total phones, {with_provider_creds} with provider_sip_username set")
                 return None
         except Exception as e:
-            logger.error(f"Error fetching phone with SIP credentials: {e}", exc_info=True)
+            logger.error(f"Error fetching phone with provider SIP credentials: {e}", exc_info=True)
             return None
     
     def generate_zadarma_credentials(self, db: Session = None, phones: List[Dict[str, Any]] = None) -> bool:
         """
-        Generate Zadarma credentials file from phone number SIP settings.
-        Uses the first phone number with SIP credentials configured (any phone, no agent required).
-        Falls back to environment variables if no phone has credentials.
+        Generate Zadarma credentials file from phone number PROVIDER SIP settings.
         
-        This file is #tryinclude'd from pjsip.conf.
+        IMPORTANT: Uses provider_sip_* fields (NOT sip_* fields)!
+        - provider_sip_* = credentials for Zadarma/SIP provider (for INBOUND calls)
+        - sip_* = credentials for Asterisk WebSocket (for OUTBOUND calls)
+        
+        Falls back to environment variables if no phone has provider credentials.
         
         Returns True on success, False if credentials not found.
         """
@@ -401,31 +410,34 @@ class AsteriskConfigService:
         sip_domain = None
         source = None
         
-        # First try to get credentials from the phones list (if provided)
+        # First try to get PROVIDER credentials from the phones list (if provided)
         if phones:
-            logger.info(f"Checking {len(phones)} phones from list for SIP credentials")
+            logger.info(f"Checking {len(phones)} phones from list for PROVIDER SIP credentials")
             for phone in phones:
-                logger.debug(f"Phone {phone.get('phone_number')}: username={phone.get('sip_username')}, domain={phone.get('sip_domain')}")
-                if phone.get('sip_username') and phone.get('sip_password'):
-                    sip_login = phone['sip_username']
-                    sip_password = phone['sip_password']
-                    sip_domain = phone.get('sip_domain', 'sip.zadarma.com')
-                    source = f"phone number {phone['phone_number']}"
-                    logger.info(f"Found SIP credentials from {source}: user={sip_login}, domain={sip_domain}")
+                provider_user = phone.get('provider_sip_username')
+                provider_pass = phone.get('provider_sip_password')
+                provider_domain = phone.get('provider_sip_domain')
+                logger.debug(f"Phone {phone.get('phone_number')}: provider_username={provider_user}, provider_domain={provider_domain}")
+                if provider_user and provider_pass:
+                    sip_login = provider_user
+                    sip_password = provider_pass
+                    sip_domain = provider_domain or 'sip.zadarma.com'
+                    source = f"phone number {phone['phone_number']} (provider SIP)"
+                    logger.info(f"Found provider SIP credentials from {source}: user={sip_login}, domain={sip_domain}")
                     break
         
-        # If no credentials from phones list, try to get ANY phone with SIP credentials
+        # If no provider credentials from phones list, try to get ANY phone with provider SIP credentials
         if (not sip_login or not sip_password) and db:
-            logger.info("No credentials from phones list, checking database for any phone with SIP...")
-            phone_with_creds = self._get_any_phone_with_sip_credentials(db)
+            logger.info("No provider credentials from phones list, checking database for any phone with provider SIP...")
+            phone_with_creds = self._get_any_phone_with_provider_sip_credentials(db)
             if phone_with_creds:
-                sip_login = phone_with_creds['sip_username']
-                sip_password = phone_with_creds['sip_password']
-                sip_domain = phone_with_creds.get('sip_domain', 'sip.zadarma.com')
-                source = f"phone number {phone_with_creds['phone_number']} (no agent)"
-                logger.info(f"Found SIP credentials from {source}: user={sip_login}, domain={sip_domain}")
+                sip_login = phone_with_creds['provider_sip_username']
+                sip_password = phone_with_creds['provider_sip_password']
+                sip_domain = phone_with_creds.get('provider_sip_domain', 'sip.zadarma.com')
+                source = f"phone number {phone_with_creds['phone_number']} (provider SIP, no agent)"
+                logger.info(f"Found provider SIP credentials from {source}: user={sip_login}, domain={sip_domain}")
             else:
-                logger.warning("No phone with SIP credentials found in database")
+                logger.warning("No phone with provider SIP credentials found in database")
         
         # Fallback to environment variables
         if not sip_login or not sip_password:

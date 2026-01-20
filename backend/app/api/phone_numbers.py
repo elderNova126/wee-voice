@@ -45,6 +45,7 @@ def safe_query_phone_number(db: Session, filter_clause: str, params: Dict = None
         result = db.execute(text(f"""
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
                    sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
+                   provider_sip_username, provider_sip_password, provider_sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address,
                    created_at, updated_at, activated_at
@@ -66,16 +67,19 @@ def safe_query_phone_number(db: Session, filter_clause: str, params: Dict = None
             phone.sip_username = result[8]
             phone.sip_password = result[9]
             phone.sip_domain = result[10]
-            phone.status = result[11]
-            phone.status_message = result[12]
-            phone.monthly_cost = result[13]
-            phone.per_minute_cost = result[14]
-            phone.business_name = result[15]
-            phone.business_type = result[16]
-            phone.business_address = result[17]
-            phone.created_at = result[18]
-            phone.updated_at = result[19]
-            phone.activated_at = result[20]
+            phone.provider_sip_username = result[11]
+            phone.provider_sip_password = result[12]
+            phone.provider_sip_domain = result[13]
+            phone.status = result[14]
+            phone.status_message = result[15]
+            phone.monthly_cost = result[16]
+            phone.per_minute_cost = result[17]
+            phone.business_name = result[18]
+            phone.business_type = result[19]
+            phone.business_address = result[20]
+            phone.created_at = result[21]
+            phone.updated_at = result[22]
+            phone.activated_at = result[23]
             return phone
         return None
     except Exception as e:
@@ -100,6 +104,7 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
         result = db.execute(text(f"""
             SELECT id, user_id, agent_id, phone_number, country_code, number_type,
                    sip_websocket_url, sip_transport, sip_username, sip_password, sip_domain,
+                   provider_sip_username, provider_sip_password, provider_sip_domain,
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address, busy_action, busy_audio_file_url,
                    restriction_mode, blocked_countries, blocked_numbers, allowed_countries,
@@ -122,23 +127,26 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
             phone.sip_username = row[8]
             phone.sip_password = row[9]
             phone.sip_domain = row[10]
-            phone.status = row[11]
-            phone.status_message = row[12]
-            phone.monthly_cost = row[13]
-            phone.per_minute_cost = row[14]
-            phone.business_name = row[15]
-            phone.business_type = row[16]
-            phone.business_address = row[17]
-            phone.busy_action = row[18]
-            phone.busy_audio_file_url = row[19]
-            phone.restriction_mode = row[20]
-            phone.blocked_countries = row[21]
-            phone.blocked_numbers = row[22]
-            phone.allowed_countries = row[23]
-            phone.collaborators = row[24]
-            phone.created_at = row[25]
-            phone.updated_at = row[26]
-            phone.activated_at = row[27]
+            phone.provider_sip_username = row[11]
+            phone.provider_sip_password = row[12]
+            phone.provider_sip_domain = row[13]
+            phone.status = row[14]
+            phone.status_message = row[15]
+            phone.monthly_cost = row[16]
+            phone.per_minute_cost = row[17]
+            phone.business_name = row[18]
+            phone.business_type = row[19]
+            phone.business_address = row[20]
+            phone.busy_action = row[21]
+            phone.busy_audio_file_url = row[22]
+            phone.restriction_mode = row[23]
+            phone.blocked_countries = row[24]
+            phone.blocked_numbers = row[25]
+            phone.allowed_countries = row[26]
+            phone.collaborators = row[27]
+            phone.created_at = row[28]
+            phone.updated_at = row[29]
+            phone.activated_at = row[30]
             phones.append(phone)
         return phones
     except Exception as e:
@@ -184,7 +192,12 @@ class PhoneNumberResponse(BaseModel):
     agent_id: Optional[int]
     created_at: datetime
     activated_at: Optional[datetime]
-    # SIP Configuration fields
+    # Provider SIP Configuration (for INBOUND calls - Zadarma registration)
+    provider_sip_username: Optional[str] = None
+    provider_sip_password: Optional[str] = None
+    provider_sip_domain: Optional[str] = None
+    has_provider_sip_config: bool = False
+    # Asterisk WebSocket SIP Configuration (for OUTBOUND calls)
     sip_websocket_url: Optional[str] = None
     sip_transport: Optional[str] = None
     sip_username: Optional[str] = None
@@ -217,7 +230,11 @@ class PhoneNumberResponse(BaseModel):
 class PhoneNumberUpdate(BaseModel):
     """Update phone number settings"""
     business_name: Optional[str] = None
-    # SIP Configuration
+    # Provider SIP Configuration (for INBOUND calls - Zadarma registration)
+    provider_sip_username: Optional[str] = None
+    provider_sip_password: Optional[str] = None
+    provider_sip_domain: Optional[str] = None
+    # Asterisk WebSocket SIP Configuration (for OUTBOUND calls)
     sip_websocket_url: Optional[str] = None
     sip_transport: Optional[str] = None
     sip_username: Optional[str] = None
@@ -361,13 +378,22 @@ def phone_number_to_response(phone: PhoneNumber, db: Session = None, current_use
         "agent_id": phone.agent_id,
         "created_at": phone.created_at,
         "activated_at": phone.activated_at,
+        # Provider SIP (for INBOUND calls - Zadarma registration)
+        "provider_sip_username": getattr(phone, 'provider_sip_username', None),
+        "provider_sip_password": getattr(phone, 'provider_sip_password', None),
+        "provider_sip_domain": getattr(phone, 'provider_sip_domain', None),
+        "has_provider_sip_config": bool(
+            getattr(phone, 'provider_sip_username', None) and 
+            getattr(phone, 'provider_sip_password', None) and 
+            getattr(phone, 'provider_sip_domain', None)
+        ),
+        # Asterisk WebSocket SIP (for OUTBOUND calls)
         "sip_websocket_url": phone.sip_websocket_url,
         "sip_transport": phone.sip_transport,
         "sip_username": phone.sip_username,
         "sip_password": phone.sip_password,
         "sip_domain": phone.sip_domain,
-        # For Zadarma trunk, we only need username, password, domain (not websocket_url)
-        "has_sip_config": bool(phone.sip_username and phone.sip_password and phone.sip_domain),
+        "has_sip_config": bool(phone.sip_websocket_url and phone.sip_username and phone.sip_password and phone.sip_domain),
         # Busy line behavior
         "busy_action": phone.busy_action.value if hasattr(phone.busy_action, 'value') else (phone.busy_action or "busy_tone"),
         "busy_audio_file_url": phone.busy_audio_file_url,
@@ -773,33 +799,50 @@ async def update_phone_number(
         )
     
     # Track if SIP config changed (to trigger Asterisk config regeneration)
-    sip_config_changed = False
+    provider_sip_changed = False  # For Zadarma/inbound
+    outbound_sip_changed = False  # For WebSocket/outbound
     
     # Update fields if provided
     if updates.business_name is not None:
         phone_number.business_name = updates.business_name
     
-    # SIP Configuration
+    # Provider SIP Configuration (for INBOUND calls - Zadarma registration)
+    if updates.provider_sip_username is not None:
+        if phone_number.provider_sip_username != updates.provider_sip_username:
+            provider_sip_changed = True
+        phone_number.provider_sip_username = updates.provider_sip_username
+    if updates.provider_sip_password is not None:
+        if phone_number.provider_sip_password != updates.provider_sip_password:
+            provider_sip_changed = True
+        phone_number.provider_sip_password = updates.provider_sip_password
+    if updates.provider_sip_domain is not None:
+        if phone_number.provider_sip_domain != updates.provider_sip_domain:
+            provider_sip_changed = True
+        phone_number.provider_sip_domain = updates.provider_sip_domain
+    
+    # Asterisk WebSocket SIP Configuration (for OUTBOUND calls)
     if updates.sip_websocket_url is not None:
         if phone_number.sip_websocket_url != updates.sip_websocket_url:
-            sip_config_changed = True
+            outbound_sip_changed = True
         phone_number.sip_websocket_url = updates.sip_websocket_url
     if updates.sip_transport is not None:
         if phone_number.sip_transport != updates.sip_transport:
-            sip_config_changed = True
+            outbound_sip_changed = True
         phone_number.sip_transport = updates.sip_transport
     if updates.sip_username is not None:
         if phone_number.sip_username != updates.sip_username:
-            sip_config_changed = True
+            outbound_sip_changed = True
         phone_number.sip_username = updates.sip_username
     if updates.sip_password is not None:
         if phone_number.sip_password != updates.sip_password:
-            sip_config_changed = True
+            outbound_sip_changed = True
         phone_number.sip_password = updates.sip_password
     if updates.sip_domain is not None:
         if phone_number.sip_domain != updates.sip_domain:
-            sip_config_changed = True
+            outbound_sip_changed = True
         phone_number.sip_domain = updates.sip_domain
+    
+    sip_config_changed = provider_sip_changed or outbound_sip_changed
     
     # Busy settings
     if updates.busy_action is not None:
@@ -820,12 +863,11 @@ async def update_phone_number(
     db.commit()
     db.refresh(phone_number)
     
-    logger.info(f"Updated phone number {phone_number.phone_number}, sip_config_changed={sip_config_changed}")
+    logger.info(f"Updated phone number {phone_number.phone_number}, provider_sip_changed={provider_sip_changed}, outbound_sip_changed={outbound_sip_changed}")
     
-    # Regenerate Asterisk config if SIP settings changed OR if phone has SIP credentials
-    # This ensures the credentials file is always up to date
-    has_sip_creds = bool(phone_number.sip_username and phone_number.sip_password and phone_number.sip_domain)
-    should_regenerate = sip_config_changed or has_sip_creds
+    # Regenerate Asterisk config if provider SIP settings changed (for Zadarma registration)
+    has_provider_sip_creds = bool(phone_number.provider_sip_username and phone_number.provider_sip_password and phone_number.provider_sip_domain)
+    should_regenerate = provider_sip_changed or has_provider_sip_creds
     
     asterisk_config_result = None
     if should_regenerate:
@@ -850,10 +892,16 @@ async def update_phone_number(
         "id": phone_number.id,
         "phone_number": phone_number.phone_number,
         "business_name": phone_number.business_name,
+        # Provider SIP (for INBOUND calls)
+        "provider_sip_username": phone_number.provider_sip_username,
+        "provider_sip_domain": phone_number.provider_sip_domain,
+        "has_provider_sip_config": bool(phone_number.provider_sip_username and phone_number.provider_sip_password and phone_number.provider_sip_domain),
+        # Asterisk WebSocket SIP (for OUTBOUND calls)
         "sip_websocket_url": phone_number.sip_websocket_url,
         "sip_transport": phone_number.sip_transport,
         "sip_username": phone_number.sip_username,
         "sip_domain": phone_number.sip_domain,
+        "has_sip_config": bool(phone_number.sip_websocket_url and phone_number.sip_username and phone_number.sip_password and phone_number.sip_domain),
         "busy_action": phone_number.busy_action,
         "busy_audio_file_url": phone_number.busy_audio_file_url,
         "restriction_mode": phone_number.restriction_mode,
