@@ -233,6 +233,24 @@ CREATE INDEX idx_agent_collaborators_user_id ON agent_collaborators(user_id);
 CREATE INDEX idx_agent_collaborators_active ON agent_collaborators(agent_id, user_id, is_active);
 
 -- ===================================================================
+-- AGENT INTEGRATIONS TABLE (Junction table for many-to-many relationship)
+-- ===================================================================
+
+CREATE TABLE agent_integrations (
+    id SERIAL PRIMARY KEY,
+    agent_id INTEGER NOT NULL REFERENCES voice_agents(id) ON DELETE CASCADE,
+    integration_id INTEGER NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    
+    -- Ensure unique agent-integration pairs
+    UNIQUE(agent_id, integration_id)
+);
+
+CREATE INDEX idx_agent_integrations_agent_id ON agent_integrations(agent_id);
+CREATE INDEX idx_agent_integrations_integration_id ON agent_integrations(integration_id);
+CREATE INDEX idx_agent_integrations_unique ON agent_integrations(agent_id, integration_id);
+
+-- ===================================================================
 -- INTEGRATIONS TABLE
 -- ===================================================================
 

@@ -19,7 +19,7 @@ import {
   ChevronDownIcon
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
-import { agentsAPI, api, librariesAPI } from '@/lib/api'
+import { agentsAPI, api, librariesAPI, integrationsAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
 import { LoadingSpinner } from '@/components/ui'
 
@@ -49,6 +49,8 @@ interface AgentFormData {
   workflow_questions?: WorkflowQuestion[]
   workflow_intro?: string
   workflow_outro?: string
+  // Integrations
+  integration_ids?: number[]
 }
 
 interface KnowledgeDocument {
@@ -86,7 +88,9 @@ export default function AgentFormPage() {
     workflow_enabled: false,
     workflow_questions: [],
     workflow_intro: '',
-    workflow_outro: ''
+    workflow_outro: '',
+    // Integrations defaults
+    integration_ids: []
   })
 
   const [loading, setLoading] = useState(false)
@@ -103,6 +107,11 @@ export default function AgentFormPage() {
   const [collaboratorEmail, setCollaboratorEmail] = useState('')
   const [collaboratorPermissions, setCollaboratorPermissions] = useState('view,edit')
   const [userPermissions, setUserPermissions] = useState<any>(null)
+
+  // Integrations state
+  const [integrations, setIntegrations] = useState<any[]>([])
+  const [loadingIntegrations, setLoadingIntegrations] = useState(false)
+  const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<number[]>([])
 
   const loadCollaborators = useCallback(async (agentId: number) => {
     try {
@@ -137,8 +146,11 @@ export default function AgentFormPage() {
         workflow_enabled: agent.workflow_enabled ?? false,
         workflow_questions: agent.workflow_questions || [],
         workflow_intro: agent.workflow_intro || '',
-        workflow_outro: agent.workflow_outro || ''
+        workflow_outro: agent.workflow_outro || '',
+        // Integrations
+        integration_ids: agent.integration_ids || []
       })
+      setSelectedIntegrationIds(agent.integration_ids || [])
       
       // Load documents if agent exists
       if (agent.rag_enabled) {
@@ -171,6 +183,10 @@ export default function AgentFormPage() {
   }, [navigate, loadCollaborators])
 
   useEffect(() => {
+    loadUserIntegrations()
+  }, [])
+
+  useEffect(() => {
     if (isEdit && id) {
       loadAgent(parseInt(id))
     } else if (libraryId) {
@@ -178,6 +194,19 @@ export default function AgentFormPage() {
       loadLibrary(parseInt(libraryId))
     }
   }, [isEdit, id, libraryId, loadAgent])
+
+  const loadUserIntegrations = async () => {
+    try {
+      setLoadingIntegrations(true)
+      const response = await integrationsAPI.list({ is_active: true })
+      setIntegrations(response.data || [])
+    } catch (err: any) {
+      console.error('Failed to load integrations:', err)
+      // Don't show error toast as this is optional
+    } finally {
+      setLoadingIntegrations(false)
+    }
+  }
 
   const loadLibrary = async (libId: number) => {
     try {
@@ -201,8 +230,11 @@ export default function AgentFormPage() {
         workflow_enabled: library.workflow_enabled ?? false,
         workflow_questions: library.workflow_questions || [],
         workflow_intro: library.workflow_intro || '',
-        workflow_outro: library.workflow_outro || ''
+        workflow_outro: library.workflow_outro || '',
+        // Integrations - libraries don't have integrations, so use empty array
+        integration_ids: []
       })
+      setSelectedIntegrationIds([])
       toast.success(`Loaded template: ${library.name}`)
     } catch (error) {
       console.error('Failed to load library:', error)
@@ -228,11 +260,16 @@ export default function AgentFormPage() {
     e.preventDefault()
     setLoading(true)
     try {
+      const submitData = {
+        ...formData,
+        integration_ids: selectedIntegrationIds
+      }
+      
       if (isEdit && id) {
-        await agentsAPI.update(Number(id), formData)
+        await agentsAPI.update(Number(id), submitData)
         toast.success(t.agentForm.agentUpdated)
       } else {
-        await agentsAPI.create(formData)
+        await agentsAPI.create(submitData)
         toast.success(t.agentForm.agentCreated)
         
         // If created from library, increment usage count
@@ -635,6 +672,80 @@ export default function AgentFormPage() {
                 {t.common.status === 'Statut' 
                   ? 'Pour les appels sortants, l\'agent mène la conversation et pose des questions structurées.' 
                   : 'For outbound calls, the agent leads the conversation and asks structured questions.'}
+              </p>
+            </div>
+
+            {/* Integrations Selection */}
+            <div className="pt-4 border-t border-gray-100 dark:border-gray-700/50">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                🔗 {t.common.status === 'Statut' ? 'Intégrations' : 'Integrations'}
+              </label>
+              {loadingIntegrations ? (
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  {t.common.status === 'Statut' ? 'Chargement...' : 'Loading...'}
+                </div>
+              ) : integrations.length === 0 ? (
+                <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                  {t.common.status === 'Statut' 
+                    ? 'Aucune intégration disponible. Créez d\'abord des intégrations depuis le menu.' 
+                    : 'No integrations available. Create integrations first from the menu.'}
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50 dark:bg-gray-800/50">
+                  {integrations.map((integration) => {
+                    const getIntegrationTypeLabel = (type: string): string => {
+                      const labels: Record<string, string> = {
+                        calendar: '📅',
+                        email: '📧',
+                        contact_management: '👥',
+                        database: '💾',
+                        crm: '📊',
+                        accounting: '💰',
+                        other: '🔧',
+                      }
+                      return labels[type] || '🔧'
+                    }
+                    const isSelected = selectedIntegrationIds.includes(integration.id)
+                    return (
+                      <label
+                        key={integration.id}
+                        className="flex cursor-pointer items-center gap-2 p-2 rounded-lg hover:bg-white dark:hover:bg-gray-700 transition"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedIntegrationIds([...selectedIntegrationIds, integration.id])
+                            } else {
+                              setSelectedIntegrationIds(selectedIntegrationIds.filter(id => id !== integration.id))
+                            }
+                          }}
+                          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <span className="text-lg">{getIntegrationTypeLabel(integration.integration_type)}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-gray-700 dark:text-gray-300 block truncate">
+                            {integration.name}
+                          </span>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 block truncate">
+                            {integration.integration_type} • {integration.provider}
+                          </span>
+                        </div>
+                        {integration.status === 'active' && (
+                          <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">
+                            {t.common.status === 'Statut' ? 'Actif' : 'Active'}
+                          </span>
+                        )}
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {t.common.status === 'Statut' 
+                  ? 'Sélectionnez les intégrations à utiliser avec cet agent. Chaque agent peut avoir des intégrations différentes selon son rôle.' 
+                  : 'Select integrations to use with this agent. Each agent can have different integrations depending on their role.'}
               </p>
             </div>
 

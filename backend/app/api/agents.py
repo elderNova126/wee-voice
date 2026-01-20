@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.core.security import get_current_active_user
 from app.core.permissions import check_agent_access, get_user_permissions, can_manage_collaborators
-from app.models import get_db, User, VoiceAgent, AgentCollaborator
+from app.models import get_db, User, VoiceAgent, AgentCollaborator, AgentIntegration, Integration
 
 router = APIRouter()
 
@@ -41,6 +41,7 @@ class AgentCreate(BaseModel):
     workflow_questions: List[WorkflowQuestion] = []  # Questions to ask in order
     workflow_intro: Optional[str] = None  # Message before starting questions
     workflow_outro: Optional[str] = None  # Message after all questions answered
+    integration_ids: Optional[List[int]] = []  # List of integration IDs to associate with agent
 
 
 class AgentUpdate(BaseModel):
@@ -66,6 +67,7 @@ class AgentUpdate(BaseModel):
     workflow_questions: Optional[List[WorkflowQuestion]] = None
     workflow_intro: Optional[str] = None
     workflow_outro: Optional[str] = None
+    integration_ids: Optional[List[int]] = None  # List of integration IDs to associate with agent
 
 
 class AgentResponse(BaseModel):
@@ -91,6 +93,8 @@ class AgentResponse(BaseModel):
     workflow_questions: List[WorkflowQuestion] = Field(default_factory=list)
     workflow_intro: Optional[str] = None
     workflow_outro: Optional[str] = None
+    # Integrations
+    integration_ids: List[int] = Field(default_factory=list)  # List of integration IDs
     # Metadata
     created_at: Any
     phone_number: Optional[str] = None
@@ -149,6 +153,14 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
             for q in workflow_questions
         ]
     
+    # Get integration IDs for this agent
+    integration_ids = []
+    if db:
+        agent_integrations = db.query(AgentIntegration).filter(
+            AgentIntegration.agent_id == agent.id
+        ).all()
+        integration_ids = [ai.integration_id for ai in agent_integrations]
+    
     return AgentResponse(
         id=agent.id,
         name=agent.name,
@@ -171,6 +183,8 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
         workflow_questions=workflow_questions,
         workflow_intro=getattr(agent, 'workflow_intro', None),
         workflow_outro=getattr(agent, 'workflow_outro', None),
+        # Integrations
+        integration_ids=integration_ids,
         # Metadata
         created_at=agent.created_at,
         phone_number=phone_number,
@@ -207,14 +221,39 @@ def create_agent(
     db: Session = Depends(get_db)
 ):
     """Create a new voice agent"""
+    # Extract integration_ids before creating agent
+    integration_ids = agent_data.integration_ids or []
+    agent_dict = agent_data.model_dump(exclude={'integration_ids'})
+    
     agent = VoiceAgent(
         user_id=current_user.id,
-        **agent_data.model_dump()
+        **agent_dict
     )
     
     db.add(agent)
     db.commit()
     db.refresh(agent)
+    
+    # Associate integrations with agent
+    if integration_ids:
+        # Verify all integrations belong to the current user and are active
+        valid_integrations = db.query(Integration).filter(
+            Integration.id.in_(integration_ids),
+            Integration.user_id == current_user.id,
+            Integration.is_active == True
+        ).all()
+        
+        valid_integration_ids = [integ.id for integ in valid_integrations]
+        
+        # Create agent-integration associations
+        for integration_id in valid_integration_ids:
+            agent_integration = AgentIntegration(
+                agent_id=agent.id,
+                integration_id=integration_id
+            )
+            db.add(agent_integration)
+        
+        db.commit()
     
     # Pre-generate TTS greeting in background for instant playback
     if agent.greeting:
@@ -296,13 +335,48 @@ def update_agent(
     # Check if greeting changed
     old_greeting = agent.greeting
     
+    # Extract integration_ids if provided
+    integration_ids = None
+    if agent_data.integration_ids is not None:
+        integration_ids = agent_data.integration_ids
+        update_data = agent_data.model_dump(exclude_unset=True, exclude={'integration_ids'})
+    else:
+        update_data = agent_data.model_dump(exclude_unset=True)
+    
     # Update fields
-    update_data = agent_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(agent, field, value)
     
     db.commit()
     db.refresh(agent)
+    
+    # Update integrations if integration_ids was provided
+    if integration_ids is not None:
+        # Remove existing associations
+        db.query(AgentIntegration).filter(
+            AgentIntegration.agent_id == agent.id
+        ).delete()
+        
+        # Verify all integrations belong to the current user and are active
+        if integration_ids:
+            valid_integrations = db.query(Integration).filter(
+                Integration.id.in_(integration_ids),
+                Integration.user_id == current_user.id,
+                Integration.is_active == True
+            ).all()
+            
+            valid_integration_ids = [integ.id for integ in valid_integrations]
+            
+            # Create new agent-integration associations
+            for integration_id in valid_integration_ids:
+                agent_integration = AgentIntegration(
+                    agent_id=agent.id,
+                    integration_id=integration_id
+                )
+                db.add(agent_integration)
+        
+        db.commit()
+        db.refresh(agent)
     
     # Regenerate TTS greeting if it changed
     new_greeting = agent.greeting

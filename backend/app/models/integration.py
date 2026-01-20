@@ -100,6 +100,7 @@ class Integration(Base):
     
     # Relationships
     user = relationship("User", back_populates="integrations")
+    agents = relationship("AgentIntegration", back_populates="integration", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<Integration(id={self.id}, name='{self.name}', type='{self.integration_type}', provider='{self.provider}')>"

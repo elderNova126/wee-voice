@@ -11,6 +11,7 @@ from app.models.document import Document, DocumentChunk
 from app.models.zadarma import PhoneNumber, PhoneNumberStatus, VerificationDocument, DocumentType, VerificationStatus, CallbackRequest
 from app.models.agent_library import AgentLibrary, LibraryCategory
 from app.models.agent_collaborator import AgentCollaborator, CollaboratorPermission
+from app.models.agent_integration import AgentIntegration
 from app.models.outbound_script import OutboundScript
 
 __all__ = [
@@ -52,6 +53,7 @@ __all__ = [
     "LibraryCategory",
     "AgentCollaborator",
     "CollaboratorPermission",
+    "AgentIntegration",
     "OutboundScript",
 ]
 
