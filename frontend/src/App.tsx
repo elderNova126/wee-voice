@@ -20,8 +20,6 @@ import DemoPage from './pages/DemoPage'
 import PublicAgentPage from './pages/PublicAgentPage'
 import ProfilePage from './pages/ProfilePage'
 import SupportPage from './pages/SupportPage'
-import IntegrationsPage from './pages/IntegrationsPage'
-import IntegrationFormPage from './pages/IntegrationFormPage'
 import { PhoneNumbersPage } from './pages/PhoneNumbersPage'
 import { CallbacksPage } from './pages/CallbacksPage'
 import { AgentEmbedPage } from './pages/AgentEmbedPage'
@@ -117,21 +115,6 @@ function App() {
         <Route path="/dashboard/support" element={
           <ProtectedRoute>
             <SupportPage />
-          </ProtectedRoute>
-        } />
-        <Route path="/dashboard/integrations" element={
-          <ProtectedRoute>
-            <IntegrationsPage />
-          </ProtectedRoute>
-        } />
-        <Route path="/dashboard/integrations/new" element={
-          <ProtectedRoute>
-            <IntegrationFormPage />
-          </ProtectedRoute>
-        } />
-        <Route path="/dashboard/integrations/:id/edit" element={
-          <ProtectedRoute>
-            <IntegrationFormPage />
           </ProtectedRoute>
         } />
         <Route path="/dashboard/phone-numbers" element={

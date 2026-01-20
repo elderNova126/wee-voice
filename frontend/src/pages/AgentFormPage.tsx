@@ -12,11 +12,12 @@ import {
   ChatBubbleLeftRightIcon,
   MicrophoneIcon,
   PlusIcon,
-  PhoneArrowUpRightIcon,
-  PhoneArrowDownLeftIcon,
   ClipboardDocumentListIcon,
   ChevronUpIcon,
-  ChevronDownIcon
+  ChevronDownIcon,
+  PencilIcon,
+  XCircleIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { agentsAPI, api, librariesAPI, integrationsAPI } from '@/lib/api'
@@ -60,6 +61,60 @@ interface KnowledgeDocument {
   source_url?: string
   status: 'completed' | 'processing' | 'failed'
   total_chunks: number
+}
+
+const CONFIG_TEMPLATES: Record<string, Record<string, any>> = {
+  google_calendar: {
+    access_token: '',
+    refresh_token: '',
+    calendar_id: 'primary',
+  },
+  outlook_calendar: {
+    access_token: '',
+    tenant_id: '',
+  },
+  gmail: {
+    access_token: '',
+    refresh_token: '',
+  },
+  smtp: {
+    smtp_host: '',
+    smtp_port: 587,
+    username: '',
+    password: '',
+    from_email: '',
+  },
+  hubspot: {
+    api_key: '',
+    portal_id: '',
+  },
+  salesforce: {
+    access_token: '',
+    instance_url: '',
+  },
+  postgresql: {
+    host: '',
+    port: 5432,
+    database: '',
+    user: '',
+    password: '',
+  },
+  quickbooks: {
+    access_token: '',
+    company_id: '',
+  },
+  xero: {
+    access_token: '',
+    tenant_id: '',
+  },
+  webhook: {
+    webhook_url: '',
+    headers: {},
+  },
+  rest_api: {
+    base_url: '',
+    api_key: '',
+  },
 }
 
 export default function AgentFormPage() {
@@ -112,6 +167,20 @@ export default function AgentFormPage() {
   const [integrations, setIntegrations] = useState<any[]>([])
   const [loadingIntegrations, setLoadingIntegrations] = useState(false)
   const [selectedIntegrationIds, setSelectedIntegrationIds] = useState<number[]>([])
+  const [testingIds, setTestingIds] = useState<Set<number>>(new Set())
+  const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set())
+  const [showIntegrationForm, setShowIntegrationForm] = useState(false)
+  const [editingIntegration, setEditingIntegration] = useState<any | null>(null)
+  const [integrationFormData, setIntegrationFormData] = useState({
+    name: '',
+    description: '',
+    integration_type: '',
+    provider: '',
+    config: {} as Record<string, any>
+  })
+  const [integrationTypes, setIntegrationTypes] = useState<any>(null)
+  const [availableProviders, setAvailableProviders] = useState<string[]>([])
+  const [savingIntegration, setSavingIntegration] = useState(false)
 
   const loadCollaborators = useCallback(async (agentId: number) => {
     try {
@@ -198,13 +267,171 @@ export default function AgentFormPage() {
   const loadUserIntegrations = async () => {
     try {
       setLoadingIntegrations(true)
-      const response = await integrationsAPI.list({ is_active: true })
+      const response = await integrationsAPI.list()
       setIntegrations(response.data || [])
     } catch (err: any) {
       console.error('Failed to load integrations:', err)
       // Don't show error toast as this is optional
     } finally {
       setLoadingIntegrations(false)
+    }
+  }
+
+  const loadIntegrationTypes = async () => {
+    try {
+      const response = await integrationsAPI.getTypes()
+      setIntegrationTypes(response.data)
+    } catch (err: any) {
+      console.error('Failed to load integration types:', err)
+    }
+  }
+
+  useEffect(() => {
+    loadIntegrationTypes()
+  }, [])
+
+  useEffect(() => {
+    if (integrationFormData.integration_type && integrationTypes) {
+      const providers = integrationTypes.type_provider_mapping[integrationFormData.integration_type] || []
+      setAvailableProviders(providers)
+      if (!providers.includes(integrationFormData.provider)) {
+        setIntegrationFormData(prev => ({ ...prev, provider: '', config: {} }))
+      } else if (integrationFormData.provider && (!integrationFormData.config || Object.keys(integrationFormData.config).length === 0)) {
+        setIntegrationFormData(prev => ({
+          ...prev,
+          config: { ...CONFIG_TEMPLATES[integrationFormData.provider] || {} },
+        }))
+      }
+    }
+  }, [integrationFormData.integration_type, integrationTypes])
+
+  const handleTestIntegration = async (id: number) => {
+    setTestingIds((prev) => new Set(prev).add(id))
+    try {
+      const response = await integrationsAPI.test(id)
+      if (response.data.success) {
+        toast.success(t.integrations?.testSuccess || 'Integration test successful')
+      } else {
+        toast.error(response.data.message || t.integrations?.testError || 'Integration test failed')
+      }
+      loadUserIntegrations()
+    } catch (error: any) {
+      console.error('Test failed:', error)
+      toast.error(error.response?.data?.detail || t.integrations?.testError || 'Integration test failed')
+    } finally {
+      setTestingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
+  const handleSyncIntegration = async (id: number) => {
+    setSyncingIds((prev) => new Set(prev).add(id))
+    try {
+      const response = await integrationsAPI.sync(id)
+      if (response.data.success) {
+        toast.success(t.integrations?.syncSuccess || 'Integration sync successful')
+      } else {
+        toast.error(response.data.message || t.integrations?.syncError || 'Integration sync failed')
+      }
+      loadUserIntegrations()
+    } catch (error: any) {
+      console.error('Sync failed:', error)
+      toast.error(error.response?.data?.detail || t.integrations?.syncError || 'Integration sync failed')
+    } finally {
+      setSyncingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
+  const handleToggleIntegrationActive = async (id: number, currentStatus: boolean) => {
+    try {
+      await integrationsAPI.update(id, { is_active: !currentStatus })
+      toast.success(t.common.status === 'Statut' ? `Intégration ${!currentStatus ? 'activée' : 'désactivée'}` : `Integration ${!currentStatus ? 'activated' : 'deactivated'}`)
+      loadUserIntegrations()
+    } catch (error: any) {
+      console.error('Failed to update integration:', error)
+      toast.error(error.response?.data?.detail || 'Failed to update integration')
+    }
+  }
+
+  const handleDeleteIntegration = async (id: number) => {
+    if (!confirm(t.integrations?.deleteConfirm || 'Are you sure you want to delete this integration?')) return
+    try {
+      await integrationsAPI.delete(id)
+      toast.success(t.integrations?.deleteSuccess || 'Integration deleted')
+      loadUserIntegrations()
+      setSelectedIntegrationIds(prev => prev.filter(iid => iid !== id))
+    } catch (error: any) {
+      console.error('Failed to delete integration:', error)
+      toast.error(error.response?.data?.detail || t.integrations?.deleteError || 'Failed to delete integration')
+    }
+  }
+
+  const openIntegrationForm = (integration?: any) => {
+    if (integration) {
+      setEditingIntegration(integration)
+      setIntegrationFormData({
+        name: integration.name,
+        description: integration.description || '',
+        integration_type: integration.integration_type,
+        provider: integration.provider,
+        config: integration.config || {}
+      })
+    } else {
+      setEditingIntegration(null)
+      setIntegrationFormData({
+        name: '',
+        description: '',
+        integration_type: '',
+        provider: '',
+        config: {}
+      })
+    }
+    setShowIntegrationForm(true)
+  }
+
+  const handleIntegrationFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSavingIntegration(true)
+    try {
+      if (editingIntegration) {
+        await integrationsAPI.update(editingIntegration.id, integrationFormData)
+        toast.success(t.integrations?.updateSuccess || 'Integration updated')
+      } else {
+        await integrationsAPI.create(integrationFormData)
+        toast.success(t.integrations?.createSuccess || 'Integration created')
+      }
+      loadUserIntegrations()
+      setShowIntegrationForm(false)
+      setEditingIntegration(null)
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || t.integrations?.saveError || 'Failed to save integration')
+    } finally {
+      setSavingIntegration(false)
+    }
+  }
+
+  const handleIntegrationFormChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value, type } = e.target
+    if (name.startsWith('config.')) {
+      const configKey = name.replace('config.', '')
+      setIntegrationFormData((prev) => ({
+        ...prev,
+        config: {
+          ...prev.config,
+          [configKey]: type === 'number' ? parseFloat(value) || 0 : value,
+        },
+      }))
+    } else {
+      setIntegrationFormData((prev) => ({ ...prev, [name]: value }))
     }
   }
 
@@ -675,80 +902,6 @@ export default function AgentFormPage() {
               </p>
             </div>
 
-            {/* Integrations Selection */}
-            <div className="pt-4 border-t border-gray-100 dark:border-gray-700/50">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                🔗 {t.common.status === 'Statut' ? 'Intégrations' : 'Integrations'}
-              </label>
-              {loadingIntegrations ? (
-                <div className="text-sm text-gray-500 dark:text-gray-400">
-                  {t.common.status === 'Statut' ? 'Chargement...' : 'Loading...'}
-                </div>
-              ) : integrations.length === 0 ? (
-                <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                  {t.common.status === 'Statut' 
-                    ? 'Aucune intégration disponible. Créez d\'abord des intégrations depuis le menu.' 
-                    : 'No integrations available. Create integrations first from the menu.'}
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50 dark:bg-gray-800/50">
-                  {integrations.map((integration) => {
-                    const getIntegrationTypeLabel = (type: string): string => {
-                      const labels: Record<string, string> = {
-                        calendar: '📅',
-                        email: '📧',
-                        contact_management: '👥',
-                        database: '💾',
-                        crm: '📊',
-                        accounting: '💰',
-                        other: '🔧',
-                      }
-                      return labels[type] || '🔧'
-                    }
-                    const isSelected = selectedIntegrationIds.includes(integration.id)
-                    return (
-                      <label
-                        key={integration.id}
-                        className="flex cursor-pointer items-center gap-2 p-2 rounded-lg hover:bg-white dark:hover:bg-gray-700 transition"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedIntegrationIds([...selectedIntegrationIds, integration.id])
-                            } else {
-                              setSelectedIntegrationIds(selectedIntegrationIds.filter(id => id !== integration.id))
-                            }
-                          }}
-                          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                        />
-                        <span className="text-lg">{getIntegrationTypeLabel(integration.integration_type)}</span>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm font-medium text-gray-700 dark:text-gray-300 block truncate">
-                            {integration.name}
-                          </span>
-                          <span className="text-xs text-gray-500 dark:text-gray-400 block truncate">
-                            {integration.integration_type} • {integration.provider}
-                          </span>
-                        </div>
-                        {integration.status === 'active' && (
-                          <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">
-                            {t.common.status === 'Statut' ? 'Actif' : 'Active'}
-                          </span>
-                        )}
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                {t.common.status === 'Statut' 
-                  ? 'Sélectionnez les intégrations à utiliser avec cet agent. Chaque agent peut avoir des intégrations différentes selon son rôle.' 
-                  : 'Select integrations to use with this agent. Each agent can have different integrations depending on their role.'}
-              </p>
-            </div>
-
             {/* Checkboxes */}
             <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-gray-700/50">
               <label className="flex cursor-pointer items-center gap-2">
@@ -827,6 +980,167 @@ export default function AgentFormPage() {
             <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
               {t.common.status === 'Statut' ? 'Définit le ton, le contexte et le comportement de l\'assistant.' : 'Defines the assistant\'s tone, context, and behavior.'}
             </p>
+
+            {/* Integrations Management */}
+            <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  🔗 {t.common.status === 'Statut' ? 'Intégrations' : 'Integrations'}
+                </label>
+                <button
+                  type="button"
+                  onClick={() => openIntegrationForm()}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                >
+                  <PlusIcon className="h-3 w-3" />
+                  {t.common.status === 'Statut' ? 'Nouveau' : 'New'}
+                </button>
+              </div>
+              {loadingIntegrations ? (
+                <div className="text-sm text-gray-500 dark:text-gray-400 py-4">
+                  {t.common.status === 'Statut' ? 'Chargement...' : 'Loading...'}
+                </div>
+              ) : integrations.length === 0 ? (
+                <div className="text-sm text-gray-500 dark:text-gray-400 mb-2 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700">
+                  <p className="mb-3">
+                    {t.common.status === 'Statut' 
+                      ? 'Aucune intégration disponible. Créez d\'abord des intégrations.' 
+                      : 'No integrations available. Create integrations first.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => openIntegrationForm()}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                  >
+                    <PlusIcon className="h-4 w-4" />
+                    {t.common.status === 'Statut' ? 'Créer une intégration' : 'Create Integration'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50 dark:bg-gray-800/50">
+                  {integrations.map((integration) => {
+                    const getIntegrationTypeLabel = (type: string): string => {
+                      const labels: Record<string, string> = {
+                        calendar: '📅',
+                        email: '📧',
+                        contact_management: '👥',
+                        database: '💾',
+                        crm: '📊',
+                        accounting: '💰',
+                        other: '🔧',
+                      }
+                      return labels[type] || '🔧'
+                    }
+                    const isSelected = selectedIntegrationIds.includes(integration.id)
+                    return (
+                      <div
+                        key={integration.id}
+                        className="flex items-start gap-2 p-2 rounded-lg hover:bg-white dark:hover:bg-gray-700 transition border border-gray-200 dark:border-gray-700"
+                      >
+                        <label className="flex cursor-pointer items-start gap-2 flex-1 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedIntegrationIds([...selectedIntegrationIds, integration.id])
+                              } else {
+                                setSelectedIntegrationIds(selectedIntegrationIds.filter(id => id !== integration.id))
+                              }
+                            }}
+                            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 mt-0.5"
+                          />
+                          <span className="text-lg flex-shrink-0">{getIntegrationTypeLabel(integration.integration_type)}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 block truncate">
+                              {integration.name}
+                            </span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400 block truncate">
+                              {integration.integration_type} • {integration.provider}
+                            </span>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-1.5 py-0.5 text-xs font-medium rounded ${integration.status === 'active' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}>
+                                {integration.status}
+                              </span>
+                              {!integration.is_active && (
+                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                  ({t.common.status === 'Statut' ? 'Inactif' : 'Inactive'})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </label>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleTestIntegration(integration.id)}
+                            disabled={testingIds.has(integration.id)}
+                            className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400 transition disabled:opacity-50"
+                            title={t.integrations?.testConnection || 'Test'}
+                          >
+                            {testingIds.has(integration.id) ? (
+                              <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircleIcon className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSyncIntegration(integration.id)}
+                            disabled={syncingIds.has(integration.id) || !integration.is_active}
+                            className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400 transition disabled:opacity-50"
+                            title={t.integrations?.syncData || 'Sync'}
+                          >
+                            {syncingIds.has(integration.id) ? (
+                              <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <ArrowPathIcon className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleIntegrationActive(integration.id, integration.is_active)}
+                            className={`p-1.5 rounded transition ${
+                              integration.is_active
+                                ? 'hover:bg-green-100 dark:hover:bg-green-900 text-green-600 dark:text-green-400'
+                                : 'hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400'
+                            }`}
+                            title={integration.is_active ? (t.integrations?.deactivate || 'Deactivate') : (t.integrations?.activate || 'Activate')}
+                          >
+                            {integration.is_active ? (
+                              <CheckCircleIcon className="h-3.5 w-3.5" />
+                            ) : (
+                              <XCircleIcon className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openIntegrationForm(integration)}
+                            className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400 transition"
+                            title={t.common.edit || 'Edit'}
+                          >
+                            <PencilIcon className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteIntegration(integration.id)}
+                            className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900 text-red-600 transition"
+                            title={t.common.delete || 'Delete'}
+                          >
+                            <TrashIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {t.common.status === 'Statut' 
+                  ? 'Sélectionnez les intégrations à utiliser avec cet agent.' 
+                  : 'Select integrations to use with this agent.'}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -1280,6 +1594,193 @@ export default function AgentFormPage() {
           </div>
         </div>
       </form>
+
+      {/* Integration Create/Edit Modal */}
+      {showIntegrationForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+                  {editingIntegration ? (t.integrations?.editIntegrationTitle || 'Edit Integration') : (t.integrations?.newIntegrationTitle || 'New Integration')}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowIntegrationForm(false)
+                    setEditingIntegration(null)
+                  }}
+                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <form onSubmit={handleIntegrationFormSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  {t.integrations?.name || 'Name'} *
+                </label>
+                <input
+                  type="text"
+                  name="name"
+                  value={integrationFormData.name}
+                  onChange={handleIntegrationFormChange}
+                  required
+                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm"
+                  placeholder={t.integrations?.namePlaceholder || 'Integration name'}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  {t.integrations?.description || 'Description'}
+                </label>
+                <textarea
+                  name="description"
+                  value={integrationFormData.description}
+                  onChange={handleIntegrationFormChange}
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm"
+                  placeholder={t.integrations?.descriptionPlaceholder || 'Integration description'}
+                />
+              </div>
+
+              {integrationTypes && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      {t.integrations?.integrationType || 'Integration Type'} *
+                    </label>
+                    <select
+                      name="integration_type"
+                      value={integrationFormData.integration_type}
+                      onChange={handleIntegrationFormChange}
+                      required
+                      className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm"
+                    >
+                      <option value="">{t.integrations?.selectType || 'Select type'}</option>
+                      {integrationTypes.types.map((type: string) => (
+                        <option key={type} value={type}>
+                          {type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {integrationFormData.integration_type && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        {t.integrations?.provider || 'Provider'} *
+                      </label>
+                      <select
+                        name="provider"
+                        value={integrationFormData.provider}
+                        onChange={handleIntegrationFormChange}
+                        required
+                        className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm"
+                      >
+                        <option value="">{t.integrations?.selectProvider || 'Select provider'}</option>
+                        {availableProviders.map((provider: string) => (
+                          <option key={provider} value={provider}>
+                            {provider.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {integrationFormData.provider && CONFIG_TEMPLATES[integrationFormData.provider] && (
+                    <div className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                      <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                        {t.integrations?.configuration || 'Configuration'} *
+                      </h4>
+                      {Object.keys(CONFIG_TEMPLATES[integrationFormData.provider]).map((key) => {
+                        const isPassword = key.toLowerCase().includes('password') || key.toLowerCase().includes('token')
+                        const value = integrationFormData.config[key] || ''
+                        
+                        if (key === 'headers' && typeof CONFIG_TEMPLATES[integrationFormData.provider][key] === 'object') {
+                          return (
+                            <div key={key}>
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Headers (JSON)
+                              </label>
+                              <textarea
+                                name={`config.${key}`}
+                                value={JSON.stringify(value || {}, null, 2)}
+                                onChange={(e) => {
+                                  try {
+                                    const parsed = JSON.parse(e.target.value)
+                                    setIntegrationFormData(prev => ({
+                                      ...prev,
+                                      config: { ...prev.config, [key]: parsed }
+                                    }))
+                                  } catch {
+                                    // Invalid JSON
+                                  }
+                                }}
+                                rows={3}
+                                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm font-mono"
+                                placeholder='{"Authorization": "Bearer token"}'
+                              />
+                            </div>
+                          )
+                        }
+
+                        return (
+                          <div key={key}>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                              {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                              {typeof CONFIG_TEMPLATES[integrationFormData.provider][key] === 'number' && ' (Number)'}
+                              {(key === 'access_token' || key === 'api_key' || key === 'smtp_host') && ' *'}
+                            </label>
+                            <input
+                              type={isPassword ? 'password' : typeof CONFIG_TEMPLATES[integrationFormData.provider][key] === 'number' ? 'number' : 'text'}
+                              name={`config.${key}`}
+                              value={value}
+                              onChange={handleIntegrationFormChange}
+                              required={key === 'access_token' || key === 'api_key' || key === 'smtp_host'}
+                              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm"
+                              placeholder={key}
+                            />
+                          </div>
+                        )
+                      })}
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {t.integrations?.credentialsWarning || 'Credentials are encrypted and stored securely.'}
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  type="submit"
+                  disabled={savingIntegration || !integrationTypes}
+                  className="flex-1 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition disabled:opacity-50 text-sm"
+                >
+                  {savingIntegration 
+                    ? (t.common.status === 'Statut' ? 'Enregistrement...' : 'Saving...')
+                    : editingIntegration 
+                    ? (t.integrations?.updateIntegration || 'Update Integration')
+                    : (t.integrations?.createIntegrationButton || 'Create Integration')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowIntegrationForm(false)
+                    setEditingIntegration(null)
+                  }}
+                  className="px-4 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-medium transition text-sm"
+                >
+                  {t.common.cancel || 'Cancel'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   )
 }
