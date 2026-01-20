@@ -46,10 +46,11 @@ logger.propagate = True
 class FrenchVoiceAgentService:
     """Service for handling French voice agent conversations with ultra-low latency"""
     
-    def __init__(self, agent: VoiceAgent, call: Call, skip_greeting_trigger: bool = False):
+    def __init__(self, agent: VoiceAgent, call: Call, skip_greeting_trigger: bool = False, script_data: Optional[Dict[str, Any]] = None):
         self.agent = agent
         self.call = call
         self.skip_greeting_trigger = skip_greeting_trigger  # Skip CALL_START if TTS greeting was used
+        self.script_data = script_data  # Optional outbound call script
         
         # Validate API key
         if not settings.GOOGLE_API_KEY:
@@ -116,6 +117,11 @@ class FrenchVoiceAgentService:
         workflow_instruction = ""
         if getattr(self.agent, 'workflow_enabled', False) and getattr(self.agent, 'call_direction', 'inbound') == 'outbound':
             workflow_instruction = self._build_workflow_instruction(lang_suffix)
+        
+        # Build script instruction if script_data is provided (for outbound calls)
+        script_instruction = ""
+        if self.script_data:
+            script_instruction = self._build_script_instruction(lang_suffix)
         
         # Get manager contact info and substitute in prompts (handle None)
         manager_contact = getattr(self.agent, 'manager_contact', None)
@@ -262,8 +268,38 @@ VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
         # IMPORTANT: The agent's system_prompt defines the agent's identity and primary behavior
         # All other instructions are supplementary and should not override the agent's core identity
         
-        # For outbound calls with workflow enabled, prioritize the workflow instructions
-        if workflow_instruction:
+        # For outbound calls: script_instruction takes priority, then workflow_instruction
+        if script_instruction:
+            system_instruction = f"""=== YOUR IDENTITY AND ROLE (PRIMARY - ALWAYS FOLLOW THIS) ===
+{self.agent.system_prompt}
+
+{script_instruction}
+
+=== CONVERSATION STYLE GUIDELINES (Follow these while staying in character) ===
+{conversation_style}
+
+{rag_note}
+
+{callback_note}
+
+{identity_enforcement}
+
+{voice_instruction}
+
+{greeting_instruction}
+
+=== CRITICAL REMINDER FOR OUTBOUND CALLS WITH SCRIPT ===
+- YOU ARE MAKING AN OUTBOUND CALL - You initiated this conversation
+- Follow the script structure provided above
+- Start with the opening message when the call connects
+- Cover all key points in the main content
+- Handle objections as guided in the script
+- End with the closing message when appropriate
+- Be proactive: YOU lead the conversation
+- Adapt naturally - the script is a guide, not a rigid template
+- NO EMOJIS: Keep professional conversations emoji-free
+- INTRODUCE YOURSELF ONLY ONCE in the opening"""
+        elif workflow_instruction:
             system_instruction = f"""=== YOUR IDENTITY AND ROLE (PRIMARY - ALWAYS FOLLOW THIS) ===
 {self.agent.system_prompt}
 
@@ -380,6 +416,84 @@ VOICE QUALITY INSTRUCTIONS (CRITICAL - ALWAYS FOLLOW):
         logger.info(f"Built workflow instruction for agent {self.agent.id} with {len(workflow_questions)} questions")
         
         return workflow_instruction
+    
+    def _build_script_instruction(self, lang_suffix: str) -> str:
+        """Build the script instruction for outbound calls with custom scripts"""
+        
+        if not self.script_data:
+            return ""
+        
+        is_french = lang_suffix == 'fr'
+        
+        # Extract script components
+        script_name = self.script_data.get('name', 'Unnamed Script')
+        opening_message = self.script_data.get('opening_message', '')
+        main_content = self.script_data.get('main_content', '')
+        closing_message = self.script_data.get('closing_message', '')
+        tone = self.script_data.get('tone', 'professional')
+        objective = self.script_data.get('objective', '')
+        key_points = self.script_data.get('key_points', '')
+        objection_handling = self.script_data.get('objection_handling', '')
+        
+        # Build the instruction
+        if is_french:
+            script_instruction = f"""=== SCRIPT D'APPEL SORTANT: {script_name} ===
+
+TON DE LA CONVERSATION: {tone}
+{f"OBJECTIF DE L'APPEL: {objective}" if objective else ""}
+
+MESSAGE D'OUVERTURE (à dire au début de l'appel):
+"{opening_message}"
+
+{f'''CONTENU PRINCIPAL (points à couvrir):
+{main_content}''' if main_content else ''}
+
+{f'''POINTS CLÉS À ABORDER:
+{key_points}''' if key_points else ''}
+
+{f'''GESTION DES OBJECTIONS:
+{objection_handling}''' if objection_handling else ''}
+
+{f'''MESSAGE DE CONCLUSION (pour terminer l'appel):
+"{closing_message}"''' if closing_message else ''}
+
+INSTRUCTIONS:
+- Commencez par le message d'ouverture dès que l'appel est connecté
+- Couvrez les points principaux de manière naturelle
+- Adaptez-vous aux réponses du prospect
+- Utilisez le message de conclusion pour terminer professionnellement
+"""
+        else:
+            script_instruction = f"""=== OUTBOUND CALL SCRIPT: {script_name} ===
+
+CONVERSATION TONE: {tone}
+{f"CALL OBJECTIVE: {objective}" if objective else ""}
+
+OPENING MESSAGE (say this when the call connects):
+"{opening_message}"
+
+{f'''MAIN CONTENT (points to cover):
+{main_content}''' if main_content else ''}
+
+{f'''KEY POINTS TO ADDRESS:
+{key_points}''' if key_points else ''}
+
+{f'''OBJECTION HANDLING:
+{objection_handling}''' if objection_handling else ''}
+
+{f'''CLOSING MESSAGE (to wrap up the call):
+"{closing_message}"''' if closing_message else ''}
+
+INSTRUCTIONS:
+- Start with the opening message as soon as the call connects
+- Cover the main points naturally during the conversation
+- Adapt to the prospect's responses and questions
+- Use the closing message to end the call professionally
+"""
+        
+        logger.info(f"Built script instruction for agent {self.agent.id} using script: {script_name}")
+        
+        return script_instruction
     
     def _load_tools(self):
         """Load and configure tools for the agent"""

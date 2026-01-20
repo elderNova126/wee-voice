@@ -335,6 +335,122 @@ def delete_agent(
     return {"message": "Agent deleted successfully"}
 
 
+@router.get("/{agent_id}/stats")
+def get_agent_stats(
+    agent_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get statistics for a specific agent (calls, leads, analytics)"""
+    from sqlalchemy import func, distinct
+    from app.models import Call
+    
+    has_access, agent, role = check_agent_access(db, agent_id, current_user.id, "view")
+    
+    if not has_access or not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Base query for this agent's calls
+    calls_query = db.query(Call).filter(Call.agent_id == agent_id)
+    
+    # Total calls
+    total_calls = calls_query.count()
+    
+    # Total duration and cost
+    totals = calls_query.with_entities(
+        func.sum(Call.duration_minutes).label('total_minutes'),
+        func.sum(Call.cost).label('total_cost')
+    ).first()
+    
+    # Calls by status
+    status_counts = calls_query.with_entities(
+        Call.status,
+        func.count(Call.id)
+    ).group_by(Call.status).all()
+    
+    # Sentiment breakdown
+    sentiment_counts = calls_query.filter(
+        Call.sentiment.isnot(None)
+    ).with_entities(
+        Call.sentiment,
+        func.count(Call.id)
+    ).group_by(Call.sentiment).all()
+    
+    # Unique leads (callers with phone numbers)
+    unique_leads = calls_query.filter(
+        Call.caller_phone.isnot(None)
+    ).with_entities(
+        func.count(distinct(Call.caller_phone))
+    ).scalar() or 0
+    
+    # Calls with action required
+    action_required_count = calls_query.filter(
+        Call.callback_requested == True
+    ).count()
+    
+    return {
+        "agent_id": agent_id,
+        "total_calls": total_calls,
+        "total_minutes": round(float(totals.total_minutes or 0), 2),
+        "total_cost": round(float(totals.total_cost or 0), 2),
+        "unique_leads": unique_leads,
+        "action_required": action_required_count,
+        "status_breakdown": {str(status.value if hasattr(status, 'value') else status): count for status, count in status_counts},
+        "sentiment_breakdown": {sentiment: count for sentiment, count in sentiment_counts if sentiment}
+    }
+
+
+@router.get("/{agent_id}/leads")
+def get_agent_leads(
+    agent_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get potential customers (leads) for a specific agent"""
+    from sqlalchemy import func, desc
+    from app.models import Call
+    
+    has_access, agent, role = check_agent_access(db, agent_id, current_user.id, "view")
+    
+    if not has_access or not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get unique callers with their last call info
+    leads_query = db.query(
+        Call.caller_phone,
+        Call.caller_name,
+        func.count(Call.id).label('call_count'),
+        func.max(Call.started_at).label('last_contact'),
+        func.sum(Call.duration_minutes).label('total_duration')
+    ).filter(
+        Call.agent_id == agent_id,
+        Call.caller_phone.isnot(None)
+    ).group_by(
+        Call.caller_phone,
+        Call.caller_name
+    ).order_by(desc('last_contact')).all()
+    
+    leads = []
+    for lead in leads_query:
+        # Get the last call's sentiment and action status
+        last_call = db.query(Call).filter(
+            Call.agent_id == agent_id,
+            Call.caller_phone == lead.caller_phone
+        ).order_by(desc(Call.started_at)).first()
+        
+        leads.append({
+            "phone": lead.caller_phone,
+            "name": lead.caller_name,
+            "call_count": lead.call_count,
+            "last_contact": last_call.started_at if last_call else None,
+            "total_duration": round(float(lead.total_duration or 0), 2),
+            "last_sentiment": last_call.sentiment if last_call else None,
+            "has_action_required": last_call.callback_requested if last_call else False
+        })
+    
+    return {"leads": leads, "total": len(leads)}
+
+
 @router.get("/public/demo")
 def get_demo_agents(db: Session = Depends(get_db)):
     """Get all public demo agents (no auth required)"""

@@ -923,6 +923,7 @@ class OutboundCallRequest(BaseModel):
     from_phone_number: str  # Phone number to call from (must be registered)
     to_number: str  # Number to call
     agent_id: int  # AI agent to use
+    script_id: Optional[int] = None  # Optional outbound script to use
 
 
 class OutboundCallResponse(BaseModel):
@@ -953,8 +954,9 @@ async def make_outbound_call(
     - from_phone_number must be a registered phone number with SIP credentials
     - agent_id must be an agent owned by the current user (or any agent for admins)
     - The phone number's SIP client must be registered with the SIP server
+    - script_id (optional) - an outbound script to use for the call
     """
-    logger.info(f"Outbound call request: {request.from_phone_number} -> {request.to_number} (agent: {request.agent_id})")
+    logger.info(f"Outbound call request: {request.from_phone_number} -> {request.to_number} (agent: {request.agent_id}, script: {request.script_id})")
     
     # Verify agent exists and user has access
     agent = db.query(VoiceAgent).filter(VoiceAgent.id == request.agent_id).first()
@@ -963,6 +965,38 @@ async def make_outbound_call(
     
     if not current_user.is_superuser and agent.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    
+    # Get script if specified
+    script_data = None
+    if request.script_id:
+        from app.models import OutboundScript
+        script = db.query(OutboundScript).filter(
+            OutboundScript.id == request.script_id,
+            OutboundScript.agent_id == request.agent_id,
+            OutboundScript.is_active == True
+        ).first()
+        
+        if not script:
+            raise HTTPException(status_code=404, detail="Script not found or inactive")
+        
+        # Record script use
+        script.use_count += 1
+        script.last_used_at = datetime.utcnow()
+        db.commit()
+        
+        # Build script data for the call
+        script_data = {
+            "id": script.id,
+            "name": script.name,
+            "opening_message": script.opening_message,
+            "main_content": script.main_content,
+            "closing_message": script.closing_message,
+            "tone": script.tone,
+            "objective": script.objective,
+            "key_points": script.key_points,
+            "objection_handling": script.objection_handling
+        }
+        logger.info(f"Using outbound script: {script.name} (ID: {script.id})")
     
     # Import SIP call handler
     try:
@@ -975,18 +1009,31 @@ async def make_outbound_call(
     if request.from_phone_number not in sip_call_handler.sip_clients:
         # List available phone numbers for debugging
         available = list(sip_call_handler.sip_clients.keys())
-        logger.error(f"Phone number {request.from_phone_number} not registered. Available: {available}")
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Phone number {request.from_phone_number} is not registered for SIP calls"
-        )
+        logger.error(f"Phone number {request.from_phone_number} not registered. Available SIP clients: {available}")
+        
+        # Try to find a similar number (might be format mismatch)
+        requested_digits = ''.join(c for c in request.from_phone_number if c.isdigit())
+        for avail_num in available:
+            avail_digits = ''.join(c for c in avail_num if c.isdigit())
+            if requested_digits == avail_digits or requested_digits.endswith(avail_digits) or avail_digits.endswith(requested_digits):
+                logger.error(f"Found similar number: {avail_num} (requested: {request.from_phone_number})")
+                # Use the matching number instead
+                request.from_phone_number = avail_num
+                break
+        else:
+            # No match found - provide helpful error
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Phone number {request.from_phone_number} is not registered for SIP calls. Available: {available}. Check if the phone has SIP credentials configured (sip_websocket_url, sip_username, sip_password, sip_domain)."
+            )
     
-    # Make the outbound call
+    # Make the outbound call with optional script
     result = await sip_call_handler.make_outbound_call(
         from_phone_number=request.from_phone_number,
         to_number=request.to_number,
         agent_id=request.agent_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        script_data=script_data
     )
     
     if not result:
@@ -1006,42 +1053,125 @@ async def make_outbound_call(
     )
 
 
+@router.get("/outbound/sip-status")
+async def get_sip_status(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Debug endpoint to check SIP handler status.
+    Shows which phone numbers are registered with the SIP handler.
+    """
+    try:
+        from app.services.sip_call_handler import sip_call_handler
+        
+        registered = []
+        for phone_num, client in sip_call_handler.sip_clients.items():
+            phone_record = sip_call_handler.phone_records.get(phone_num)
+            registered.append({
+                "phone_number": phone_num,
+                "is_registered": getattr(client, 'is_registered', False),
+                "agent_id": phone_record.agent_id if phone_record else None,
+                "sip_username": phone_record.sip_username if phone_record else None,
+                "sip_domain": phone_record.sip_domain if phone_record else None
+            })
+        
+        return {
+            "sip_handler_active": True,
+            "registered_count": len(registered),
+            "registered_phones": registered,
+            "message": "SIP handler is running" if registered else "No phones registered with SIP handler"
+        }
+    except Exception as e:
+        logger.error(f"Error checking SIP status: {e}")
+        return {
+            "sip_handler_active": False,
+            "registered_count": 0,
+            "registered_phones": [],
+            "message": f"SIP handler error: {str(e)}"
+        }
+
+
+@router.post("/outbound/sip-reload")
+async def reload_sip_registrations(
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Reload SIP phone registrations.
+    Use this after adding/updating phone numbers with SIP credentials.
+    Any authenticated user can trigger this to reload their own phone numbers.
+    """
+    try:
+        from app.services.sip_call_handler import sip_call_handler
+        
+        await sip_call_handler.reload_phone_numbers()
+        
+        # Get updated status
+        registered = list(sip_call_handler.sip_clients.keys())
+        
+        return {
+            "success": True,
+            "message": f"SIP registrations reloaded. {len(registered)} phone(s) registered.",
+            "registered_phones": registered
+        }
+    except Exception as e:
+        logger.error(f"Error reloading SIP registrations: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload SIP: {str(e)}")
+
+
 @router.get("/outbound/phone-numbers")
 async def get_available_phone_numbers(
+    agent_id: Optional[int] = Query(None, description="Filter by agent ID"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
     Get list of phone numbers available for outbound calls.
     
-    Returns phone numbers that are registered with the SIP server
-    and can be used to make outbound calls.
+    Returns phone numbers from the database that are in ACTIVE or APPROVED status.
+    If agent_id is provided, only returns phone numbers assigned to that agent.
+    Also indicates if they're currently registered with the SIP server.
     """
+    from app.models.zadarma import PhoneNumber, PhoneNumberStatus
+    
+    # Get registered SIP phone numbers (runtime)
+    sip_registered = set()
     try:
         from app.services.sip_call_handler import sip_call_handler
-        
-        phone_numbers = sip_call_handler.get_registered_phone_numbers()
-        
-        # Filter by user's phone numbers (unless admin)
-        if not current_user.is_superuser:
-            from app.models import PhoneNumber
-            user_phones = db.query(PhoneNumber.phone_number).filter(
-                PhoneNumber.user_id == current_user.id
-            ).all()
-            user_phone_set = {p[0] for p in user_phones}
-            phone_numbers = [p for p in phone_numbers if p["phone_number"] in user_phone_set]
-        
-        return {
-            "phone_numbers": phone_numbers,
-            "count": len(phone_numbers)
-        }
-        
-    except ImportError:
-        return {
-            "phone_numbers": [],
-            "count": 0,
-            "error": "SIP call handler not available"
-        }
+        registered = sip_call_handler.get_registered_phone_numbers()
+        sip_registered = {p["phone_number"] for p in registered}
+    except (ImportError, Exception) as e:
+        logger.warning(f"SIP call handler not available: {e}")
+    
+    # Query phone numbers from database
+    query = db.query(PhoneNumber).filter(
+        PhoneNumber.status.in_([PhoneNumberStatus.ACTIVE, PhoneNumberStatus.APPROVED])
+    )
+    
+    # Filter by user's phone numbers (unless admin)
+    if not current_user.is_superuser:
+        query = query.filter(PhoneNumber.user_id == current_user.id)
+    
+    # Filter by agent if specified
+    if agent_id is not None:
+        query = query.filter(PhoneNumber.agent_id == agent_id)
+    
+    db_phones = query.all()
+    
+    phone_numbers = []
+    for phone in db_phones:
+        phone_numbers.append({
+            "phone_number": phone.phone_number,
+            "is_registered": phone.phone_number in sip_registered,
+            "agent_id": phone.agent_id,
+            "status": phone.status.value if hasattr(phone.status, 'value') else phone.status,
+            "country_code": phone.country_code
+        })
+    
+    return {
+        "phone_numbers": phone_numbers,
+        "count": len(phone_numbers)
+    }
 
 
 @router.post("/{call_id}/hangup")

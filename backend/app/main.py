@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.models.database import engine, Base
-from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, performance, eagi, virtual_numbers, asterisk
+from app.api import auth, agents, calls, websocket, billing, usage, security, profile, documents, phone_numbers, callbacks, embed, zadarma_webhook, admin, integrations, libraries, collaborators, phone_audio, phone_debug, performance, eagi, virtual_numbers, asterisk, outbound_scripts
 from app.middleware.rate_limit import RateLimitMiddleware, cleanup_rate_limits
 
 # Set up logging
@@ -203,6 +203,7 @@ app.include_router(performance.router, prefix=f"{settings.API_V1_STR}/performanc
 app.include_router(eagi.router, prefix=f"{settings.API_V1_STR}/eagi", tags=["EAGI"])
 app.include_router(virtual_numbers.router, prefix=f"{settings.API_V1_STR}/virtual-numbers", tags=["Virtual Numbers"])
 app.include_router(asterisk.router, prefix=f"{settings.API_V1_STR}/asterisk", tags=["Asterisk Configuration"])
+app.include_router(outbound_scripts.router, prefix=f"{settings.API_V1_STR}", tags=["Outbound Scripts"])
 
 
 # Global exception handler

@@ -78,11 +78,34 @@ export const agentsAPI = {
   delete: (id: number) => api.delete(`/agents/${id}`),
   
   getDemoAgent: () => api.get('/agents/public/demo'),
+  
+  getStats: (id: number) => api.get(`/agents/${id}/stats`),
+  
+  getLeads: (id: number) => api.get(`/agents/${id}/leads`),
+  
+  // Outbound Scripts
+  listScripts: (agentId: number, activeOnly: boolean = false) =>
+    api.get(`/agents/${agentId}/scripts`, { params: { active_only: activeOnly } }),
+  
+  getScript: (agentId: number, scriptId: number) =>
+    api.get(`/agents/${agentId}/scripts/${scriptId}`),
+  
+  createScript: (agentId: number, data: any) =>
+    api.post(`/agents/${agentId}/scripts`, data),
+  
+  updateScript: (agentId: number, scriptId: number, data: any) =>
+    api.put(`/agents/${agentId}/scripts/${scriptId}`, data),
+  
+  deleteScript: (agentId: number, scriptId: number) =>
+    api.delete(`/agents/${agentId}/scripts/${scriptId}`),
+  
+  toggleScriptFavorite: (agentId: number, scriptId: number) =>
+    api.post(`/agents/${agentId}/scripts/${scriptId}/toggle-favorite`),
 }
 
 // Calls API
 export const callsAPI = {
-  list: (params?: { page?: number; per_page?: number; status?: string; action_required?: boolean; favorite?: boolean; search?: string }) => 
+  list: (params?: { page?: number; per_page?: number; status?: string; action_required?: boolean; favorite?: boolean; search?: string; agent_id?: number }) => 
     api.get('/calls/', { params }),
   
   get: (id: number) => api.get(`/calls/${id}`),
@@ -110,6 +133,19 @@ export const callsAPI = {
   
   bulkToggleFavorite: (callIds: number[], isFavorite: boolean) => 
     api.post('/calls/bulk/favorite', { call_ids: callIds, is_favorite: isFavorite }),
+  
+  // Outbound calls
+  makeOutboundCall: (data: { from_phone_number: string; to_number: string; agent_id: number; script_id?: number }) =>
+    api.post('/calls/outbound', data),
+  
+  getAvailablePhoneNumbers: (agentId?: number) => 
+    api.get('/calls/outbound/phone-numbers', { params: agentId ? { agent_id: agentId } : {} }),
+  
+  getSipStatus: () => api.get('/calls/outbound/sip-status'),
+  
+  reloadSipRegistrations: () => api.post('/calls/outbound/sip-reload'),
+  
+  hangupCall: (id: number) => api.post(`/calls/${id}/hangup`),
 }
 
 // Libraries API
