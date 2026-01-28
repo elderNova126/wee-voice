@@ -691,8 +691,8 @@ class WeeVoiceEAGI:
         audio_dir.mkdir(exist_ok=True)
         
         chunk_index = 0
-        min_buffer_ms = 500  # Wait for 500ms buffer before starting (more headroom)
-        chunk_ms = 200       # Play 200ms chunks (less overhead per unit time)
+        min_buffer_ms = 800  # Wait for 800ms buffer before starting
+        chunk_ms = 400       # Play 400ms chunks (less gaps per second = smoother)
         
         # File extension based on sample rate
         # Asterisk uses: .sln (8kHz), .sln16 (16kHz), .sln24 (24kHz)
