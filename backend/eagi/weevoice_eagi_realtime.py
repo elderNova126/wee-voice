@@ -517,29 +517,29 @@ class WeeVoiceEAGI:
     
     def _setup_agent_service(self) -> bool:
         """
-        Create FrenchVoiceAgentService - SAME service as web agent.
-        This ensures identical voice, prompts, and Gemini configuration.
+        Create voice agent service based on configured LLM model.
+        Uses factory function to select between Gemini and OpenAI Realtime API.
         """
         try:
-            from app.services.agent_service import FrenchVoiceAgentService
+            from app.services.openai_realtime_service import get_voice_agent_service, is_openai_model
             
-            logger.info("Creating FrenchVoiceAgentService (same as web agent)...")
+            logger.info("Creating voice agent service...")
             logger.info(f"  LLM Model configured: {self.llm_model}")
             
-            # Log model selection and audio optimization
-            if self.llm_model.lower().startswith('gpt'):
-                logger.warning(f"OpenAI model '{self.llm_model}' selected, but using Gemini for voice")
-                logger.warning("  (OpenAI Realtime API not yet implemented)")
-                logger.info("  Audio optimized: 8kHz native input (no resampling)")
+            # Log model selection
+            if is_openai_model(self.llm_model):
+                logger.info(f"🔵 Using OpenAI Realtime API for voice (model: {self.llm_model})")
+                logger.info("  Audio: 8kHz native input (no resampling needed)")
             else:
-                logger.info("  Using Gemini for native audio dialog")
+                logger.info("🟢 Using Gemini Live API for voice")
                 logger.info("  Audio: 8kHz→16kHz input resampling")
             
-            # Create the SAME service used by web agent and audiosocket
-            self.agent_service = FrenchVoiceAgentService(
-                self.agent,
-                self.call,
-                skip_greeting_trigger=False  # Let Gemini handle greeting
+            # Create the appropriate service using factory function
+            self.agent_service = get_voice_agent_service(
+                agent=self.agent,
+                call=self.call,
+                llm_model=self.llm_model,
+                skip_greeting_trigger=False  # Let AI handle greeting
             )
             
             logger.info("Agent service created successfully")

@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
 from app.models.database import SessionLocal
-from app.services.agent_service import FrenchVoiceAgentService
+# Note: Voice agent service is imported via factory in _connect_gemini
 from app.api.websocket import auto_summarize_call
 from app.services.greeting_tts_service import get_greeting_tts_service, get_cached_greeting_sync, EDGE_TTS_AVAILABLE
 
@@ -1370,27 +1370,29 @@ class AudioSocketSession:
     async def _connect_gemini(self) -> bool:
         """Connect to AI model and start the voice session"""
         try:
+            from app.services.openai_realtime_service import get_voice_agent_service, is_openai_model
+            
             # Log model selection
-            if self.llm_model.startswith('gpt-'):
-                print(f"[AI] ⚠ OpenAI model '{self.llm_model}' selected, but using Gemini for voice (OpenAI Realtime not yet implemented)", flush=True)
-                logger.warning(f"OpenAI model {self.llm_model} selected - using Gemini for voice calls (OpenAI Realtime API not yet implemented)")
-                # Note: Audio processing is optimized for OpenAI (8kHz native), 
-                # but actual inference uses Gemini until OpenAI Realtime is implemented
+            if is_openai_model(self.llm_model):
+                print(f"[AI] 🔵 Using OpenAI Realtime API (model: {self.llm_model})", flush=True)
+                logger.info(f"Using OpenAI Realtime API for voice (model: {self.llm_model})")
             else:
-                print(f"[AI] Using Gemini for native audio dialog", flush=True)
+                print(f"[AI] 🟢 Using Gemini Live API for voice", flush=True)
+                logger.info("Using Gemini Live API for voice")
             
-            print(f"[GEMINI] Creating agent service...", flush=True)
+            print(f"[AI] Creating agent service...", flush=True)
             
-            # Create agent service - pass flag if TTS greeting will be used
-            self.agent_service = FrenchVoiceAgentService(
-                self.agent, 
-                self.call,
+            # Create agent service using factory - selects Gemini or OpenAI based on model
+            self.agent_service = get_voice_agent_service(
+                agent=self.agent,
+                call=self.call,
+                llm_model=self.llm_model,
                 skip_greeting_trigger=bool(self.greeting_audio)  # Skip if TTS greeting is available
             )
             
-            print(f"[GEMINI] Starting session (skip_greeting={bool(self.greeting_audio)})...", flush=True)
+            print(f"[AI] Starting session (skip_greeting={bool(self.greeting_audio)})...", flush=True)
             if not await self.agent_service.start_session():
-                logger.error("Gemini failed")
+                logger.error("AI session failed to start")
                 await self._release_line()
                 return False
             
@@ -1398,11 +1400,11 @@ class AudioSocketSession:
             self.db.commit()
             
             logger.info(f"Call {self.call.id} ready")
-            print(f"[GEMINI] Session started successfully", flush=True)
+            print(f"[AI] Session started successfully", flush=True)
             return True
             
         except Exception as e:
-            logger.error(f"Gemini connection error: {e}", exc_info=True)
+            logger.error(f"AI connection error: {e}", exc_info=True)
             await self._release_line()
             return False
     
