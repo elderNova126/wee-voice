@@ -647,8 +647,10 @@ class WeeVoiceEAGI:
                 pass
     
     async def _audio_receive_loop(self):
-        """Receive audio from Gemini and buffer for playback"""
-        logger.info("Starting Gemini audio receive loop")
+        """Receive audio from AI model and buffer for playback"""
+        logger.info("Starting audio receive loop")
+        chunk_count = 0
+        total_bytes = 0
         
         try:
             async for audio_data in self.agent_service.receive_audio():
@@ -656,11 +658,17 @@ class WeeVoiceEAGI:
                     break
                 
                 if audio_data:
-                    # Convert Gemini 24kHz output for Asterisk
-                    # (8kHz for PSTN, 16kHz for SIP/WebRTC in high quality mode)
+                    chunk_count += 1
+                    # Convert output for Asterisk (μ-law decode for OpenAI, resample for Gemini)
                     audio_out = self._resample_output(audio_data)
                     if audio_out:
+                        total_bytes += len(audio_out)
                         self.output_buffer.push(audio_out)
+                        
+                        # Log periodically
+                        if chunk_count <= 3 or chunk_count % 50 == 0:
+                            buffer_ms = self.output_buffer.available_ms()
+                            logger.info(f"[RECV] #{chunk_count}: {len(audio_data)}→{len(audio_out)} bytes, buffer={buffer_ms}ms")
                         
         except asyncio.CancelledError:
             pass
@@ -668,7 +676,7 @@ class WeeVoiceEAGI:
             if 'closed' not in str(e).lower():
                 logger.error(f"Receive loop error: {e}")
         
-        logger.info("Receive loop ended")
+        logger.info(f"Receive loop ended: {chunk_count} chunks, {total_bytes} bytes total")
     
     async def _audio_playback_loop(self):
         """Play buffered audio back to caller using AGI STREAM FILE"""
@@ -678,7 +686,8 @@ class WeeVoiceEAGI:
         audio_dir.mkdir(exist_ok=True)
         
         chunk_index = 0
-        min_buffer_ms = 200  # Wait for this much audio before playing
+        min_buffer_ms = 100  # Reduced: Start playing sooner
+        chunk_ms = 200       # Smaller chunks: Less gap between plays
         
         # File extension based on sample rate
         # Asterisk uses: .sln (8kHz), .sln16 (16kHz), .sln24 (24kHz)
@@ -694,11 +703,11 @@ class WeeVoiceEAGI:
                 available = self.output_buffer.available_ms()
                 
                 if available < min_buffer_ms:
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.02)  # Check more frequently
                     continue
                 
-                # Get 400ms of audio at current output rate
-                chunk_bytes = int(self.output_rate * 2 * 0.4)
+                # Get chunk_ms of audio (200ms = smoother playback)
+                chunk_bytes = int(self.output_rate * 2 * chunk_ms / 1000)
                 audio_chunk = self.output_buffer.pop(chunk_bytes)
                 
                 # Check if it's not just silence
@@ -707,6 +716,11 @@ class WeeVoiceEAGI:
                     filename = audio_dir / f"chunk_{chunk_index:04d}{file_ext}"
                     with open(filename, 'wb') as f:
                         f.write(audio_chunk)
+                    
+                    # Log playback progress
+                    if chunk_index <= 3 or chunk_index % 20 == 0:
+                        remaining = self.output_buffer.available_ms()
+                        logger.info(f"[PLAY] #{chunk_index}: {len(audio_chunk)} bytes, remaining={remaining}ms")
                     
                     # Play with AGI (without extension - Asterisk auto-detects)
                     self.agi.stream_file(str(filename.with_suffix('')))
