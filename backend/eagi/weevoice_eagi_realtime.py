@@ -224,7 +224,7 @@ class WeeVoiceEAGI:
         
         Model-aware processing:
         - Gemini: Requires 16kHz PCM input, so upsample from 8kHz
-        - OpenAI (gpt-*): Direct 8kHz PCM passthrough - NO conversion needed!
+        - OpenAI (gpt-*): g711_ulaw format - encode PCM to μ-law (no resampling!)
         """
         if len(audio_8k) < 2:
             return b''
@@ -232,9 +232,10 @@ class WeeVoiceEAGI:
         try:
             # Model-aware audio processing
             if self.llm_model and self.llm_model.lower().startswith('gpt'):
-                # OpenAI: Direct passthrough - 8kHz PCM16, same as Asterisk
-                # NO resampling, NO encoding - just pass the bytes!
-                return audio_8k
+                # OpenAI g711_ulaw: Encode PCM16 → μ-law
+                # This is simple encoding, NOT resampling - stays at 8kHz
+                # μ-law compresses 16-bit to 8-bit (half the bytes)
+                return audioop.lin2ulaw(audio_8k, 2)
             else:
                 # Gemini requires 16kHz input - upsample from 8kHz
                 result, self._resample_state_in = audioop.ratecv(
@@ -255,17 +256,18 @@ class WeeVoiceEAGI:
         """
         Convert AI model output for Asterisk playback.
         
-        - OpenAI: Direct 8kHz PCM passthrough - NO conversion needed!
+        - OpenAI (g711_ulaw): Decode μ-law → PCM16 (no resampling!)
         - Gemini: 24kHz output, needs resampling to 8kHz or 16kHz
         """
-        if len(audio_data) < 2:
+        if len(audio_data) < 1:
             return b''
         
         try:
-            # OpenAI: Direct passthrough - 8kHz PCM16, same as Asterisk
+            # OpenAI g711_ulaw: Decode μ-law → PCM16
             if self.llm_model and self.llm_model.lower().startswith('gpt'):
-                # NO resampling, NO decoding - just pass the bytes!
-                return audio_data
+                # This is simple decoding, NOT resampling - stays at 8kHz
+                # μ-law expands 8-bit to 16-bit (double the bytes)
+                return audioop.ulaw2lin(audio_data, 2)
             
             # Gemini: 24kHz output needs resampling
             if HIGH_QUALITY_MODE:

@@ -6,14 +6,14 @@ It supports bidirectional audio streaming via WebSocket.
 
 Key features:
 - Real-time voice conversations with low latency
-- Direct 8kHz PCM passthrough (NO resampling, NO encoding!)
+- g711_ulaw format (native 8kHz telephony - no resampling!)
 - Function calling support
 - Input/output transcription via Whisper
 - Server-side VAD (Voice Activity Detection)
 
 Audio format:
-- pcm16: 16-bit signed PCM at 8kHz (same as Asterisk slin)
-- Direct passthrough: Asterisk 8kHz PCM <-> OpenAI 8kHz PCM
+- g711_ulaw: 8-bit μ-law encoded at 8kHz (telephone standard)
+- EAGI converts: PCM16 <-> μ-law (simple encoding, no sample rate change)
 
 Supported voices (Jan 2026):
 - alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
@@ -45,11 +45,11 @@ OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
 
 # Audio configuration
-# Try pcm16 format with 8kHz directly - simplest approach, no conversion!
-# If this doesn't work, we can fallback to g711_ulaw with encoding
-AUDIO_FORMAT = "pcm16"      # 16-bit PCM (same as Asterisk slin)
-INPUT_SAMPLE_RATE = 8000    # 8kHz input (same as Asterisk)
-OUTPUT_SAMPLE_RATE = 8000   # 8kHz output (if OpenAI supports it)
+# g711_ulaw: Native 8kHz telephony format - no resampling needed!
+# EAGI does simple encoding: PCM16 <-> μ-law (same sample rate)
+AUDIO_FORMAT = "g711_ulaw"  # 8-bit μ-law at 8kHz (telephone standard)
+INPUT_SAMPLE_RATE = 8000    # 8kHz input (native telephony)
+OUTPUT_SAMPLE_RATE = 8000   # 8kHz output (native telephony)
 
 
 class OpenAIRealtimeService:
@@ -351,9 +351,9 @@ VOICE QUALITY INSTRUCTIONS:
         logger.info(f"[OPENAI-IN] Starting audio input loop")
         audio_sent_count = 0
         
-        # Batch audio for pcm16: 8kHz * 2 bytes/sample * 0.02s = 320 bytes (20ms)
-        # PCM16 uses 2 bytes per sample (16-bit)
-        MIN_BATCH_SIZE = 320
+        # Batch audio for g711_ulaw: 8kHz * 1 byte/sample * 0.02s = 160 bytes (20ms)
+        # μ-law uses 1 byte per sample (8-bit compressed)
+        MIN_BATCH_SIZE = 160
         audio_buffer = b''
         
         try:
@@ -377,13 +377,13 @@ VOICE QUALITY INSTRUCTIONS:
                         }))
                         
                         if audio_sent_count <= 5 or audio_sent_count % 100 == 0:
-                            logger.info(f"[OPENAI-IN] Sent packet #{audio_sent_count} ({len(audio_buffer)} bytes μ-law)")
+                            logger.info(f"[OPENAI-IN] Sent #{audio_sent_count}: {len(audio_buffer)} bytes g711_ulaw")
                         
                         audio_buffer = b''
                         
                 except asyncio.TimeoutError:
-                    # Flush any remaining audio (160 bytes = 10ms for pcm16)
-                    if len(audio_buffer) >= 160:
+                    # Flush any remaining audio (80 bytes = 10ms for g711_ulaw)
+                    if len(audio_buffer) >= 80:
                         audio_sent_count += 1
                         audio_b64 = base64.b64encode(audio_buffer).decode('utf-8')
                         
