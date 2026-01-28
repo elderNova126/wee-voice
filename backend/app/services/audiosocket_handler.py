@@ -423,14 +423,20 @@ class AudioSocketSession:
             receive_task = asyncio.create_task(self._receive_loop())
             print(f"{ts()} Started receive loop (draining Asterisk buffer)", flush=True)
             
-            # Start TTS greeting playback IMMEDIATELY (if available)
-            # This happens BEFORE Gemini connects, eliminating 5-10s delay
+            # Start TTS greeting playback (for Gemini only)
+            # For OpenAI models, skip TTS - let OpenAI generate greeting with same voice
             greeting_task = None
-            if self.greeting_audio:
+            if self.llm_model.startswith('gpt-'):
+                # OpenAI: Let the AI generate greeting with its own voice
+                # This ensures consistent voice throughout the call
+                print(f"{ts()} 🔵 OpenAI mode: Skipping TTS greeting (AI will generate)", flush=True)
+                self.greeting_audio = None  # Clear TTS greeting so AI generates it
+            elif self.greeting_audio:
+                # Gemini: Use cached TTS greeting (parallel with connection)
                 print(f"{ts()} 🎤 IMMEDIATE GREETING START ({len(self.greeting_audio)} bytes)", flush=True)
                 greeting_task = asyncio.create_task(self._play_tts_greeting())
             else:
-                print(f"{ts()} ⚠ No cached greeting - Gemini will generate (slower)", flush=True)
+                print(f"{ts()} ⚠ No cached greeting - AI will generate", flush=True)
             
             # Connect to Gemini IN PARALLEL with greeting playback
             print(f"{ts()} Connecting to Gemini (parallel)...", flush=True)
