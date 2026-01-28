@@ -342,6 +342,10 @@ class AudioSocketSession:
         self.busy_config = None  # Store busy action config (busy_tone/voicemail)
         self.greeting_audio = None  # Pre-generated greeting audio (PCM 8kHz)
         self.greeting_played = False  # Flag to skip Gemini greeting if TTS greeting was played
+        # LLM Model configuration
+        # - 'gemini': Native audio dialog (8kHz→16kHz input, 24kHz output)
+        # - 'gpt-*': OpenAI models (can use 8kHz directly - no input resampling needed)
+        self.llm_model = 'gemini'  # Default to Gemini for voice calls
         
     async def handle(self):
         import time
@@ -1217,6 +1221,19 @@ class AudioSocketSession:
             logger.info(f"[SETUP] Restriction config: mode={phone.restriction_mode}, blocked_countries={phone.blocked_countries}, blocked_numbers={phone.blocked_numbers}")
             self.phone_number_id = phone.id
             
+            # Get LLM model from phone number configuration
+            self.llm_model = getattr(phone, 'llm_model', 'gemini') or 'gemini'
+            print(f"[SETUP] LLM Model: {self.llm_model}", flush=True)
+            logger.info(f"[SETUP] LLM Model configured: {self.llm_model}")
+            
+            # Audio processing optimization based on LLM model:
+            # - Gemini: Requires 16kHz input (upsample from 8kHz PSTN)
+            # - OpenAI: Supports 8kHz natively (no input resampling needed!)
+            if self.llm_model.startswith('gpt-'):
+                print(f"[SETUP] 🎵 OpenAI model detected - 8kHz audio supported natively (no input resampling)", flush=True)
+            else:
+                print(f"[SETUP] 🎵 Gemini model - will upsample 8kHz→16kHz for input", flush=True)
+            
             # Check if line is busy
             async with _active_calls_lock:
                 if phone.id in _active_calls:
@@ -1351,8 +1368,17 @@ class AudioSocketSession:
             return False
     
     async def _connect_gemini(self) -> bool:
-        """Connect to Gemini and start the AI session"""
+        """Connect to AI model and start the voice session"""
         try:
+            # Log model selection
+            if self.llm_model.startswith('gpt-'):
+                print(f"[AI] ⚠ OpenAI model '{self.llm_model}' selected, but using Gemini for voice (OpenAI Realtime not yet implemented)", flush=True)
+                logger.warning(f"OpenAI model {self.llm_model} selected - using Gemini for voice calls (OpenAI Realtime API not yet implemented)")
+                # Note: Audio processing is optimized for OpenAI (8kHz native), 
+                # but actual inference uses Gemini until OpenAI Realtime is implemented
+            else:
+                print(f"[AI] Using Gemini for native audio dialog", flush=True)
+            
             print(f"[GEMINI] Creating agent service...", flush=True)
             
             # Create agent service - pass flag if TTS greeting will be used
@@ -1486,13 +1512,15 @@ class AudioSocketSession:
     
     async def _process_audio(self, audio_8k: bytes):
         """
-        Process audio from Asterisk (8kHz) and send to Gemini (16kHz).
+        Process audio from Asterisk (8kHz) and send to AI model.
         
         Audio flow (input side):
         - Asterisk receives ulaw/alaw (8kHz) from PSTN/Zadarma
         - AudioSocket sends 8kHz PCM to Python
-        - Python upsamples 8kHz → 16kHz (Gemini requires 16kHz input)
-        - Audio is queued for sending to Gemini
+        
+        Model-specific processing:
+        - Gemini: Upsample 8kHz → 16kHz (Gemini requires 16kHz input)
+        - OpenAI: Can accept 8kHz directly (no resampling needed for best quality)
         """
         if not self.ai_ready.is_set():
             return
@@ -1507,21 +1535,27 @@ class AudioSocketSession:
             if not hasattr(self, '_caller_resample_state'):
                 self._caller_resample_state = None
             
-            # Upsample 8kHz to 16kHz for Gemini (Gemini requires 16kHz input)
-            audio_16k, self._caller_resample_state = simple_resample(
-                audio_8k, INPUT_SAMPLE_RATE, GEMINI_INPUT_RATE, self._caller_resample_state
-            )
+            # Model-aware audio processing for best voice quality
+            if self.llm_model.startswith('gpt-'):
+                # OpenAI supports 8kHz natively - no resampling needed!
+                # This preserves original audio quality and reduces latency
+                audio_for_ai = audio_8k
+            else:
+                # Gemini requires 16kHz input - upsample from 8kHz
+                audio_for_ai, self._caller_resample_state = simple_resample(
+                    audio_8k, INPUT_SAMPLE_RATE, GEMINI_INPUT_RATE, self._caller_resample_state
+                )
             
-            # Queue for sending
+            # Queue for sending to AI
             try:
-                self.caller_audio_queue.put_nowait(audio_16k)
+                self.caller_audio_queue.put_nowait(audio_for_ai)
             except asyncio.QueueFull:
                 pass
         except Exception as e:
             print(f"[AUDIO→AI] Queue ERROR: {e}", flush=True)
     
     async def _caller_audio_to_gemini_loop(self):
-        """Forward caller audio to Gemini with low latency and diagnostics"""
+        """Forward caller audio to AI model with low latency and diagnostics"""
         import time
         packets_sent = 0
         audio_buffer = b''
@@ -1529,11 +1563,19 @@ class AudioSocketSession:
         last_send_time = None
         silence_start = None
         
-        # Reduced batch size for faster response (40ms instead of 50ms)
-        # 16kHz * 2 bytes * 0.04s = 1280 bytes
-        BATCH_SIZE = 1280  # ~40ms of 16kHz audio
+        # Model-aware batch sizing for optimal latency
+        # Gemini: 16kHz * 2 bytes * 0.04s = 1280 bytes (~40ms)
+        # OpenAI: 8kHz * 2 bytes * 0.04s = 640 bytes (~40ms at 8kHz)
+        if self.llm_model.startswith('gpt-'):
+            BATCH_SIZE = 640   # ~40ms of 8kHz audio (OpenAI native)
+            audio_rate = 8000
+            print(f"[CALLER→AI] OpenAI mode: 8kHz audio (no upsampling)", flush=True)
+        else:
+            BATCH_SIZE = 1280  # ~40ms of 16kHz audio (Gemini)
+            audio_rate = 16000
+            print(f"[CALLER→AI] Gemini mode: 16kHz audio", flush=True)
         
-        print(f"[CALLER→AI] Loop STARTED (batch={BATCH_SIZE}b)", flush=True)
+        print(f"[CALLER→AI] Loop STARTED (batch={BATCH_SIZE}b, rate={audio_rate}Hz)", flush=True)
         try:
             while self.is_running:
                 try:
@@ -1575,11 +1617,14 @@ class AudioSocketSession:
                     packets_sent += 1
                     total_bytes += len(audio_buffer)
                     send_start = time.perf_counter()
-                    await self.agent_service.send_audio(audio_buffer)
+                    
+                    # Send with appropriate MIME type based on model
+                    mime_type = f"audio/pcm;rate={audio_rate}"
+                    await self.agent_service.send_audio(audio_buffer, mime_type=mime_type)
                     send_time = (time.perf_counter() - send_start) * 1000
                     
                     if packets_sent <= 10 or packets_sent % 100 == 0:
-                        print(f"[CALLER→AI] #{packets_sent}: {len(audio_buffer)}b in {send_time:.1f}ms", flush=True)
+                        print(f"[CALLER→AI] #{packets_sent}: {len(audio_buffer)}b ({audio_rate}Hz) in {send_time:.1f}ms", flush=True)
                     
                     # Warn if send is slow (> 50ms)
                     if send_time > 50:

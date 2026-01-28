@@ -49,6 +49,10 @@ GEMINI_OUTPUT_RATE = 24000    # Gemini outputs 24kHz
 FRAME_SIZE_8K = 160           # 20ms at 8kHz (160 samples * 2 bytes = 320 bytes, but slin is 160 samples)
 FRAME_BYTES_8K = 320          # 20ms at 8kHz in bytes
 
+# LLM Model from environment (default: gemini)
+# Options: gemini, gpt-3.5-turbo, gpt-4, gpt-4o, etc.
+LLM_MODEL = os.environ.get('LLM_MODEL', 'gemini')
+
 # Temp directory for audio files
 TEMP_AUDIO_DIR = Path('/tmp/weevoice_audio')
 TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -210,17 +214,17 @@ class GeminiSession:
             logger.error(f"Failed to connect to Gemini: {e}", exc_info=True)
             return False
     
-    async def send_audio(self, audio_16k: bytes):
-        """Send audio to Gemini (expects 16kHz PCM)"""
+    async def send_audio(self, audio_data: bytes, sample_rate: int = 16000):
+        """Send audio to AI model (rate depends on model)"""
         if not self.session or not self._running:
             return
         try:
             await self.session.send_realtime_input(audio={
-                "data": audio_16k,
-                "mime_type": "audio/pcm;rate=16000"
+                "data": audio_data,
+                "mime_type": f"audio/pcm;rate={sample_rate}"
             })
         except Exception as e:
-            logger.error(f"Error sending audio to Gemini: {e}")
+            logger.error(f"Error sending audio to AI model: {e}")
     
     async def send_text(self, text: str, end_of_turn: bool = True):
         """Send text to Gemini"""
@@ -307,6 +311,11 @@ class WeeVoiceEAGI:
         self._resample_state_in = None
         self._resample_state_out = None
         
+        # LLM Model configuration
+        # - 'gemini': Native audio dialog (8kHz→16kHz input)
+        # - 'gpt-*': OpenAI models (8kHz native - no resampling needed)
+        self.llm_model = LLM_MODEL
+        
     def load_config(self) -> bool:
         """Load configuration from environment or config file"""
         try:
@@ -353,19 +362,37 @@ class WeeVoiceEAGI:
             return False
     
     def resample_8k_to_16k(self, audio_8k: bytes) -> bytes:
-        """Resample 8kHz audio to 16kHz for Gemini input"""
+        """
+        Resample audio for AI model input.
+        
+        Model-aware processing:
+        - Gemini: Requires 16kHz input, so upsample from 8kHz
+        - OpenAI (gpt-*): Supports 8kHz natively, no resampling needed
+        """
         if len(audio_8k) < 2:
             return b''
         try:
-            result, self._resample_state_in = audioop.ratecv(
-                audio_8k, 2, 1, 
-                ASTERISK_SAMPLE_RATE, GEMINI_INPUT_RATE, 
-                self._resample_state_in
-            )
-            return result
+            # Model-aware audio processing
+            if self.llm_model and self.llm_model.lower().startswith('gpt'):
+                # OpenAI models support 8kHz natively
+                return audio_8k
+            else:
+                # Gemini requires 16kHz input
+                result, self._resample_state_in = audioop.ratecv(
+                    audio_8k, 2, 1, 
+                    ASTERISK_SAMPLE_RATE, GEMINI_INPUT_RATE, 
+                    self._resample_state_in
+                )
+                return result
         except Exception as e:
             logger.error(f"Resample 8k->16k error: {e}")
             return audio_8k
+    
+    def get_input_sample_rate(self) -> int:
+        """Get the appropriate input sample rate based on LLM model"""
+        if self.llm_model and self.llm_model.lower().startswith('gpt'):
+            return ASTERISK_SAMPLE_RATE  # 8kHz for OpenAI
+        return GEMINI_INPUT_RATE  # 16kHz for Gemini
     
     def resample_24k_to_8k(self, audio_24k: bytes) -> bytes:
         """Resample 24kHz Gemini output to 8kHz for Asterisk"""
@@ -402,8 +429,12 @@ class WeeVoiceEAGI:
             return ""
     
     async def run_audio_capture(self):
-        """Capture audio from Asterisk (FD3) and send to Gemini"""
-        logger.info("Starting audio capture loop")
+        """Capture audio from Asterisk (FD3) and send to AI model"""
+        input_rate = self.get_input_sample_rate()
+        logger.info(f"Starting audio capture loop")
+        logger.info(f"  LLM Model: {self.llm_model}")
+        logger.info(f"  Input Rate: {input_rate}Hz")
+        
         frame_count = 0
         
         while self._running:
@@ -417,15 +448,15 @@ class WeeVoiceEAGI:
                 
                 frame_count += 1
                 
-                # Resample to 16kHz for Gemini
-                audio_16k = self.resample_8k_to_16k(audio_8k)
+                # Model-aware resampling
+                audio_for_ai = self.resample_8k_to_16k(audio_8k)
                 
-                # Send to Gemini
-                if self.gemini and audio_16k:
-                    await self.gemini.send_audio(audio_16k)
+                # Send to AI model with correct sample rate
+                if self.gemini and audio_for_ai:
+                    await self.gemini.send_audio(audio_for_ai, sample_rate=input_rate)
                 
                 if frame_count % 100 == 0:
-                    logger.debug(f"Captured {frame_count} audio frames")
+                    logger.debug(f"Captured {frame_count} audio frames ({input_rate}Hz)")
                     
             except Exception as e:
                 if "closed" in str(e).lower():
@@ -434,7 +465,7 @@ class WeeVoiceEAGI:
                 logger.error(f"Audio capture error: {e}")
                 await asyncio.sleep(0.01)
         
-        logger.info(f"Audio capture ended after {frame_count} frames")
+        logger.info(f"Audio capture ended after {frame_count} frames at {input_rate}Hz")
     
     async def run_response_handler(self):
         """Handle responses from Gemini and play audio"""
@@ -495,6 +526,8 @@ class WeeVoiceEAGI:
         """Main EAGI execution"""
         logger.info("=" * 50)
         logger.info("WeeVoice EAGI Script Started")
+        logger.info(f"LLM Model: {self.llm_model}")
+        logger.info(f"Audio Mode: {'8kHz native' if self.llm_model.lower().startswith('gpt') else '8kHz→16kHz'}")
         logger.info("=" * 50)
         
         try:

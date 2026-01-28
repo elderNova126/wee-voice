@@ -86,6 +86,8 @@ interface PhoneNumber {
   role?: 'owner' | 'collaborator';
   permissions?: string[];
   owner_email?: string | null;
+  // LLM Model for phone calls
+  llm_model?: string;
 }
 
 interface Agent {
@@ -125,7 +127,26 @@ interface EditDataType {
   newBlockedNumber: string;
   newBlockedCountry: string;
   newAllowedCountry: string;
+  // LLM Model for phone calls
+  llm_model: string;
 }
+
+// Available LLM models for phone calls
+const LLM_MODELS = [
+  { value: 'gemini', label: 'Gemini (Native Audio)', description: 'Best for voice calls - native audio processing' },
+  { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo', description: 'Fast and cost-effective' },
+  { value: 'gpt-3.5-turbo-16k', label: 'GPT-3.5 Turbo 16K', description: 'Extended context window' },
+  { value: 'gpt-4', label: 'GPT-4', description: 'Most capable, slower' },
+  { value: 'gpt-4o', label: 'GPT-4o', description: 'Optimized GPT-4' },
+  { value: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Lightweight GPT-4o' },
+  { value: 'gpt-4-turbo', label: 'GPT-4 Turbo', description: 'Fast GPT-4' },
+  { value: 'gpt-4.1', label: 'GPT-4.1', description: 'Latest GPT-4 version' },
+  { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Lightweight GPT-4.1' },
+  { value: 'gpt-4.1-nano', label: 'GPT-4.1 Nano', description: 'Ultra-light GPT-4.1' },
+  { value: 'gpt-5', label: 'GPT-5', description: 'Next generation' },
+  { value: 'gpt-5-mini', label: 'GPT-5 Mini', description: 'Lightweight GPT-5' },
+  { value: 'gpt-5-nano', label: 'GPT-5 Nano', description: 'Ultra-light GPT-5' },
+];
 
 export const PhoneNumbersPage: React.FC = () => {
   const t = useTranslation();
@@ -214,7 +235,8 @@ export const PhoneNumbersPage: React.FC = () => {
     allowed_countries: [],
     newBlockedNumber: '',
     newBlockedCountry: '',
-    newAllowedCountry: ''
+    newAllowedCountry: '',
+    llm_model: 'gemini'
   });
 
   const [uploadData, setUploadData] = useState({
@@ -398,7 +420,9 @@ export const PhoneNumbersPage: React.FC = () => {
         restriction_mode: editData.restriction_mode,
         blocked_countries: editData.blocked_countries,
         blocked_numbers: editData.blocked_numbers,
-        allowed_countries: editData.allowed_countries
+        allowed_countries: editData.allowed_countries,
+        // LLM Model for phone calls
+        llm_model: editData.llm_model
       });
       
       await loadPhoneNumbers();
@@ -488,7 +512,8 @@ export const PhoneNumbersPage: React.FC = () => {
       allowed_countries: number.allowed_countries || [],
       newBlockedNumber: '',
       newBlockedCountry: '',
-      newAllowedCountry: ''
+      newAllowedCountry: '',
+      llm_model: number.llm_model || 'gemini'
     });
     setShowEditModal(true);
   };
@@ -1535,6 +1560,48 @@ export const PhoneNumbersPage: React.FC = () => {
                     placeholder="Your Company Name"
                   />
                 </div>
+              </div>
+
+              {/* LLM Model Selection */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white border-b pb-2 mb-4">
+                  🤖 AI Model for Phone Calls
+                </h3>
+                <div className="mb-4 p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+                  <p className="text-sm text-purple-700 dark:text-purple-300">
+                    Select the LLM model to use for processing phone calls on this number.
+                    <strong className="block mt-1">Gemini</strong> provides native audio dialog for the best voice quality.
+                    <strong className="block mt-1">OpenAI models</strong> support 8kHz audio natively - no sampling rate reduction needed.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">LLM Model</label>
+                  <select
+                    value={editData.llm_model}
+                    onChange={(e) => setEditData({...editData, llm_model: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  >
+                    {LLM_MODELS.map((model) => (
+                      <option key={model.value} value={model.value}>
+                        {model.label} - {model.description}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {editData.llm_model === 'gemini' && (
+                  <div className="mt-3 p-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                    <p className="text-xs text-green-700 dark:text-green-300">
+                      ✅ <strong>Recommended for voice calls</strong> - Native audio processing provides the best quality and lowest latency.
+                    </p>
+                  </div>
+                )}
+                {editData.llm_model.startsWith('gpt-') && (
+                  <div className="mt-3 p-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                    <p className="text-xs text-blue-700 dark:text-blue-300">
+                      ℹ️ OpenAI models support 8kHz audio natively - no sampling rate reduction needed for phone calls.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* INBOUND SIP Configuration (Provider/Zadarma) */}

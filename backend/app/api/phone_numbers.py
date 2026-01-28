@@ -108,7 +108,8 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
                    status, status_message, monthly_cost, per_minute_cost,
                    business_name, business_type, business_address, busy_action, busy_audio_file_url,
                    restriction_mode, blocked_countries, blocked_numbers, allowed_countries,
-                   collaborators, created_at, updated_at, activated_at
+                   collaborators, created_at, updated_at, activated_at,
+                   COALESCE(llm_model, 'gemini') as llm_model
             FROM phone_numbers
             WHERE {filter_clause}
         """), params)
@@ -147,6 +148,7 @@ def safe_query_phone_numbers(db: Session, filter_clause: str = "1=1", params: Di
             phone.created_at = row[28]
             phone.updated_at = row[29]
             phone.activated_at = row[30]
+            phone.llm_model = row[31]
             phones.append(phone)
         return phones
     except Exception as e:
@@ -214,6 +216,9 @@ class PhoneNumberResponse(BaseModel):
     allowed_countries: Optional[List[str]] = None
     restriction_mode: Optional[str] = "none"
     
+    # LLM Model for phone calls
+    llm_model: Optional[str] = "gemini"
+    
     # Collaborators
     collaborators: Optional[List[CollaboratorInfo]] = None
     
@@ -248,6 +253,10 @@ class PhoneNumberUpdate(BaseModel):
     blocked_numbers: Optional[List[str]] = None
     allowed_countries: Optional[List[str]] = None
     restriction_mode: Optional[str] = None
+    # LLM Model for phone calls
+    # Supported: gpt-3.5-turbo, gpt-3.5-turbo-16k, gpt-4, gpt-4o, gpt-4o-mini, 
+    #            gpt-4-turbo, gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-5, gpt-5-mini, gpt-5-nano, gemini
+    llm_model: Optional[str] = None
 
 
 class BusySettingsUpdate(BaseModel):
@@ -402,6 +411,8 @@ def phone_number_to_response(phone: PhoneNumber, db: Session = None, current_use
         "blocked_countries": _parse_json_field(phone.blocked_countries),
         "blocked_numbers": _parse_json_field(phone.blocked_numbers),
         "allowed_countries": _parse_json_field(phone.allowed_countries),
+        # LLM Model for phone calls
+        "llm_model": getattr(phone, 'llm_model', 'gemini') or 'gemini',
         # Collaborators
         "collaborators": collaborators,
         # Ownership info
@@ -860,6 +871,11 @@ async def update_phone_number(
     if updates.allowed_countries is not None:
         phone_number.allowed_countries = json.dumps(updates.allowed_countries) if updates.allowed_countries else None
     
+    # LLM Model for phone calls
+    if updates.llm_model is not None:
+        phone_number.llm_model = updates.llm_model
+        logger.info(f"Updated LLM model for phone {phone_number.phone_number}: {updates.llm_model}")
+    
     db.commit()
     db.refresh(phone_number)
     
@@ -908,6 +924,7 @@ async def update_phone_number(
         "blocked_countries": json.loads(phone_number.blocked_countries) if phone_number.blocked_countries else [],
         "blocked_numbers": json.loads(phone_number.blocked_numbers) if phone_number.blocked_numbers else [],
         "allowed_countries": json.loads(phone_number.allowed_countries) if phone_number.allowed_countries else [],
+        "llm_model": phone_number.llm_model or "gemini",
     }
     
     result = {"success": True, "message": "Phone number updated", "data": response}

@@ -78,6 +78,11 @@ FRAME_SIZE = 320           # 20ms at 8kHz
 AUDIO_TARGET_RMS = 2000    # Target RMS level (higher = louder but may clip)
 AUDIO_MAX_GAIN_DB = 12.0   # Maximum gain in dB (reduced from 18 to prevent distortion)
 
+# LLM Model from environment (default: gemini)
+# Options: gemini, gpt-3.5-turbo, gpt-4, gpt-4o, etc.
+# This is sent to the backend which handles model selection
+LLM_MODEL = os.environ.get('LLM_MODEL', 'gemini')
+
 
 # =============================================================================
 # HIGH-QUALITY AUDIO PROCESSING
@@ -314,9 +319,13 @@ class EAGIHandler:
         self._greeting_done = asyncio.Event()
         self._greeting_done.set()  # Default: no greeting pending, allow audio immediately
         
+        # LLM Model configuration (sent to backend)
+        self.llm_model = LLM_MODEL
+        
         log("=" * 60)
         log("WeeVoice EAGI Starting (WebSocket API Mode)")
         log(f"Backend: {WS_URL}")
+        log(f"LLM Model: {self.llm_model}")
         log(f"Audio: soxr={SOXR_AVAILABLE}, scipy={SCIPY_AVAILABLE}, numpy={NUMPY_AVAILABLE}")
         log("=" * 60)
         
@@ -387,12 +396,30 @@ class EAGIHandler:
     # ========================================================================
     
     def _resample_8k_to_16k(self, audio_8k: bytes) -> bytes:
-        """Convert 8kHz from Asterisk to 16kHz for backend (HIGH QUALITY)"""
+        """
+        Convert 8kHz from Asterisk for AI model input.
+        
+        Model-aware processing:
+        - Gemini: Backend expects 16kHz, so upsample
+        - OpenAI (gpt-*): Could use 8kHz directly (native support)
+        
+        Note: The backend handles model selection. This resampling is for
+        the backend's audio pipeline which uses 16kHz as standard input.
+        """
         if len(audio_8k) < 2:
             return b''
         try:
             # Remove DC offset first (prevents clicks)
             audio_8k = remove_dc_offset(audio_8k)
+            
+            # Model-aware processing
+            # Note: Backend currently uses 16kHz for all models, but
+            # OpenAI native 8kHz support could be added here
+            if self.llm_model and self.llm_model.lower().startswith('gpt'):
+                # For OpenAI, backend could potentially use 8kHz directly
+                # but for now we still send 16kHz for consistency
+                # TODO: Backend could be updated to accept 8kHz for OpenAI
+                pass
             
             # High-quality resample using soxr VHQ
             result = self._resampler_8k_to_16k.process(audio_8k)
@@ -400,6 +427,12 @@ class EAGIHandler:
         except Exception as e:
             log(f"Resample 8k->16k error: {e}")
             return audio_8k
+    
+    def _get_input_sample_rate(self) -> int:
+        """Get the appropriate input sample rate based on LLM model"""
+        # Backend currently expects 16kHz for all models
+        # OpenAI models could use 8kHz in the future
+        return GEMINI_INPUT_RATE  # 16kHz for now
     
     def _resample_24k_to_8k(self, audio_24k: bytes) -> bytes:
         """Convert 24kHz from backend to 8kHz for Asterisk (HIGH QUALITY)"""
@@ -510,11 +543,12 @@ class EAGIHandler:
             log(f"Connecting to {WS_URL}...")
             self.ws = await websockets.connect(WS_URL)
             
-            # Send start message
+            # Send start message with LLM model selection
             await self.ws.send(json.dumps({
                 "type": "start",
                 "caller_id": self.caller_id,
-                "session_id": self.session_id
+                "session_id": self.session_id,
+                "llm_model": self.llm_model  # Pass LLM model to backend
             }))
             
             # Wait for ready - but handle greeting messages first if sent

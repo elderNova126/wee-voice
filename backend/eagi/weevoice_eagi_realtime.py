@@ -208,23 +208,48 @@ class WeeVoiceEAGI:
         self.agent_service = None
         self.db = None
         
+        # LLM Model configuration (set from database)
+        # - 'gemini': Native audio dialog (8kHz→16kHz input, 24kHz output)
+        # - 'gpt-*': OpenAI models (can use 8kHz directly - no input resampling needed)
+        self.llm_model = 'gemini'  # Default to Gemini for voice calls
+        
         # Output buffer - sample rate depends on quality mode
         output_rate = 16000 if HIGH_QUALITY_MODE else ASTERISK_RATE
         self.output_buffer = AudioBuffer(max_size_ms=3000, sample_rate=output_rate)
         self.output_rate = output_rate
         
     def _resample_8k_to_16k(self, audio_8k: bytes) -> bytes:
-        """Resample caller audio for Gemini"""
+        """
+        Resample caller audio for AI model input.
+        
+        Model-aware processing:
+        - Gemini: Requires 16kHz input, so upsample from 8kHz
+        - OpenAI (gpt-*): Supports 8kHz natively, no resampling needed for best quality
+        """
         if len(audio_8k) < 2:
             return b''
+        
         try:
-            result, self._resample_state_in = audioop.ratecv(
-                audio_8k, 2, 1, ASTERISK_RATE, GEMINI_INPUT_RATE, self._resample_state_in
-            )
-            return result
+            # Model-aware audio processing
+            if self.llm_model and self.llm_model.lower().startswith('gpt'):
+                # OpenAI models support 8kHz natively - no resampling needed!
+                # This preserves original audio quality and reduces latency
+                return audio_8k
+            else:
+                # Gemini requires 16kHz input - upsample from 8kHz
+                result, self._resample_state_in = audioop.ratecv(
+                    audio_8k, 2, 1, ASTERISK_RATE, GEMINI_INPUT_RATE, self._resample_state_in
+                )
+                return result
         except Exception as e:
             logger.error(f"Resample 8k->16k error: {e}")
             return audio_8k
+    
+    def _get_input_sample_rate(self) -> int:
+        """Get the appropriate input sample rate based on LLM model"""
+        if self.llm_model and self.llm_model.lower().startswith('gpt'):
+            return ASTERISK_RATE  # 8kHz for OpenAI
+        return GEMINI_INPUT_RATE  # 16kHz for Gemini
     
     def _resample_output(self, audio_24k: bytes) -> bytes:
         """
@@ -372,6 +397,10 @@ class WeeVoiceEAGI:
             
             self.phone_number = phone
             
+            # Get LLM model from phone number configuration
+            self.llm_model = getattr(phone, 'llm_model', 'gemini') or 'gemini'
+            logger.info(f"LLM Model configured: {self.llm_model}")
+            
             # Get the agent assigned to this phone number
             self.agent = self.db.query(VoiceAgent).filter(
                 VoiceAgent.id == phone.agent_id
@@ -393,10 +422,17 @@ class WeeVoiceEAGI:
             logger.info(f"  Called DID: {self.called_did}")
             logger.info(f"  Phone Number: {phone.phone_number} (ID: {phone.id})")
             logger.info(f"  Agent: {self.agent.name} (ID: {self.agent.id})")
+            logger.info(f"  LLM Model: {self.llm_model}")
             logger.info(f"  Language: {self.agent.language}")
             logger.info(f"  Voice Gender: {getattr(self.agent, 'voice_gender', 'default')}")
             logger.info(f"  Voice ID: {getattr(self.agent, 'voice_id', 'default')}")
             logger.info(f"  Greeting: {self.agent.greeting[:50] if self.agent.greeting else 'None'}...")
+            
+            # Audio processing optimization based on LLM model
+            if self.llm_model.lower().startswith('gpt'):
+                logger.info(f"  🎵 Audio: OpenAI mode - 8kHz native (no input resampling)")
+            else:
+                logger.info(f"  🎵 Audio: Gemini mode - 8kHz→16kHz input resampling")
             logger.info(f"=" * 50)
             
             # Create call record
@@ -488,6 +524,16 @@ class WeeVoiceEAGI:
             from app.services.agent_service import FrenchVoiceAgentService
             
             logger.info("Creating FrenchVoiceAgentService (same as web agent)...")
+            logger.info(f"  LLM Model configured: {self.llm_model}")
+            
+            # Log model selection and audio optimization
+            if self.llm_model.lower().startswith('gpt'):
+                logger.warning(f"OpenAI model '{self.llm_model}' selected, but using Gemini for voice")
+                logger.warning("  (OpenAI Realtime API not yet implemented)")
+                logger.info("  Audio optimized: 8kHz native input (no resampling)")
+            else:
+                logger.info("  Using Gemini for native audio dialog")
+                logger.info("  Audio: 8kHz→16kHz input resampling")
             
             # Create the SAME service used by web agent and audiosocket
             self.agent_service = FrenchVoiceAgentService(
@@ -528,8 +574,15 @@ class WeeVoiceEAGI:
             return False
     
     async def _audio_capture_loop(self):
-        """Capture audio from EAGI FD3 and send to Gemini"""
-        logger.info("Starting audio capture from FD3")
+        """Capture audio from EAGI FD3 and send to AI model"""
+        # Determine audio configuration based on LLM model
+        input_rate = self._get_input_sample_rate()
+        mime_type = f"audio/pcm;rate={input_rate}"
+        
+        logger.info(f"Starting audio capture from FD3")
+        logger.info(f"  LLM Model: {self.llm_model}")
+        logger.info(f"  Input Rate: {input_rate}Hz")
+        logger.info(f"  MIME Type: {mime_type}")
         
         try:
             self._audio_fd = os.fdopen(3, 'rb', buffering=0)
@@ -553,16 +606,19 @@ class WeeVoiceEAGI:
                 
                 frame_count += 1
                 
-                # Resample and send to Gemini via agent_service
-                audio_16k = self._resample_8k_to_16k(audio_8k)
-                if audio_16k and self.agent_service:
+                # Model-aware audio processing:
+                # - OpenAI: Send 8kHz directly (native support, best quality)
+                # - Gemini: Upsample to 16kHz (required by Gemini)
+                audio_for_ai = self._resample_8k_to_16k(audio_8k)
+                
+                if audio_for_ai and self.agent_service:
                     await self.agent_service.send_audio(
-                        audio_16k, 
-                        mime_type="audio/pcm;rate=16000"
+                        audio_for_ai, 
+                        mime_type=mime_type
                     )
                 
                 if frame_count % 250 == 0:
-                    logger.debug(f"Captured {frame_count} frames")
+                    logger.debug(f"Captured {frame_count} frames ({input_rate}Hz)")
                     
             except Exception as e:
                 if 'closed' in str(e).lower():
@@ -570,7 +626,7 @@ class WeeVoiceEAGI:
                 logger.error(f"Audio capture error: {e}")
                 await asyncio.sleep(0.01)
         
-        logger.info(f"Audio capture ended: {frame_count} frames")
+        logger.info(f"Audio capture ended: {frame_count} frames at {input_rate}Hz")
         
         if self._audio_fd:
             try:

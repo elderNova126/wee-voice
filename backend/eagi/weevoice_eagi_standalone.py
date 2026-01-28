@@ -33,6 +33,10 @@ GEMINI_OUTPUT_RATE = 24000 # Gemini outputs 24kHz
 # High quality mode (16kHz output instead of 8kHz)
 HIGH_QUALITY_MODE = os.environ.get('WEEVOICE_HIGH_QUALITY', 'false').lower() == 'true'
 
+# LLM Model from environment (default: gemini)
+# Options: gemini, gpt-3.5-turbo, gpt-4, gpt-4o, etc.
+LLM_MODEL = os.environ.get('LLM_MODEL', 'gemini')
+
 class EAGIHandler:
     """Standalone EAGI handler with direct Gemini integration"""
     
@@ -54,10 +58,17 @@ class EAGIHandler:
             "Keep responses concise and natural for voice conversation. "
             "Be friendly and helpful.")
         
+        # LLM Model configuration
+        # - 'gemini': Native audio dialog (8kHz→16kHz input)
+        # - 'gpt-*': OpenAI models (8kHz native - no resampling needed)
+        self.llm_model = LLM_MODEL
+        
         logger.info(f"EAGI Handler initialized")
-        logger.info(f"  Model: {self.model}")
+        logger.info(f"  LLM Model: {self.llm_model}")
+        logger.info(f"  Gemini Model: {self.model}")
         logger.info(f"  Voice: {self.voice}")
         logger.info(f"  High Quality: {HIGH_QUALITY_MODE}")
+        logger.info(f"  Audio Mode: {'8kHz native' if self.llm_model.lower().startswith('gpt') else '8kHz→16kHz'}")
     
     def _read_agi_env(self):
         """Read AGI environment variables from stdin"""
@@ -87,17 +98,35 @@ class EAGIHandler:
         self._agi_command(f'VERBOSE "{msg}" 3')
     
     def _resample_for_gemini(self, audio_8k: bytes) -> bytes:
-        """Convert 8kHz slin to 16kHz for Gemini input"""
+        """
+        Convert audio for AI model input.
+        
+        Model-aware processing:
+        - Gemini: Requires 16kHz input, so upsample from 8kHz
+        - OpenAI (gpt-*): Supports 8kHz natively, no resampling needed
+        """
         if len(audio_8k) < 2:
             return b''
         try:
-            result, self._resample_state_in = audioop.ratecv(
-                audio_8k, 2, 1, ASTERISK_RATE, GEMINI_INPUT_RATE, self._resample_state_in
-            )
-            return result
+            # Model-aware audio processing
+            if self.llm_model and self.llm_model.lower().startswith('gpt'):
+                # OpenAI models support 8kHz natively
+                return audio_8k
+            else:
+                # Gemini requires 16kHz input
+                result, self._resample_state_in = audioop.ratecv(
+                    audio_8k, 2, 1, ASTERISK_RATE, GEMINI_INPUT_RATE, self._resample_state_in
+                )
+                return result
         except Exception as e:
             logger.error(f"Resample input error: {e}")
             return audio_8k
+    
+    def _get_input_sample_rate(self) -> int:
+        """Get the appropriate input sample rate based on LLM model"""
+        if self.llm_model and self.llm_model.lower().startswith('gpt'):
+            return ASTERISK_RATE  # 8kHz for OpenAI
+        return GEMINI_INPUT_RATE  # 16kHz for Gemini
     
     def _resample_from_gemini(self, audio_24k: bytes) -> bytes:
         """Convert 24kHz from Gemini to 8kHz for Asterisk"""
@@ -169,8 +198,14 @@ class EAGIHandler:
             return False
     
     async def _audio_capture_loop(self):
-        """Capture audio from EAGI FD3 and send to Gemini"""
-        logger.info("Starting audio capture from FD3")
+        """Capture audio from EAGI FD3 and send to AI model"""
+        input_rate = self._get_input_sample_rate()
+        mime_type = f"audio/pcm;rate={input_rate}"
+        
+        logger.info(f"Starting audio capture from FD3")
+        logger.info(f"  LLM Model: {self.llm_model}")
+        logger.info(f"  Input Rate: {input_rate}Hz")
+        logger.info(f"  MIME Type: {mime_type}")
         
         try:
             self._audio_fd = os.fdopen(3, 'rb', buffering=0)
@@ -192,23 +227,23 @@ class EAGIHandler:
                 
                 buffer += data
                 
-                # Send chunks to Gemini
+                # Send chunks to AI model
                 while len(buffer) >= CHUNK_SIZE:
                     chunk = buffer[:CHUNK_SIZE]
                     buffer = buffer[CHUNK_SIZE:]
                     
-                    # Resample 8kHz -> 16kHz
-                    audio_16k = self._resample_for_gemini(chunk)
+                    # Model-aware resampling (or pass-through for OpenAI)
+                    audio_for_ai = self._resample_for_gemini(chunk)
                     
-                    if audio_16k and self.gemini_session:
+                    if audio_for_ai and self.gemini_session:
                         try:
                             from google.genai import types
                             await self.gemini_session.send(
                                 input=types.LiveClientRealtimeInput(
                                     media_chunks=[
                                         types.Blob(
-                                            data=audio_16k,
-                                            mime_type="audio/pcm;rate=16000"
+                                            data=audio_for_ai,
+                                            mime_type=mime_type
                                         )
                                     ]
                                 ),
@@ -217,7 +252,7 @@ class EAGIHandler:
                             frame_count += 1
                         except Exception as e:
                             if "closed" in str(e).lower():
-                                logger.info("Gemini session closed")
+                                logger.info("AI session closed")
                                 self.running = False
                                 break
                             logger.error(f"Send error: {e}")
@@ -227,7 +262,7 @@ class EAGIHandler:
                     logger.error(f"Capture error: {e}")
                 break
         
-        logger.info(f"Audio capture ended. Sent {frame_count} frames")
+        logger.info(f"Audio capture ended. Sent {frame_count} frames at {input_rate}Hz")
     
     async def _audio_playback_loop(self):
         """Receive audio from Gemini and write to stdout"""

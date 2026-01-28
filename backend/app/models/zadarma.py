@@ -102,6 +102,12 @@ class PhoneNumber(Base):
     # Format: [{"user_id": 1, "email": "user@example.com", "name": "User Name", "permissions": "view,edit", "added_at": "..."}]
     collaborators = Column(Text, nullable=True)
     
+    # LLM Model selection for phone calls
+    # Supported: gpt-3.5-turbo, gpt-3.5-turbo-16k, gpt-4, gpt-4o, gpt-4o-mini, 
+    #            gpt-4-turbo, gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-5, gpt-5-mini, gpt-5-nano, gemini
+    # Note: For voice calls, Gemini uses native audio dialog. OpenAI models will use text-based processing.
+    llm_model = Column(String, default="gemini")
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
