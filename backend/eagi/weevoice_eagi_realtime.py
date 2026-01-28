@@ -67,7 +67,12 @@ FRAME_BYTES_24K = 960      # 20ms at 24kHz (480 samples * 2 bytes)
 HIGH_QUALITY_MODE = os.environ.get('WEEVOICE_HIGH_QUALITY', 'true').lower() == 'true'
 
 # Temp directory for audio files
-TEMP_AUDIO_DIR = Path('/tmp/weevoice_audio')
+# Use /dev/shm (RAM disk) for faster audio file I/O - reduces choppy audio
+# Fallback to /tmp if /dev/shm doesn't exist
+if Path('/dev/shm').exists():
+    TEMP_AUDIO_DIR = Path('/dev/shm/weevoice_audio')
+else:
+    TEMP_AUDIO_DIR = Path('/tmp/weevoice_audio')
 TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -686,8 +691,8 @@ class WeeVoiceEAGI:
         audio_dir.mkdir(exist_ok=True)
         
         chunk_index = 0
-        min_buffer_ms = 300  # Wait for 300ms buffer before starting
-        chunk_ms = 100       # Play 100ms chunks for smoother audio
+        min_buffer_ms = 500  # Wait for 500ms buffer before starting (more headroom)
+        chunk_ms = 200       # Play 200ms chunks (less overhead per unit time)
         
         # File extension based on sample rate
         # Asterisk uses: .sln (8kHz), .sln16 (16kHz), .sln24 (24kHz)
