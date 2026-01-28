@@ -220,11 +220,11 @@ class WeeVoiceEAGI:
         
     def _resample_8k_to_16k(self, audio_8k: bytes) -> bytes:
         """
-        Resample caller audio for AI model input.
+        Process caller audio for AI model input.
         
         Model-aware processing:
-        - Gemini: Requires 16kHz input, so upsample from 8kHz
-        - OpenAI (gpt-*): Uses g711_ulaw format (8kHz native) - NO resampling for best quality!
+        - Gemini: Requires 16kHz PCM input, so upsample from 8kHz
+        - OpenAI (gpt-*): Direct 8kHz PCM passthrough - NO conversion needed!
         """
         if len(audio_8k) < 2:
             return b''
@@ -232,8 +232,8 @@ class WeeVoiceEAGI:
         try:
             # Model-aware audio processing
             if self.llm_model and self.llm_model.lower().startswith('gpt'):
-                # OpenAI Realtime API with g711_ulaw: 8kHz native - NO resampling!
-                # Direct passthrough for best voice quality
+                # OpenAI: Direct passthrough - 8kHz PCM16, same as Asterisk
+                # NO resampling, NO encoding - just pass the bytes!
                 return audio_8k
             else:
                 # Gemini requires 16kHz input - upsample from 8kHz
@@ -242,7 +242,7 @@ class WeeVoiceEAGI:
                 )
                 return result
         except Exception as e:
-            logger.error(f"Resample error: {e}")
+            logger.error(f"Audio processing error: {e}")
             return audio_8k
     
     def _get_input_sample_rate(self) -> int:
@@ -255,16 +255,17 @@ class WeeVoiceEAGI:
         """
         Convert AI model output for Asterisk playback.
         
-        - OpenAI (g711_ulaw): 8kHz native - NO resampling, direct passthrough
+        - OpenAI: Direct 8kHz PCM passthrough - NO conversion needed!
         - Gemini: 24kHz output, needs resampling to 8kHz or 16kHz
         """
         if len(audio_data) < 2:
             return b''
         
         try:
-            # OpenAI with g711_ulaw: 8kHz native - no resampling needed!
+            # OpenAI: Direct passthrough - 8kHz PCM16, same as Asterisk
             if self.llm_model and self.llm_model.lower().startswith('gpt'):
-                return audio_data  # Direct passthrough for best quality
+                # NO resampling, NO decoding - just pass the bytes!
+                return audio_data
             
             # Gemini: 24kHz output needs resampling
             if HIGH_QUALITY_MODE:
@@ -281,7 +282,7 @@ class WeeVoiceEAGI:
                 )
                 return result
         except Exception as e:
-            logger.error(f"Resample output error: {e}")
+            logger.error(f"Audio output error: {e}")
             return audio_data
     
     def _extract_called_did(self, env: Dict[str, str]) -> str:
