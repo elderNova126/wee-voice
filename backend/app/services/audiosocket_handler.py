@@ -417,6 +417,12 @@ class AudioSocketSession:
             setup_time = (time.time() - setup_start) * 1000
             print(f"{ts()} [HANDLE] Setup complete in {setup_time:.0f}ms", flush=True)
             
+            # CRITICAL: Start receiving audio from Asterisk IMMEDIATELY
+            # This prevents Asterisk's buffer from filling up during greeting
+            # (_process_audio will skip frames until ai_ready is set)
+            receive_task = asyncio.create_task(self._receive_loop())
+            print(f"{ts()} Started receive loop (draining Asterisk buffer)", flush=True)
+            
             # Start TTS greeting playback IMMEDIATELY (if available)
             # This happens BEFORE Gemini connects, eliminating 5-10s delay
             greeting_task = None
@@ -433,6 +439,7 @@ class AudioSocketSession:
                 print(f"{ts()} [HANDLE] Gemini connection FAILED", flush=True)
                 if greeting_task:
                     greeting_task.cancel()
+                receive_task.cancel()
                 return
             gemini_time = (time.time() - gemini_start) * 1000
             print(f"{ts()} Gemini connected in {gemini_time:.0f}ms", flush=True)
@@ -445,27 +452,27 @@ class AudioSocketSession:
                 except asyncio.CancelledError:
                     pass
             
-            # Signal AI is ready - greeting already played via TTS!
+            # Signal AI is ready - now process caller audio!
             self.ai_ready.set()
             print(f"{ts()} AI READY - will now process caller audio", flush=True)
             
-            # Start tasks
-            # CRITICAL: Use unified audio loop for Gemini→Phone (eliminates queue latency)
+            # Start remaining tasks
             unified_audio_task = asyncio.create_task(self._unified_audio_loop())
             caller_to_ai_task = asyncio.create_task(self._caller_audio_to_gemini_loop())
             gemini_input_task = asyncio.create_task(self.agent_service.send_realtime_input())
             print(f"{ts()} Unified audio loop STARTED", flush=True)
             
-            # Main receive loop (Asterisk → us)
-            await self._receive_loop()
+            # Wait for receive loop to complete (call ends when Asterisk hangs up)
+            await receive_task
             
             # Cancel all tasks
-            for task in [caller_to_ai_task, gemini_input_task, unified_audio_task]:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+            for task in [caller_to_ai_task, gemini_input_task, unified_audio_task, receive_task]:
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
                     
         except Exception as e:
             print(f"[HANDLE] EXCEPTION: {e}", flush=True)
