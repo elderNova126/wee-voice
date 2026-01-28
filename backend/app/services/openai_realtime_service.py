@@ -5,15 +5,18 @@ This service provides real-time voice conversations using OpenAI's Realtime API.
 It supports bidirectional audio streaming via WebSocket.
 
 Key features:
-- Native support for 8kHz audio (no resampling needed for PSTN)
-- Low latency voice conversations
+- Real-time voice conversations with low latency
+- Native 8kHz audio via g711_ulaw (NO resampling - best quality for telephony!)
 - Function calling support
-- Input/output transcription
+- Input/output transcription via Whisper
+- Server-side VAD (Voice Activity Detection)
 
-Audio formats supported:
-- pcm16: 16-bit PCM (default)
-- g711_ulaw: μ-law (telephone standard)
-- g711_alaw: A-law (telephone standard)
+Audio format:
+- g711_ulaw: μ-law encoded 8kHz audio (telephone standard)
+- Direct passthrough: Asterisk 8kHz <-> OpenAI 8kHz (no quality loss!)
+
+Supported voices (Jan 2026):
+- alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
 """
 
 import asyncio
@@ -37,15 +40,16 @@ logger.setLevel(logging.INFO)
 # OpenAI Realtime API endpoint
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
-# OpenAI Realtime voices
-OPENAI_VOICES = ["alloy", "echo", "shimmer", "onyx", "fable", "nova"]
+# OpenAI Realtime voices (updated Jan 2026)
+# Supported: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
+OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
 
 # Audio configuration
-# OpenAI Realtime supports: pcm16, g711_ulaw, g711_alaw
-# For PSTN calls, g711_ulaw is native - no resampling needed!
-AUDIO_FORMAT = "pcm16"  # 16-bit PCM
-INPUT_SAMPLE_RATE = 8000   # 8kHz for PSTN (OpenAI supports this natively!)
-OUTPUT_SAMPLE_RATE = 24000  # 24kHz output for high quality
+# OpenAI Realtime API supports g711_ulaw format (8kHz native) - perfect for telephony!
+# NO resampling needed - direct 8kHz passthrough for best quality
+AUDIO_FORMAT = "g711_ulaw"  # μ-law encoded 8kHz (telephone standard)
+INPUT_SAMPLE_RATE = 8000    # 8kHz input (native, no resampling)
+OUTPUT_SAMPLE_RATE = 8000   # 8kHz output (native, no resampling)
 
 
 class OpenAIRealtimeService:
@@ -95,17 +99,17 @@ class OpenAIRealtimeService:
         if voice_id and voice_id.lower() in [v.lower() for v in OPENAI_VOICES]:
             return voice_id.lower()
         
-        # Map gender to voice
+        # Map gender to voice (using new OpenAI voices)
         if voice_gender == "female":
-            return "nova"  # Female voice
+            return "shimmer"  # Female voice (clear, warm)
         elif voice_gender == "male":
-            return "onyx"  # Male voice
+            return "ash"  # Male voice (deep, resonant)
         elif voice_gender == "neutral":
             return "alloy"  # Neutral voice
         
         # Default based on language
         if self.agent.language.startswith('fr'):
-            return "nova"  # Nova handles French well
+            return "coral"  # Coral handles multiple languages well
         else:
             return "alloy"  # Default English voice
     
