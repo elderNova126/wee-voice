@@ -286,7 +286,7 @@ cat > "${AGI_BIN}/weevoice_eagi_realtime.py" << 'WRAPPER_EOF'
 #!/bin/bash
 #===============================================================================
 # WeeVoice EAGI Wrapper
-# Connects to backend WebSocket API for AI voice streaming
+# Uses weevoice_eagi_realtime.py for multi-number routing with OpenAI support
 #===============================================================================
 
 export HOME="/opt/weevoice"
@@ -294,8 +294,8 @@ export HOME="/opt/weevoice"
 # Backend API URL (same server)
 export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8000}"
 
-# Run EAGI script
-exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_full.py "$@"
+# Run the REALTIME EAGI script (supports OpenAI Realtime API + Gemini)
+exec /opt/weevoice/backend/venv/bin/python3 /opt/weevoice/backend/eagi/weevoice_eagi_realtime.py "$@"
 WRAPPER_EOF
 
 chmod +x "${AGI_BIN}/weevoice_eagi_realtime.py"
@@ -811,10 +811,11 @@ echo "  API Docs: $PROTOCOL://$DOMAIN/api/docs"
 echo "  EAGI API: $PROTOCOL://$DOMAIN/api/v1/eagi/config"
 echo ""
 echo "EAGI (Asterisk Voice Agent):"
-echo "  Script:   ${BACKEND_DIR}/eagi/weevoice_eagi_full.py"
+echo "  Script:   ${BACKEND_DIR}/eagi/weevoice_eagi_realtime.py"
 echo "  Wrapper:  ${AGI_BIN}/weevoice_eagi_realtime.py"
 echo "  Logs:     /var/log/weevoice/eagi.log"
 echo "  Audio:    soxr VHQ (high-quality) if installed, audioop fallback otherwise"
+echo "  Models:   Gemini (native audio) + OpenAI Realtime API (gpt-4o-realtime)"
 echo ""
 echo -e "${YELLOW}IMPORTANT: Configure SIP for Phone Calls${NC}"
 echo "  1. Go to Phone Numbers page in the frontend"

@@ -278,12 +278,12 @@ VOICE QUALITY INSTRUCTIONS:
             url = f"{OPENAI_REALTIME_URL}?model={self.model}"
             
             # Connect with authorization header
-            headers = {
-                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1"
-            }
+            headers = [
+                ("Authorization", f"Bearer {settings.OPENAI_API_KEY}"),
+                ("OpenAI-Beta", "realtime=v1")
+            ]
             
-            self.ws = await websockets.connect(url, extra_headers=headers)
+            self.ws = await websockets.connect(url, additional_headers=headers)
             self._running = True
             
             logger.info("WebSocket connected to OpenAI Realtime API")
