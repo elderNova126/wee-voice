@@ -53,22 +53,19 @@ async def lifespan(app: FastAPI):
         print(f"[GREETING] ⚠ Pre-warm failed: {e}")
         logger.warning(f"Greeting pre-warm failed: {e}")
     
-    # AudioSocket server DISABLED - Using EAGI instead for better voice quality
-    # EAGI provides smoother audio playback without the choppy issues of AudioSocket
-    # To re-enable AudioSocket, uncomment the code below:
-    #
-    # global _audiosocket_server
-    # print("[AudioSocket] Starting AudioSocket server...")
-    # try:
-    #     from app.services.audiosocket_handler import audiosocket_server
-    #     _audiosocket_server = audiosocket_server
-    #     await _audiosocket_server.start()
-    #     print("[AudioSocket] ✅ AudioSocket server started on port 9092")
-    #     logger.info("✅ AudioSocket server started on port 9092")
-    # except Exception as e:
-    #     print(f"[AudioSocket] ❌ Error: {e}")
-    #     logger.error(f"Error starting AudioSocket server: {e}", exc_info=True)
-    print("[AudioSocket] ℹ️ AudioSocket DISABLED - Using EAGI for phone calls")
+    # AudioSocket server - provides smooth audio streaming for phone calls
+    # AudioSocket uses direct TCP streaming (no file I/O) = better than EAGI
+    global _audiosocket_server
+    print("[AudioSocket] Starting AudioSocket server...")
+    try:
+        from app.services.audiosocket_handler import audiosocket_server
+        _audiosocket_server = audiosocket_server
+        await _audiosocket_server.start()
+        print("[AudioSocket] ✅ AudioSocket server started on port 9092")
+        logger.info("✅ AudioSocket server started on port 9092")
+    except Exception as e:
+        print(f"[AudioSocket] ❌ Error: {e}")
+        logger.error(f"Error starting AudioSocket server: {e}", exc_info=True)
     
     # Start SIP call handler - loads phone numbers with SIP config from database
     print(f"[SIP] SIP_ENABLED setting: {settings.SIP_ENABLED}")
