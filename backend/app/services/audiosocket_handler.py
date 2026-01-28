@@ -379,22 +379,12 @@ class AudioSocketSession:
             except Exception as e:
                 print(f"{ts()} TCP_NODELAY failed: {e}", flush=True)
             
-            # Send first frames directly via writer (simpler approach)
-            # Model-aware frame size: OpenAI=16kHz, Gemini=24kHz
-            if self.llm_model.startswith('gpt-'):
-                init_frame_size = OPENAI_FRAME_SIZE
-                init_silence = SILENCE_FRAME_16K
-                init_rate = OPENAI_SAMPLE_RATE
-            else:
-                init_frame_size = OUTPUT_FRAME_SIZE
-                init_silence = SILENCE_FRAME_24K
-                init_rate = OUTPUT_SAMPLE_RATE
-            
-            header = struct.pack('>BH', MSG_AUDIO, init_frame_size)
+            # Send first frames directly via writer (8kHz for AudioSocket)
+            header = struct.pack('>BH', MSG_AUDIO, INPUT_FRAME_SIZE)
             for i in range(5):
-                self.writer.write(header + init_silence)
+                self.writer.write(header + SILENCE_FRAME)
             await self.writer.drain()
-            print(f"{ts()} 5 silence frames sent via writer.drain() ({init_rate}Hz)", flush=True)
+            print(f"{ts()} 5 silence frames sent via writer.drain() (8kHz)", flush=True)
             
             # Note: Audio sending is handled by _unified_audio_loop (started later)
             print(f"{ts()} Ready for audio", flush=True)
@@ -517,17 +507,19 @@ class AudioSocketSession:
         
         print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms ({MIN_START_CHUNKS} chunks), jitter={JITTER_BUFFER_MS}ms", flush=True)
         
-        # Model-aware frame size: OpenAI=16kHz (640 bytes), Gemini=24kHz (960 bytes)
-        if self.llm_model.startswith('gpt-'):
-            frame_size = OPENAI_FRAME_SIZE  # 640 bytes (16kHz)
-            sample_rate = OPENAI_SAMPLE_RATE  # 16kHz
-            print(f"[UNIFIED] OpenAI mode: 16kHz frames ({frame_size} bytes)", flush=True)
-        else:
-            frame_size = OUTPUT_FRAME_SIZE  # 960 bytes (24kHz)
-            sample_rate = OUTPUT_SAMPLE_RATE  # 24kHz
-            print(f"[UNIFIED] Gemini mode: 24kHz frames ({frame_size} bytes)", flush=True)
+        # AudioSocket uses 8kHz slin by default - always send 8kHz to Asterisk
+        # AI output will be resampled: OpenAI 16kHz→8kHz, Gemini 24kHz→8kHz
+        frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
+        output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        # AudioSocket frame header (type + length)
+        if self.llm_model.startswith('gpt-'):
+            ai_rate = OPENAI_SAMPLE_RATE  # 16kHz from OpenAI
+            print(f"[UNIFIED] OpenAI→Asterisk: {ai_rate}Hz→{output_rate}Hz, frames={frame_size}b", flush=True)
+        else:
+            ai_rate = OUTPUT_SAMPLE_RATE  # 24kHz from Gemini
+            print(f"[UNIFIED] Gemini→Asterisk: {ai_rate}Hz→{output_rate}Hz, frames={frame_size}b", flush=True)
+        
+        # AudioSocket frame header (type + length) - 8kHz frames
         header = struct.pack('>BH', MSG_AUDIO, frame_size)
         
         # Async jitter buffer - large enough for 10 seconds of audio
@@ -592,8 +584,8 @@ class AudioSocketSession:
                         startup_ready = True
                         stats['playback_start_time'] = time.perf_counter()
                         lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
-                        bytes_per_ms = sample_rate * 2 // 1000
-                        print(f"[PACER] ▶ START: {buf_level/bytes_per_ms:.0f}ms buffered ({sample_rate}Hz), latency={lat_ms:.0f}ms", flush=True)
+                        bytes_per_ms = output_rate * 2 // 1000  # 16 bytes/ms at 8kHz
+                        print(f"[PACER] ▶ START: {buf_level/bytes_per_ms:.0f}ms buffered ({output_rate}Hz), latency={lat_ms:.0f}ms", flush=True)
                     else:
                         next_tick += TICK_SECONDS
                         continue  # Wait for more audio
@@ -628,7 +620,7 @@ class AudioSocketSession:
                         await self.writer.drain()
                     except:
                         pass
-                    print(f"[PACER] ✓ Done: {stats['sent']} frames ({sample_rate}Hz), under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
+                    print(f"[PACER] ✓ Done: {stats['sent']} frames ({output_rate}Hz), under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
                     break
                 
                 elif startup_ready and jitter_buffer.empty():
@@ -652,14 +644,13 @@ class AudioSocketSession:
                                 pending = b''
                                 stats['underrun_partial'] += 1
                             else:
-                                # Send silence to keep audio stream alive
-                                frame = SILENCE_FRAME_16K if self.llm_model.startswith('gpt-') else SILENCE_FRAME_24K
+                                # Send 8kHz silence to keep audio stream alive
+                                frame = SILENCE_FRAME
                                 stats['underrun_empty'] += 1
                             stats['underruns'] += 1
-                            # Use model-specific silence frame
-                            silence_frame = SILENCE_FRAME_16K if self.llm_model.startswith('gpt-') else SILENCE_FRAME_24K
+                            # Use 8kHz silence frame (AudioSocket format)
                             try:
-                                self.writer.write(header + silence_frame)
+                                self.writer.write(header + SILENCE_FRAME)
                                 write_buf = self.writer.transport.get_write_buffer_size()
                                 if write_buf > 4096:
                                     await self.writer.drain()
@@ -679,27 +670,28 @@ class AudioSocketSession:
                 
                 # Periodic log
                 if stats['sent'] > 0 and stats['sent'] % 500 == 0:
-                    bytes_per_ms = sample_rate * 2 // 1000
-                    print(f"[PACER] {stats['sent']} frames ({sample_rate}Hz), buf={buf_level/bytes_per_ms:.0f}ms, q={jitter_buffer.qsize()}, under={stats['underruns']}", flush=True)
+                    bytes_per_ms = output_rate * 2 // 1000
+                    print(f"[PACER] {stats['sent']} frames ({output_rate}Hz), buf={buf_level/bytes_per_ms:.0f}ms, q={jitter_buffer.qsize()}, under={stats['underruns']}", flush=True)
         
         async def receiver():
             """
-            Receive from AI model and send directly to Asterisk.
+            Receive from AI model, resample to 8kHz, and send to Asterisk.
             
-            NO RESAMPLING - Asterisk handles transcoding from slin16/slin24 to ulaw/alaw.
-            This is more efficient as Asterisk's codec translation is optimized.
+            AudioSocket uses 8kHz slin format by default.
             
             Processing:
             1. Receive PCM from AI (16kHz for OpenAI, 24kHz for Gemini)
-            2. Apply attack envelope (20ms) to prevent pop
-            3. Apply normalization (target_rms=1400, max_gain=18dB)
-            4. Send directly to Asterisk (no downsampling!)
+            2. Resample to 8kHz for AudioSocket
+            3. Apply attack envelope (20ms) to prevent pop
+            4. Apply normalization (target_rms=1400, max_gain=18dB)
+            5. Send 8kHz audio to Asterisk
             """
             nonlocal attack_state
             first_chunk = True
-            attack_done = False  # Only apply attack envelope once at start
+            attack_done = False
+            resample_state = None  # For stateful resampling
             
-            print(f"[RECV] Direct {sample_rate}Hz pass-through (Asterisk handles transcoding)", flush=True)
+            print(f"[RECV] AI ({ai_rate}Hz) → Asterisk ({output_rate}Hz)", flush=True)
             
             try:
                 async for audio_from_ai in self.agent_service.receive_audio():
@@ -713,26 +705,28 @@ class AudioSocketSession:
                     # Track first audio timing
                     if first_chunk:
                         stats['first_audio_time'] = time.perf_counter()
-                        print(f"[RECV] ▶ FIRST: {len(audio_from_ai)}b ({sample_rate}Hz direct)", flush=True)
+                        print(f"[RECV] ▶ FIRST: {len(audio_from_ai)}b @ {ai_rate}Hz", flush=True)
                         first_chunk = False
                     
-                    # NO RESAMPLING - send directly to Asterisk
-                    # Asterisk will transcode slin16/slin24 → ulaw/alaw for PSTN
+                    # Resample AI audio to 8kHz for AudioSocket
+                    audio_8k, resample_state = simple_resample(
+                        audio_from_ai, ai_rate, output_rate, resample_state
+                    )
                     
                     # === Apply attack envelope ONLY at very start (prevents pop) ===
                     if not attack_done:
-                        audio_from_ai, attack_state = apply_attack_envelope(
-                            audio_from_ai, sample_rate, AUDIO_ATTACK_MS, attack_state
+                        audio_8k, attack_state = apply_attack_envelope(
+                            audio_8k, output_rate, AUDIO_ATTACK_MS, attack_state
                         )
                         if attack_state and attack_state.get('bytes_remaining', 0) <= 0:
-                            attack_done = True  # Attack complete, don't apply again
+                            attack_done = True
                     
                     # === Normalize audio (target_rms=1400, max_gain=18dB) ===
-                    audio_from_ai = normalize_audio(audio_from_ai, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
+                    audio_8k = normalize_audio(audio_8k, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
                     
-                    # Put in async jitter buffer
+                    # Put in async jitter buffer (8kHz audio)
                     try:
-                        jitter_buffer.put_nowait(audio_from_ai)
+                        jitter_buffer.put_nowait(audio_8k)
                         stats['recv'] += 1
                     except asyncio.QueueFull:
                         pass  # Drop if full
@@ -1457,10 +1451,13 @@ class AudioSocketSession:
         # Apply normalization for consistent volume (on 8kHz audio)
         audio_8k = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
         
-        # Upsample 8kHz → 24kHz to match Asterisk's expected format (slin24)
-        # Asterisk is configured to use slin24 for AudioSocket
-        audio_data, _ = audioop.ratecv(audio_8k, 2, 1, INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, None)
-        print(f"[GREETING-PLAY] Upsampled {len(audio_8k)}b (8kHz) → {len(audio_data)}b (24kHz)", flush=True)
+        # AudioSocket uses 8kHz slin by default - NO upsampling needed!
+        # The audio is already 8kHz from TTS cache
+        audio_data = audio_8k
+        target_rate = INPUT_SAMPLE_RATE  # 8kHz
+        frame_size = INPUT_FRAME_SIZE    # 320 bytes (20ms at 8kHz)
+        silence_frame = SILENCE_FRAME    # 8kHz silence
+        print(f"[GREETING-PLAY] Using native 8kHz (AudioSocket default format)", flush=True)
         
         # Check RMS after normalization
         try:
@@ -1469,16 +1466,15 @@ class AudioSocketSession:
         except:
             pass
         
-        # Use 24kHz frame size (960 bytes for 20ms)
-        header = struct.pack('>BH', MSG_AUDIO, OUTPUT_FRAME_SIZE)
+        # Use model-specific frame size
+        header = struct.pack('>BH', MSG_AUDIO, frame_size)
         frames_sent = 0
         
-        # FIX: Send 150ms of silence BEFORE greeting to let Asterisk audio path initialize
-        # This prevents the first few words from being cut off
+        # Send lead-in silence BEFORE greeting to let Asterisk audio path initialize
         LEAD_IN_FRAMES = 8  # 160ms of silence (8 frames * 20ms)
-        print(f"[GREETING-PLAY] Sending {LEAD_IN_FRAMES} lead-in silence frames (24kHz)...", flush=True)
+        print(f"[GREETING-PLAY] Sending {LEAD_IN_FRAMES} lead-in silence frames ({target_rate}Hz)...", flush=True)
         for _ in range(LEAD_IN_FRAMES):
-            self.writer.write(header + SILENCE_FRAME_24K)
+            self.writer.write(header + silence_frame)
         await self.writer.drain()
         
         # Send audio in 20ms frames with proper timing
@@ -1486,21 +1482,21 @@ class AudioSocketSession:
         next_frame_time = time.perf_counter()
         
         try:
-            for i in range(0, len(audio_data), OUTPUT_FRAME_SIZE):
+            for i in range(0, len(audio_data), frame_size):
                 if not self.is_running:
                     print(f"[GREETING-PLAY] ⚠ Stopped early (is_running=False)", flush=True)
                     break
                 
-                chunk = audio_data[i:i + OUTPUT_FRAME_SIZE]
-                if len(chunk) < OUTPUT_FRAME_SIZE:
-                    chunk += b'\x00' * (OUTPUT_FRAME_SIZE - len(chunk))
+                chunk = audio_data[i:i + frame_size]
+                if len(chunk) < frame_size:
+                    chunk += b'\x00' * (frame_size - len(chunk))
                 
                 self.writer.write(header + chunk)
                 frames_sent += 1
                 
                 # Log first few frames for debugging
                 if frames_sent <= 3:
-                    print(f"[GREETING-PLAY] Frame #{frames_sent} sent ({len(chunk)} bytes, 24kHz)", flush=True)
+                    print(f"[GREETING-PLAY] Frame #{frames_sent} sent ({len(chunk)} bytes, {target_rate}Hz)", flush=True)
                 
                 # Drain periodically to prevent buffer overflow
                 if frames_sent % 25 == 0:
@@ -1515,7 +1511,7 @@ class AudioSocketSession:
             await self.writer.drain()
             
             elapsed = (time.perf_counter() - t0) * 1000
-            print(f"[GREETING-PLAY] ✅ Complete: {frames_sent} frames (24kHz) in {elapsed:.0f}ms", flush=True)
+            print(f"[GREETING-PLAY] ✅ Complete: {frames_sent} frames ({target_rate}Hz) in {elapsed:.0f}ms", flush=True)
             
             self.greeting_played = True
             
