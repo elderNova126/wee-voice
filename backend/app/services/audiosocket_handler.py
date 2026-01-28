@@ -744,7 +744,7 @@ class AudioSocketSession:
                     
                     # Log progress
                     if stats['recv'] <= 3 or stats['recv'] % 50 == 0:
-                        print(f"[RECV] #{stats['recv']}: {len(audio_24k)}b (24kHz), q={jitter_buffer.qsize()}", flush=True)
+                        print(f"[RECV] #{stats['recv']}: {len(audio_8k)}b (8kHz), q={jitter_buffer.qsize()}", flush=True)
                         
             except asyncio.CancelledError:
                 pass
