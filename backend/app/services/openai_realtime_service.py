@@ -44,12 +44,12 @@ OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 # Supported: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
 OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
 
-# Audio configuration
-# g711_ulaw: Native 8kHz telephony format - no resampling needed!
-# EAGI does simple encoding: PCM16 <-> μ-law (same sample rate)
-AUDIO_FORMAT = "g711_ulaw"  # 8-bit μ-law at 8kHz (telephone standard)
-INPUT_SAMPLE_RATE = 8000    # 8kHz input (native telephony)
-OUTPUT_SAMPLE_RATE = 8000   # 8kHz output (native telephony)
+# Audio configuration - Match OpenAI's recommended format
+# Reference: AsteriskOpenAIRealtimeAssistant uses pcm16 at 16kHz
+# This is what OpenAI Realtime API is optimized for
+AUDIO_FORMAT = "pcm16"      # 16-bit PCM (OpenAI native format)
+INPUT_SAMPLE_RATE = 16000   # 16kHz input (OpenAI optimized)
+OUTPUT_SAMPLE_RATE = 16000  # 16kHz output (OpenAI optimized)
 
 
 class OpenAIRealtimeService:
@@ -212,20 +212,17 @@ VOICE QUALITY INSTRUCTIONS:
         logger.info(f"  - Model: {self.model}")
         
         # Build session config for OpenAI Realtime API
+        # Match reference implementation: 16kHz PCM16 with server VAD
         config = {
             "modalities": ["text", "audio"],
             "instructions": system_instruction,
             "voice": voice_name,
-            "input_audio_format": AUDIO_FORMAT,
-            "output_audio_format": AUDIO_FORMAT,
-            "input_audio_transcription": {
-                "model": "whisper-1"
-            },
+            "input_audio_format": {"type": AUDIO_FORMAT, "sample_rate_hz": INPUT_SAMPLE_RATE},
+            "output_audio_format": {"type": AUDIO_FORMAT, "sample_rate_hz": OUTPUT_SAMPLE_RATE},
+            "input_audio_transcription": {"enabled": True},
             "turn_detection": {
                 "type": "server_vad",
-                "threshold": 0.5,
-                "prefix_padding_ms": 300,
-                "silence_duration_ms": 500
+                "silence_duration_ms": 300  # Match reference: 300ms
             },
             "temperature": float(self.agent.temperature) if hasattr(self.agent, 'temperature') else 0.7,
         }
@@ -317,6 +314,15 @@ VOICE QUALITY INSTRUCTIONS:
                     logger.error(f"OpenAI Realtime error: {error}")
                     return False
             
+            # Push initial silence to warm up VAD (from reference implementation)
+            # 0.5 seconds @ 16kHz x 2 bytes = 16000 bytes
+            silence = bytes(16000)  # 0.5s silence
+            await self.ws.send(json.dumps({
+                "type": "input_audio_buffer.append",
+                "audio": base64.b64encode(silence).decode()
+            }))
+            logger.info("Sent initial silence buffer for VAD warm-up")
+            
             # If greeting should be triggered, send it
             if self.agent.greeting and not self.skip_greeting_trigger:
                 logger.info("Triggering greeting via response.create")
@@ -351,9 +357,9 @@ VOICE QUALITY INSTRUCTIONS:
         logger.info(f"[OPENAI-IN] Starting audio input loop")
         audio_sent_count = 0
         
-        # Batch audio for g711_ulaw: 8kHz * 1 byte/sample * 0.02s = 160 bytes (20ms)
-        # μ-law uses 1 byte per sample (8-bit compressed)
-        MIN_BATCH_SIZE = 160
+        # Batch audio for pcm16 @ 16kHz: 16000 * 2 bytes * 0.02s = 640 bytes (20ms)
+        # Match reference implementation: 20ms frames
+        MIN_BATCH_SIZE = 640
         audio_buffer = b''
         
         try:
@@ -377,13 +383,13 @@ VOICE QUALITY INSTRUCTIONS:
                         }))
                         
                         if audio_sent_count <= 5 or audio_sent_count % 100 == 0:
-                            logger.info(f"[OPENAI-IN] Sent #{audio_sent_count}: {len(audio_buffer)} bytes g711_ulaw")
+                            logger.info(f"[OPENAI-IN] Sent #{audio_sent_count}: {len(audio_buffer)} bytes pcm16@16k")
                         
                         audio_buffer = b''
                         
                 except asyncio.TimeoutError:
-                    # Flush any remaining audio (80 bytes = 10ms for g711_ulaw)
-                    if len(audio_buffer) >= 80:
+                    # Flush any remaining audio (320 bytes = 10ms for pcm16 @ 16kHz)
+                    if len(audio_buffer) >= 320:
                         audio_sent_count += 1
                         audio_b64 = base64.b64encode(audio_buffer).decode('utf-8')
                         

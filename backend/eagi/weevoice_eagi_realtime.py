@@ -227,67 +227,51 @@ class WeeVoiceEAGI:
         """
         Process caller audio for AI model input.
         
-        Model-aware processing:
-        - Gemini: Requires 16kHz PCM input, so upsample from 8kHz
-        - OpenAI (gpt-*): g711_ulaw format - encode PCM to μ-law (no resampling!)
+        Both Gemini and OpenAI use 16kHz PCM16 input:
+        - Upsample from Asterisk 8kHz to 16kHz
         """
         if len(audio_8k) < 2:
             return b''
         
         try:
-            # Model-aware audio processing
-            if self.llm_model and self.llm_model.lower().startswith('gpt'):
-                # OpenAI g711_ulaw: Encode PCM16 → μ-law
-                # This is simple encoding, NOT resampling - stays at 8kHz
-                # μ-law compresses 16-bit to 8-bit (half the bytes)
-                return audioop.lin2ulaw(audio_8k, 2)
-            else:
-                # Gemini requires 16kHz input - upsample from 8kHz
-                result, self._resample_state_in = audioop.ratecv(
-                    audio_8k, 2, 1, ASTERISK_RATE, GEMINI_INPUT_RATE, self._resample_state_in
-                )
-                return result
+            # Both OpenAI and Gemini use 16kHz PCM16 - upsample from 8kHz
+            result, self._resample_state_in = audioop.ratecv(
+                audio_8k, 2, 1, ASTERISK_RATE, GEMINI_INPUT_RATE, self._resample_state_in
+            )
+            return result
         except Exception as e:
-            logger.error(f"Audio processing error: {e}")
+            logger.error(f"Audio resample error: {e}")
             return audio_8k
     
     def _get_input_sample_rate(self) -> int:
         """Get the appropriate input sample rate based on LLM model"""
-        if self.llm_model and self.llm_model.lower().startswith('gpt'):
-            return ASTERISK_RATE  # 8kHz for OpenAI (g711_ulaw native)
-        return GEMINI_INPUT_RATE  # 16kHz for Gemini
+        # Both OpenAI and Gemini use 16kHz PCM16 input
+        return GEMINI_INPUT_RATE  # 16kHz for both
     
     def _resample_output(self, audio_data: bytes) -> bytes:
         """
         Convert AI model output for Asterisk playback.
         
-        - OpenAI (g711_ulaw): Decode μ-law → PCM16 (no resampling!)
-        - Gemini: 24kHz output, needs resampling to 8kHz or 16kHz
+        - OpenAI: 16kHz PCM16 output → resample to 8kHz for PSTN
+        - Gemini: 24kHz output → resample to 8kHz for PSTN
         """
-        if len(audio_data) < 1:
+        if len(audio_data) < 2:
             return b''
         
         try:
-            # OpenAI g711_ulaw: Decode μ-law → PCM16
+            # Determine source rate based on model
             if self.llm_model and self.llm_model.lower().startswith('gpt'):
-                # This is simple decoding, NOT resampling - stays at 8kHz
-                # μ-law expands 8-bit to 16-bit (double the bytes)
-                return audioop.ulaw2lin(audio_data, 2)
-            
-            # Gemini: 24kHz output needs resampling
-            if HIGH_QUALITY_MODE:
-                # For SIP/WebRTC: Use 16kHz (slin16) - widely supported
-                target_rate = 16000
-                result, self._resample_state_out = audioop.ratecv(
-                    audio_data, 2, 1, GEMINI_OUTPUT_RATE, target_rate, self._resample_state_out
-                )
-                return result
+                # OpenAI outputs 16kHz PCM16
+                source_rate = 16000
             else:
-                # For PSTN: Standard 8kHz (slin)
-                result, self._resample_state_out = audioop.ratecv(
-                    audio_data, 2, 1, GEMINI_OUTPUT_RATE, ASTERISK_RATE, self._resample_state_out
-                )
-                return result
+                # Gemini outputs 24kHz PCM16
+                source_rate = GEMINI_OUTPUT_RATE
+            
+            # Resample to Asterisk rate (8kHz for PSTN)
+            result, self._resample_state_out = audioop.ratecv(
+                audio_data, 2, 1, source_rate, ASTERISK_RATE, self._resample_state_out
+            )
+            return result
         except Exception as e:
             logger.error(f"Audio output error: {e}")
             return audio_data
@@ -441,15 +425,13 @@ class WeeVoiceEAGI:
             logger.info(f"  Voice ID: {getattr(self.agent, 'voice_id', 'default')}")
             logger.info(f"  Greeting: {self.agent.greeting[:50] if self.agent.greeting else 'None'}...")
             
-            # Audio processing optimization based on LLM model
+            # Audio processing: both models use 16kHz input, resample output to 8kHz
             if self.llm_model.lower().startswith('gpt'):
-                # OpenAI with g711_ulaw: 8kHz native - no resampling at all!
-                self.output_rate = ASTERISK_RATE  # 8kHz
-                self.output_buffer = AudioBuffer(max_size_ms=3000, sample_rate=ASTERISK_RATE)
-                logger.info(f"  🎵 Audio: OpenAI mode - 8kHz native (NO resampling)")
+                # OpenAI: 16kHz PCM16 (like reference implementation)
+                logger.info(f"  🎵 Audio: OpenAI mode - 8kHz→16kHz input, 16kHz→8kHz output")
             else:
-                # Gemini: 16kHz input, 24kHz→8kHz/16kHz output
-                logger.info(f"  🎵 Audio: Gemini mode - 8kHz→16kHz input, 24kHz→{self.output_rate}Hz output")
+                # Gemini: 16kHz input, 24kHz→8kHz output
+                logger.info(f"  🎵 Audio: Gemini mode - 8kHz→16kHz input, 24kHz→8kHz output")
             logger.info(f"=" * 50)
             
             # Create call record
@@ -623,9 +605,7 @@ class WeeVoiceEAGI:
                 
                 frame_count += 1
                 
-                # Model-aware audio processing:
-                # - OpenAI: Send 8kHz directly (native support, best quality)
-                # - Gemini: Upsample to 16kHz (required by Gemini)
+                # Upsample 8kHz → 16kHz for both OpenAI and Gemini
                 audio_for_ai = self._resample_8k_to_16k(audio_8k)
                 
                 if audio_for_ai and self.agent_service:
