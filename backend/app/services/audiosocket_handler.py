@@ -517,16 +517,14 @@ class AudioSocketSession:
         import time
         print(f"[UNIFIED] Starting ASYNC pacer (large buffer for Gemini bursts)", flush=True)
         
-        # === LARGE BUFFER settings to fix choppy audio ===
-        # AI models send audio in bursts with gaps between phrases
-        # We need enough buffer to bridge these gaps smoothly
+        # === BUFFER SETTINGS for smooth audio ===
+        # Now always sending frames (never skipping), so these control rebuffer behavior only
         CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
-        MIN_START_MS = 400           # Buffer 400ms before starting playback (20 frames) - prevents choppy greeting start
-        RESUME_BUFFER_MS = 300       # Buffer 300ms before RESUMING after pause (15 frames) - prevents choppy response starts
+        MIN_START_MS = 300           # Buffer 300ms before starting playback
+        RESUME_BUFFER_MS = 200       # Buffer 200ms before resuming after dry (10 frames)
         JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for AI bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
-        PROVIDER_GRACE_MS = 2000     # Wait 2s before sending silence (AI thinking tolerance)
-        EMPTY_BACKOFF_MAX = 50       # Wait 1000ms (50 * 20ms) before marking buffer dry
+        EMPTY_BACKOFF_MAX = 10       # Mark buffer dry after 200ms (10 * 20ms) of silence
         
         # Derived values - now using actual milliseconds, not chunk counts
         TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02s = 20ms per tick
@@ -536,7 +534,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms, resume_buf={RESUME_BUFFER_MS}ms, empty_backoff={EMPTY_BACKOFF_MAX*20}ms", flush=True)
+        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms, resume_buf={RESUME_BUFFER_MS}ms, dry_detect={EMPTY_BACKOFF_MAX*20}ms", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
@@ -617,15 +615,22 @@ class AudioSocketSession:
                         lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
                         print(f"[PACER] ▶ START: {buf_ms}ms buffered ({output_rate}Hz), latency={lat_ms:.0f}ms", flush=True)
                     else:
+                        # Not enough buffer yet - send silence to keep stream alive
+                        try:
+                            self.writer.write(header + SILENCE_FRAME)
+                            stats['sent'] += 1
+                        except:
+                            break
                         next_tick += TICK_SECONDS
-                        continue  # Wait for more audio
+                        continue
                 
                 # === REBUFFER GATE - Use actual buffer SIZE in milliseconds ===
                 # When resuming after a pause, wait for minimum buffer before playing
                 if needs_rebuffer:
                     if buf_ms >= RESUME_BUFFER_MS:
                         needs_rebuffer = False
-                        # Apply fade-in to the buffered audio to smooth the transition
+                        empty_backoff = 0  # Reset backoff counter
+                        # Apply fade-in to smooth transition
                         if len(pending) >= frame_size:
                             fade_samples = min(len(pending) // 2, 160)  # 10ms fade at 8kHz
                             try:
@@ -637,8 +642,14 @@ class AudioSocketSession:
                                 pass
                         print(f"[PACER] ▶ RESUME: {buf_ms}ms rebuffered (fade-in applied)", flush=True)
                     else:
+                        # Not enough buffer yet - send silence to keep stream alive
+                        try:
+                            self.writer.write(header + SILENCE_FRAME)
+                            stats['sent'] += 1
+                        except:
+                            break
                         next_tick += TICK_SECONDS
-                        continue  # Wait for rebuffer to fill
+                        continue
                 
                 # === EMIT FRAME ===
                 if buf_level >= frame_size:
@@ -673,40 +684,37 @@ class AudioSocketSession:
                     print(f"[PACER] ✓ Done: {stats['sent']} frames ({output_rate}Hz), under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
                     break
                 
-                elif startup_ready and jitter_buffer.empty() and len(pending) < frame_size:
-                    # Buffer empty after startup - use backoff to wait for more audio
-                    # ROOT CAUSE OF CHOPPY: We were sending silence too quickly during Gemini pauses
-                    if empty_backoff < EMPTY_BACKOFF_MAX:
-                        empty_backoff += 1
-                        stats['wait_recoveries'] += 1
-                        # Skip this tick - wait for more audio from AI
-                        # This is the key fix: WAIT instead of sending silence
+                elif startup_ready and len(pending) < frame_size:
+                    # Buffer low - handle carefully to avoid gaps
+                    # CRITICAL: For telephony, ALWAYS send something every 20ms!
+                    
+                    # First, send any partial audio we have (padded with silence)
+                    if len(pending) > 0:
+                        frame = pending + (b'\x00' * (frame_size - len(pending)))
+                        pending = b''
+                        try:
+                            self.writer.write(header + frame)
+                            stats['sent'] += 1
+                            stats['underrun_partial'] += 1
+                        except:
+                            break
                     else:
-                        # Backoff exhausted - set needs_rebuffer for when audio resumes
-                        # This prevents choppy start of new responses!
+                        # Completely empty - send silence and mark for rebuffer
                         if not needs_rebuffer:
-                            needs_rebuffer = True
-                            print(f"[PACER] ⏸ Buffer dry, will rebuffer on resume", flush=True)
+                            empty_backoff += 1
+                            if empty_backoff >= EMPTY_BACKOFF_MAX:
+                                needs_rebuffer = True
+                                print(f"[PACER] ⏸ Buffer dry after {empty_backoff*20}ms, will rebuffer on resume", flush=True)
                         
-                        # Check if we're within grace period
-                        time_since_real = (time.perf_counter() - last_real_emit_ts) * 1000 if last_real_emit_ts else 0
-                        
-                        # During PROVIDER_GRACE_MS, keep connection alive with minimal audio
-                        # This bridges AI's pauses without causing choppy audio
-                        if time_since_real < PROVIDER_GRACE_MS:
-                            # Send silence to keep stream alive
-                            stats['underruns'] += 1
+                        # ALWAYS send silence to keep stream alive
+                        try:
+                            self.writer.write(header + SILENCE_FRAME)
+                            stats['sent'] += 1
                             stats['underrun_empty'] += 1
-                            try:
-                                self.writer.write(header + SILENCE_FRAME)
-                                write_buf = self.writer.transport.get_write_buffer_size()
-                                if write_buf > 4096:
-                                    await self.writer.drain()
-                                stats['sent'] += 1
-                            except:
-                                break
-                        # After grace period, just wait - AI might be thinking
-                        empty_backoff = EMPTY_BACKOFF_MAX  # Stay in wait mode
+                        except:
+                            break
+                    
+                    stats['underruns'] += 1
                 
                 next_tick += TICK_SECONDS
                 
