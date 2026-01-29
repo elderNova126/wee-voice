@@ -518,13 +518,13 @@ class AudioSocketSession:
         print(f"[UNIFIED] Starting ASYNC pacer (large buffer for Gemini bursts)", flush=True)
         
         # === BUFFER SETTINGS for smooth audio ===
-        # Now always sending frames (never skipping), so these control rebuffer behavior only
+        # Optimized for OpenAI Realtime which sends audio in bursts
         CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
-        MIN_START_MS = 300           # Buffer 300ms before starting playback
-        RESUME_BUFFER_MS = 200       # Buffer 200ms before resuming after dry (10 frames)
+        MIN_START_MS = 400           # Buffer 400ms before starting playback
+        RESUME_BUFFER_MS = 300       # Buffer 300ms before resuming after dry
         JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for AI bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
-        EMPTY_BACKOFF_MAX = 10       # Mark buffer dry after 200ms (10 * 20ms) of silence
+        EMPTY_BACKOFF_MAX = 5        # Mark buffer dry after 100ms (5 * 20ms) - faster detection
         
         # Derived values - now using actual milliseconds, not chunk counts
         TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02s = 20ms per tick
@@ -534,7 +534,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms, resume_buf={RESUME_BUFFER_MS}ms, dry_detect={EMPTY_BACKOFF_MAX*20}ms", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, resume={RESUME_BUFFER_MS}ms, dry={EMPTY_BACKOFF_MAX*20}ms, fade=50ms", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
@@ -630,17 +630,18 @@ class AudioSocketSession:
                     if buf_ms >= RESUME_BUFFER_MS:
                         needs_rebuffer = False
                         empty_backoff = 0  # Reset backoff counter
-                        # Apply fade-in to smooth transition
+                        # Apply smooth fade-in over 50ms (longer = smoother transition)
                         if len(pending) >= frame_size:
-                            fade_samples = min(len(pending) // 2, 160)  # 10ms fade at 8kHz
+                            fade_samples = min(len(pending) // 2, 400)  # 50ms fade at 8kHz (400 samples)
                             try:
                                 buf = np.frombuffer(pending[:fade_samples * 2], dtype=np.int16).copy()
-                                for i in range(len(buf)):
-                                    buf[i] = int(buf[i] * (i / len(buf)))
+                                # Use smooth exponential fade-in curve
+                                fade_curve = np.linspace(0.0, 1.0, len(buf)) ** 0.5  # sqrt for smoother start
+                                buf = (buf * fade_curve).astype(np.int16)
                                 pending = buf.tobytes() + pending[fade_samples * 2:]
                             except:
                                 pass
-                        print(f"[PACER] ▶ RESUME: {buf_ms}ms rebuffered (fade-in applied)", flush=True)
+                        print(f"[PACER] ▶ RESUME: {buf_ms}ms rebuffered (50ms fade-in)", flush=True)
                     else:
                         # Not enough buffer yet - send silence to keep stream alive
                         try:
@@ -651,16 +652,31 @@ class AudioSocketSession:
                         next_tick += TICK_SECONDS
                         continue
                 
-                # === EMIT FRAME ===
+                # === EMIT FRAME with fade-out when buffer is draining ===
                 if buf_level >= frame_size:
-                    # Have audio - send it
                     frame = pending[:frame_size]
                     pending = pending[frame_size:]
+                    
+                    # Apply FADE-OUT when buffer is getting low (< 100ms remaining)
+                    # This smooths the transition to silence
+                    LOW_BUFFER_THRESHOLD = frame_size * 5  # 100ms at 8kHz
+                    if len(pending) < LOW_BUFFER_THRESHOLD and len(pending) > 0:
+                        # We're running low - apply gradual fade to remaining audio
+                        remaining_frames = len(pending) // frame_size + 1
+                        current_frame_idx = (LOW_BUFFER_THRESHOLD - len(pending)) // frame_size
+                        fade_factor = max(0.3, 1.0 - (current_frame_idx / (remaining_frames + 5)))
+                        
+                        try:
+                            frame_arr = np.frombuffer(frame, dtype=np.int16).copy()
+                            frame_arr = (frame_arr * fade_factor).astype(np.int16)
+                            frame = frame_arr.tobytes()
+                        except:
+                            pass
+                    
                     try:
                         self.writer.write(header + frame)
-                        # Only drain if write buffer is getting large (avoid blocking on every frame)
                         write_buf = self.writer.transport.get_write_buffer_size()
-                        if write_buf > 4096:  # Only drain if > 4KB buffered
+                        if write_buf > 4096:
                             await self.writer.drain()
                         stats['sent'] += 1
                         empty_backoff = 0
@@ -669,27 +685,30 @@ class AudioSocketSession:
                         break
                 
                 elif sentinel_seen:
-                    # End of stream - send any remaining partial data
+                    # End of stream - send any remaining partial data with fade
                     if pending:
+                        # Apply fade-out to final chunk
                         try:
-                            self.writer.write(header + pending.ljust(frame_size, b'\x00'))
+                            padded = pending.ljust(frame_size, b'\x00')
+                            frame_arr = np.frombuffer(padded, dtype=np.int16).copy()
+                            fade = np.linspace(1.0, 0.0, len(frame_arr))
+                            frame_arr = (frame_arr * fade).astype(np.int16)
+                            self.writer.write(header + frame_arr.tobytes())
                             stats['sent'] += 1
                         except:
-                            pass
-                    # Final drain to flush everything
+                            self.writer.write(header + pending.ljust(frame_size, b'\x00'))
+                            stats['sent'] += 1
                     try:
                         await self.writer.drain()
                     except:
                         pass
-                    print(f"[PACER] ✓ Done: {stats['sent']} frames ({output_rate}Hz), under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
+                    print(f"[PACER] ✓ Done: {stats['sent']} frames ({output_rate}Hz), under={stats['underruns']}", flush=True)
                     break
                 
                 elif startup_ready and len(pending) < frame_size:
-                    # Buffer low - handle carefully to avoid gaps
-                    # CRITICAL: For telephony, ALWAYS send something every 20ms!
-                    
-                    # First, send any partial audio we have (padded with silence)
+                    # Buffer empty - send silence (we already faded out above)
                     if len(pending) > 0:
+                        # Send remaining partial audio (already faded above)
                         frame = pending + (b'\x00' * (frame_size - len(pending)))
                         pending = b''
                         try:
@@ -699,14 +718,14 @@ class AudioSocketSession:
                         except:
                             break
                     else:
-                        # Completely empty - send silence and mark for rebuffer
+                        # Completely empty - mark for rebuffer
                         if not needs_rebuffer:
                             empty_backoff += 1
                             if empty_backoff >= EMPTY_BACKOFF_MAX:
                                 needs_rebuffer = True
-                                print(f"[PACER] ⏸ Buffer dry after {empty_backoff*20}ms, will rebuffer on resume", flush=True)
+                                print(f"[PACER] ⏸ Buffer dry, will rebuffer on resume", flush=True)
                         
-                        # ALWAYS send silence to keep stream alive
+                        # Send silence
                         try:
                             self.writer.write(header + SILENCE_FRAME)
                             stats['sent'] += 1
