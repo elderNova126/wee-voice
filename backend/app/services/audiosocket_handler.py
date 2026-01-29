@@ -539,9 +539,9 @@ class AudioSocketSession:
         print(f"[UNIFIED] Starting ASYNC pacer (large buffer for AI bursts)", flush=True)
         
         # === BUFFER SETTINGS for smooth audio ===
-        # Optimized for OpenAI Realtime which sends audio in bursts
+        # OpenAI service now pre-buffers 300ms per response, so reduce startup here
         CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
-        MIN_START_MS = 400           # Buffer 400ms before starting playback
+        MIN_START_MS = 200           # Buffer 200ms (OpenAI adds 300ms = 500ms total)
         # RESUME_BUFFER_MS removed - no rebuffer mode (like reference implementation)
         JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for AI bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
@@ -555,7 +555,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, NO_REBUFFER (like reference), fade=80ms", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, silence_reset=100ms, OpenAI warmup=300ms", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 8kHz from OpenAI (NO resampling!)
@@ -576,7 +576,7 @@ class AudioSocketSession:
         startup_ready = False
         # Track silence frames to reset startup_ready for each new AI response
         silence_frames = 0
-        SILENCE_RESET_FRAMES = 15  # After 300ms of silence (15 * 20ms), reset startup gate
+        SILENCE_RESET_FRAMES = 5  # After 100ms of silence (5 * 20ms), reset startup gate
         last_real_emit_ts = 0.0
         
         stats = {
@@ -741,7 +741,7 @@ class AudioSocketSession:
                         # (fixes choppy first word after user speaks)
                         if silence_frames >= SILENCE_RESET_FRAMES and startup_ready:
                             startup_ready = False
-                            print(f"[PACER] 🔄 Reset startup gate (next response will buffer 400ms)", flush=True)
+                            print(f"[PACER] 🔄 Reset startup gate (100ms silence detected)", flush=True)
                     
                     stats['underruns'] += 1
                 

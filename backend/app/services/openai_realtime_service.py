@@ -455,15 +455,20 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
         Input: G.711 μ-law at 8kHz (OpenAI native)
         Output: PCM16 at 8kHz (direct to audiosocket_handler - NO RESAMPLING!)
         
-        Reference: sip-to-ai project uses this for perfect audio quality
+        Key fix: Per-response warmup buffer - accumulate 300ms before yielding
+        the first chunk of each response. This ensures smooth starts.
         """
-        logger.info(f"Starting audio reception (μ-law→PCM16 @ 8kHz, NO resampling)")
+        logger.info(f"Starting audio reception (μ-law→PCM16 @ 8kHz, per-response warmup)")
         response_count = 0
         audio_buffer = b''
         
-        # Batch audio into ~100ms chunks for smoother playback
-        # μ-law @ 8kHz: 8000 * 1 byte * 0.1s = 800 bytes
-        BATCH_SIZE = 800
+        # Warmup: Buffer 300ms before yielding first chunk of each response
+        # μ-law @ 8kHz: 8000 * 1 byte * 0.3s = 2400 bytes
+        WARMUP_SIZE = 2400  # 300ms warmup for each response
+        BATCH_SIZE = 800    # 100ms batches after warmup
+        
+        # Track per-response state
+        response_started = False  # True after first audio of response is yielded
         
         try:
             while self._running and self.ws:
@@ -480,12 +485,22 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                             ulaw_data = base64.b64decode(audio_b64)  # G.711 μ-law @ 8kHz
                             audio_buffer += ulaw_data
                             
-                            # Yield when we have enough for smooth playback (~100ms)
-                            if len(audio_buffer) >= BATCH_SIZE:
-                                # Convert μ-law → PCM16 using audioop (proven, fast)
-                                pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
-                                yield pcm16_data
-                                audio_buffer = b''
+                            # Per-response warmup: buffer 300ms before first yield
+                            if not response_started:
+                                if len(audio_buffer) >= WARMUP_SIZE:
+                                    # First yield of this response - send all accumulated
+                                    pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
+                                    logger.debug(f"[WARMUP] First yield: {len(audio_buffer)}b μ-law → {len(pcm16_data)}b PCM16")
+                                    yield pcm16_data
+                                    audio_buffer = b''
+                                    response_started = True
+                                # else: keep buffering until we have 300ms
+                            else:
+                                # After warmup, stream in 100ms batches
+                                if len(audio_buffer) >= BATCH_SIZE:
+                                    pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
+                                    yield pcm16_data
+                                    audio_buffer = b''
                     
                     # Handle audio transcript (what the AI said)
                     elif msg_type == "response.audio_transcript.delta":
@@ -510,14 +525,16 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                             await self._save_message("user", transcript)
                             self.conversation_buffer.append({"role": "user", "text": transcript})
                     
-                    # Handle response done - flush any remaining buffered audio
+                    # Handle response done - flush buffer and reset for next response
                     elif msg_type == "response.done":
                         if audio_buffer:
-                            # Convert μ-law → PCM16
+                            # Flush any remaining audio
                             pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
                             yield pcm16_data
                             audio_buffer = b''
-                        logger.debug("Response turn complete")
+                        # Reset for next response - next response will warmup again
+                        response_started = False
+                        logger.debug("Response complete, reset warmup for next")
                     
                     # Handle function calls
                     elif msg_type == "response.function_call_arguments.done":
@@ -530,8 +547,8 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                     
                 except asyncio.TimeoutError:
                     # Flush buffer on timeout if we have accumulated audio
-                    if audio_buffer:
-                        # Convert μ-law → PCM16
+                    # But only if response already started (don't break warmup)
+                    if audio_buffer and response_started:
                         pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
                         yield pcm16_data
                         audio_buffer = b''
