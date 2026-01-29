@@ -44,79 +44,16 @@ OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 # Supported: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
 OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
 
-# Audio configuration - Using g711_ulaw for ZERO resampling!
-# OpenAI Realtime API supports: pcm16 (24kHz), g711_ulaw (8kHz), g711_alaw (8kHz)
-# We use g711_ulaw because:
-# - 8kHz matches Asterisk/PSTN natively (NO resampling needed!)
-# - μ-law is standard telephone encoding
-# - Eliminates all timing/buffer issues from resampling
-AUDIO_FORMAT = "g711_ulaw"     # μ-law 8kHz (telephone native - NO resampling!)
-INPUT_SAMPLE_RATE = 8000       # 8kHz input (matches Asterisk)
-OUTPUT_SAMPLE_RATE = 8000      # 8kHz output (matches Asterisk)
+# Audio configuration - PCM16 @ 24kHz (OpenAI native)
+# Reference: Asterisk-AI-Voice-Agent uses PCM16@24kHz for best results
+# Flow: Asterisk 8kHz → Resample 24kHz → OpenAI → Resample 8kHz → Asterisk
+AUDIO_FORMAT = "pcm16"         # PCM16 (OpenAI native format)
+INPUT_SAMPLE_RATE = 24000      # 24kHz input (OpenAI native)
+OUTPUT_SAMPLE_RATE = 24000     # 24kHz output (OpenAI native)
 
-
-# μ-law encoding/decoding tables for fast conversion
-# Linear PCM (16-bit signed) <-> μ-law (8-bit)
-import numpy as np
-
-# μ-law encoding table (PCM16 -> ulaw)
-def _build_lin2ulaw_table():
-    """Build lookup table for linear to μ-law conversion"""
-    table = np.zeros(65536, dtype=np.uint8)
-    for i in range(65536):
-        # Convert to signed 16-bit
-        sample = i if i < 32768 else i - 65536
-        # μ-law encoding algorithm
-        sign = 0x80 if sample < 0 else 0
-        sample = abs(sample)
-        sample = min(sample, 32635)  # Clip to max
-        sample += 0x84  # Add bias
-        
-        # Find exponent
-        exponent = 7
-        for exp in range(7, -1, -1):
-            if sample >= (1 << (exp + 7)):
-                exponent = exp
-                break
-        
-        mantissa = (sample >> (exponent + 3)) & 0x0F
-        ulaw_byte = ~(sign | (exponent << 4) | mantissa) & 0xFF
-        table[i] = ulaw_byte
-    return table
-
-# μ-law decoding table (ulaw -> PCM16)
-def _build_ulaw2lin_table():
-    """Build lookup table for μ-law to linear conversion"""
-    table = np.zeros(256, dtype=np.int16)
-    for i in range(256):
-        ulaw = ~i & 0xFF
-        sign = ulaw & 0x80
-        exponent = (ulaw >> 4) & 0x07
-        mantissa = ulaw & 0x0F
-        sample = ((mantissa << 3) + 0x84) << exponent
-        sample -= 0x84
-        table[i] = -sample if sign else sample
-    return table
-
-# Pre-build tables for fast lookup
-_LIN2ULAW_TABLE = _build_lin2ulaw_table()
-_ULAW2LIN_TABLE = _build_ulaw2lin_table()
-
-
-def lin2ulaw(pcm_data: bytes) -> bytes:
-    """Convert linear PCM16 to μ-law (fast table lookup)"""
-    samples = np.frombuffer(pcm_data, dtype=np.int16)
-    # Convert to unsigned for table lookup
-    unsigned = samples.astype(np.uint16)
-    ulaw = _LIN2ULAW_TABLE[unsigned]
-    return ulaw.tobytes()
-
-
-def ulaw2lin(ulaw_data: bytes) -> bytes:
-    """Convert μ-law to linear PCM16 (fast table lookup)"""
-    ulaw = np.frombuffer(ulaw_data, dtype=np.uint8)
-    samples = _ULAW2LIN_TABLE[ulaw]
-    return samples.tobytes()
+# Warmup buffer before playback (prevents choppy start)
+# Reference: Asterisk-AI-Voice-Agent uses 320ms warmup
+WARMUP_MS = 320  # Buffer 320ms before starting playback
 
 
 class OpenAIRealtimeService:
@@ -439,15 +376,14 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
     async def send_realtime_input(self):
         """Send queued audio to OpenAI Realtime API
         
-        Input: Linear PCM16 at 8kHz (from Asterisk)
-        Converts to: g711_ulaw at 8kHz (for OpenAI)
+        Input: Linear PCM16 at 24kHz (already resampled by audiosocket_handler)
+        Output: PCM16 at 24kHz (OpenAI native)
         """
-        logger.info(f"[OPENAI-IN] Starting audio input loop (PCM16→μ-law)")
+        logger.info(f"[OPENAI-IN] Starting audio input loop (PCM16@24kHz)")
         audio_sent_count = 0
         
-        # Batch audio for g711_ulaw @ 8kHz: 8000 * 1 byte * 0.02s = 160 bytes (20ms)
-        # Input is PCM16, so we need 320 bytes (160 samples * 2 bytes) to produce 160 bytes μ-law
-        MIN_BATCH_SIZE = 320  # 20ms of PCM16 @ 8kHz
+        # Batch audio for PCM16 @ 24kHz: 24000 * 2 bytes * 0.02s = 960 bytes (20ms)
+        MIN_BATCH_SIZE = 960  # 20ms of PCM16 @ 24kHz
         audio_buffer = b''
         
         try:
@@ -462,11 +398,8 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                     if len(audio_buffer) >= MIN_BATCH_SIZE:
                         audio_sent_count += 1
                         
-                        # Convert linear PCM16 to μ-law for OpenAI
-                        ulaw_data = lin2ulaw(audio_buffer)
-                        
-                        # Encode as base64 for WebSocket
-                        audio_b64 = base64.b64encode(ulaw_data).decode('utf-8')
+                        # Encode as base64 for WebSocket (already PCM16@24kHz)
+                        audio_b64 = base64.b64encode(audio_buffer).decode('utf-8')
                         
                         await self.ws.send(json.dumps({
                             "type": "input_audio_buffer.append",
@@ -474,17 +407,15 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                         }))
                         
                         if audio_sent_count <= 5 or audio_sent_count % 100 == 0:
-                            logger.info(f"[OPENAI-IN] Sent #{audio_sent_count}: {len(audio_buffer)}→{len(ulaw_data)} bytes (PCM→ulaw)")
+                            logger.info(f"[OPENAI-IN] Sent #{audio_sent_count}: {len(audio_buffer)} bytes PCM16@24kHz")
                         
                         audio_buffer = b''
                         
                 except asyncio.TimeoutError:
-                    # Flush any remaining audio (160 bytes = 10ms for PCM16 @ 8kHz)
-                    if len(audio_buffer) >= 160:
+                    # Flush any remaining audio (480 bytes = 10ms for PCM16 @ 24kHz)
+                    if len(audio_buffer) >= 480:
                         audio_sent_count += 1
-                        # Convert to μ-law before sending
-                        ulaw_data = lin2ulaw(audio_buffer)
-                        audio_b64 = base64.b64encode(ulaw_data).decode('utf-8')
+                        audio_b64 = base64.b64encode(audio_buffer).decode('utf-8')
                         
                         try:
                             await self.ws.send(json.dumps({
@@ -512,18 +443,24 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
     async def receive_audio(self) -> AsyncGenerator[bytes, None]:
         """Receive audio responses from OpenAI Realtime API
         
-        Input: g711_ulaw at 8kHz (from OpenAI)
-        Converts to: Linear PCM16 at 8kHz (for Asterisk)
+        Input: PCM16 at 24kHz (OpenAI native)
+        Output: PCM16 at 24kHz (resampled to 8kHz by audiosocket_handler)
         
         Yields audio in batches of ~100ms to ensure smooth playback.
+        Uses WARMUP buffer to prevent choppy starts (like reference implementation).
         """
-        logger.info(f"Starting audio reception (μ-law→PCM16)")
+        logger.info(f"Starting audio reception (PCM16@24kHz)")
         response_count = 0
         audio_buffer = b''
+        warmup_done = False
         
         # Batch audio into ~100ms chunks for smoother playback
-        # 8kHz * 1 byte (ulaw) * 0.1s = 800 bytes
-        BATCH_SIZE = 800
+        # 24kHz * 2 bytes * 0.1s = 4800 bytes
+        BATCH_SIZE = 4800
+        
+        # Warmup buffer: 320ms of audio before starting playback
+        # This prevents choppy start (from Asterisk-AI-Voice-Agent reference)
+        WARMUP_SIZE = int(OUTPUT_SAMPLE_RATE * 2 * WARMUP_MS / 1000)  # 320ms @ 24kHz = 15360 bytes
         
         try:
             while self._running and self.ws:
@@ -537,14 +474,22 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                         response_count += 1
                         audio_b64 = msg.get("delta", "")
                         if audio_b64:
-                            audio_data = base64.b64decode(audio_b64)  # This is μ-law data
+                            audio_data = base64.b64decode(audio_b64)  # PCM16 @ 24kHz
                             audio_buffer += audio_data
                             
-                            # Yield when we have enough for smooth playback (~100ms)
+                            # WARMUP: Buffer 320ms before first yield (prevents choppy start)
+                            if not warmup_done:
+                                if len(audio_buffer) >= WARMUP_SIZE:
+                                    warmup_done = True
+                                    logger.info(f"[OPENAI-OUT] Warmup complete: {len(audio_buffer)} bytes buffered")
+                                    yield audio_buffer
+                                    audio_buffer = b''
+                                # Still warming up - don't yield yet
+                                continue
+                            
+                            # After warmup: yield when we have enough for smooth playback
                             if len(audio_buffer) >= BATCH_SIZE:
-                                # Convert μ-law to linear PCM16 for Asterisk
-                                pcm_data = ulaw2lin(audio_buffer)
-                                yield pcm_data
+                                yield audio_buffer
                                 audio_buffer = b''
                     
                     # Handle audio transcript (what the AI said)
@@ -573,10 +518,10 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                     # Handle response done - flush any remaining buffered audio
                     elif msg_type == "response.done":
                         if audio_buffer:
-                            # Convert remaining μ-law to PCM16
-                            pcm_data = ulaw2lin(audio_buffer)
-                            yield pcm_data
+                            yield audio_buffer
                             audio_buffer = b''
+                        # Reset warmup for next response
+                        warmup_done = False
                         logger.debug("Response turn complete")
                     
                     # Handle function calls
@@ -589,11 +534,13 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                         logger.error(f"OpenAI Realtime error: {error}")
                     
                 except asyncio.TimeoutError:
-                    # Flush buffer on timeout if we have accumulated audio
-                    if audio_buffer:
-                        # Convert μ-law to PCM16
-                        pcm_data = ulaw2lin(audio_buffer)
-                        yield pcm_data
+                    # Flush buffer on timeout if we have enough accumulated audio
+                    # Only yield if warmup is done OR buffer is substantial
+                    if audio_buffer and (warmup_done or len(audio_buffer) >= WARMUP_SIZE):
+                        if not warmup_done:
+                            warmup_done = True
+                            logger.info(f"[OPENAI-OUT] Warmup (timeout): {len(audio_buffer)} bytes")
+                        yield audio_buffer
                         audio_buffer = b''
                     continue
                 except ConnectionClosed:
