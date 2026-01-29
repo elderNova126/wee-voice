@@ -587,13 +587,18 @@ endpoint=zadarma-endpoint
                 result['errors'].append("Asterisk is not running or not accessible")
                 return result
             
-            logger.info("Step 1: Unregistering current registration")
+            # Step 1: Unregister and destroy current registration
+            logger.info("Step 1: Stopping current registration")
             run_ast('pjsip send unregister zadarma-registration')
-            time.sleep(1)
+            time.sleep(0.5)
             
-            # CRITICAL: Use 'pjsip reload' - this is the correct command
-            # 'module reload res_pjsip.so' does NOT properly reload config files!
-            logger.info("Step 2: Running 'pjsip reload' to re-read all config")
+            # Step 2: Reload res_pjsip_outbound_registration to clear cached state
+            logger.info("Step 2: Reloading outbound registration module")
+            run_ast('module unload res_pjsip_outbound_registration.so')
+            time.sleep(0.5)
+            
+            # Step 3: Full PJSIP reload to re-read all config files
+            logger.info("Step 3: Running 'pjsip reload' to re-read all config")
             pjsip_cmd = run_ast('pjsip reload', timeout=30)
             
             result['pjsip_reload'] = {
@@ -607,8 +612,14 @@ endpoint=zadarma-endpoint
             else:
                 logger.info(f"PJSIP reload output: {pjsip_cmd.stdout.strip()}")
             
-            # Wait for PJSIP to process the reload and start registration
-            logger.info("Step 3: Waiting for registration to establish")
+            time.sleep(0.5)
+            
+            # Step 4: Reload outbound registration module (will pick up new credentials)
+            logger.info("Step 4: Reloading outbound registration module")
+            run_ast('module load res_pjsip_outbound_registration.so')
+            
+            # Wait for registration to establish
+            logger.info("Step 5: Waiting for registration to establish")
             time.sleep(3)
             
             # Check registration status
@@ -617,7 +628,7 @@ endpoint=zadarma-endpoint
             logger.info(f"Registration status:\n{reg_status_cmd.stdout}")
             
             # Reload dialplan
-            logger.info("Step 4: Reloading dialplan")
+            logger.info("Step 6: Reloading dialplan")
             dialplan_cmd = run_ast('dialplan reload', timeout=30)
             result['dialplan_reload'] = {
                 'returncode': dialplan_cmd.returncode,
