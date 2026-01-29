@@ -141,28 +141,33 @@ class AudioSocketSession:
             # Start receive loop
             recv_task = asyncio.create_task(self._receive_loop())
             
-            # Play cached greeting IMMEDIATELY (for both OpenAI and Gemini)
-            # This ensures fast response - AI takes over for conversation
-            greeting_task = None
-            if self.greeting_audio:
-                print(f"[{self._ms(t0)}] 🎵 Playing cached greeting", flush=True)
-                greeting_task = asyncio.create_task(self._play_greeting())
-            
-            # Connect AI in parallel with greeting
-            ai_connect_task = asyncio.create_task(self._connect_ai())
-            
-            # Wait for greeting to finish
-            if greeting_task:
-                try:
-                    await greeting_task
-                except asyncio.CancelledError:
-                    pass
-            
-            # Wait for AI connection
-            ai_connected = await ai_connect_task
-            if not ai_connected:
-                recv_task.cancel()
-                return
+            # For OpenAI: Connect AI first (AI generates greeting)
+            # For Gemini: Play cached greeting while AI connects
+            if self.llm_model.startswith('gpt-'):
+                # OpenAI: Connect immediately, AI will generate greeting
+                print(f"[{self._ms(t0)}] 🔵 OpenAI: Connecting (AI generates greeting)", flush=True)
+                if not await self._connect_ai():
+                    recv_task.cancel()
+                    return
+            else:
+                # Gemini: Play cached greeting in parallel with AI connection
+                greeting_task = None
+                if self.greeting_audio:
+                    print(f"[{self._ms(t0)}] 🎵 Playing cached greeting", flush=True)
+                    greeting_task = asyncio.create_task(self._play_greeting())
+                
+                ai_connect_task = asyncio.create_task(self._connect_ai())
+                
+                if greeting_task:
+                    try:
+                        await greeting_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                ai_connected = await ai_connect_task
+                if not ai_connected:
+                    recv_task.cancel()
+                    return
             
             self.ai_ready.set()
             print(f"[{self._ms(t0)}] ✅ AI READY (pure 8kHz)", flush=True)
@@ -241,10 +246,8 @@ class AudioSocketSession:
         recv_task = asyncio.create_task(receiver())
         
         # Startup gate - buffer before playing to prevent choppy starts
-        STARTUP_MS = 500   # Buffer 500ms before starting playback
-        REBUFFER_MS = 300  # If buffer empties, wait for 300ms before resuming
-        STARTUP_BYTES = STARTUP_MS * SAMPLE_RATE * 2 // 1000  # 8000 bytes
-        REBUFFER_BYTES = REBUFFER_MS * SAMPLE_RATE * 2 // 1000  # 4800 bytes
+        STARTUP_MS = 300   # Buffer 300ms before starting playback (fast response)
+        STARTUP_BYTES = STARTUP_MS * SAMPLE_RATE * 2 // 1000  # 4800 bytes
         
         playing = False  # True after startup buffer is filled
         
@@ -563,10 +566,9 @@ class AudioSocketSession:
             self.db.commit()
             self.db.refresh(self.call)
             
-            # Cached greeting (for BOTH Gemini and OpenAI)
-            # Play pre-cached TTS greeting immediately for fast response
-            # AI then handles conversation (with skip_greeting_trigger=True)
-            if self.agent.greeting:
+            # Cached greeting (Gemini only - uses same voice as conversation)
+            # For OpenAI: AI generates greeting for voice consistency
+            if self.agent.greeting and not self.llm_model.startswith('gpt-'):
                 self.greeting_audio = get_cached_greeting_sync(
                     self.agent.greeting,
                     language=getattr(self.agent, 'language', 'fr-FR'),

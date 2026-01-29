@@ -317,13 +317,23 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                 "session": self.config
             }))
             
-            # Wait for session.created or session.updated confirmation
+            # If greeting should be triggered, send it immediately (don't wait for confirmation)
+            # This pipelines the requests for faster response
+            if self.agent.greeting and not self.skip_greeting_trigger:
+                logger.info("Triggering greeting via response.create (pipelined)")
+                await self.ws.send(json.dumps({
+                    "type": "response.create",
+                    "response": {
+                        "modalities": ["text", "audio"],
+                        "instructions": f"Say this greeting naturally: {self.agent.greeting}"
+                    }
+                }))
+            
+            # Wait for session confirmation (while greeting is being generated)
             while True:
                 response = await asyncio.wait_for(self.ws.recv(), timeout=10)
                 msg = json.loads(response)
                 msg_type = msg.get("type", "")
-                
-                logger.info(f"OpenAI Realtime: {msg_type}")
                 
                 if msg_type == "session.created":
                     logger.info("OpenAI Realtime session created")
@@ -335,26 +345,6 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                     error = msg.get("error", {})
                     logger.error(f"OpenAI Realtime error: {error}")
                     return False
-            
-            # Push initial silence to warm up VAD (from reference implementation)
-            # 0.5 seconds @ 24kHz x 2 bytes = 24000 bytes
-            silence = bytes(INPUT_SAMPLE_RATE)  # 0.5s silence at 24kHz
-            await self.ws.send(json.dumps({
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(silence).decode()
-            }))
-            logger.info(f"Sent initial silence buffer for VAD warm-up ({len(silence)} bytes @ {INPUT_SAMPLE_RATE}Hz)")
-            
-            # If greeting should be triggered, send it
-            if self.agent.greeting and not self.skip_greeting_trigger:
-                logger.info("Triggering greeting via response.create")
-                await self.ws.send(json.dumps({
-                    "type": "response.create",
-                    "response": {
-                        "modalities": ["text", "audio"],
-                        "instructions": f"Say this greeting: {self.agent.greeting}"
-                    }
-                }))
             
             logger.info(f"Successfully started OpenAI Realtime session for call {self.call.session_id}")
             return True
