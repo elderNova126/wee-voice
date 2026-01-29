@@ -237,6 +237,14 @@ class AudioSocketSession:
         
         recv_task = asyncio.create_task(receiver())
         
+        # Startup gate - buffer before playing to prevent choppy starts
+        STARTUP_MS = 500   # Buffer 500ms before starting playback
+        REBUFFER_MS = 300  # If buffer empties, wait for 300ms before resuming
+        STARTUP_BYTES = STARTUP_MS * SAMPLE_RATE * 2 // 1000  # 8000 bytes
+        REBUFFER_BYTES = REBUFFER_MS * SAMPLE_RATE * 2 // 1000  # 4800 bytes
+        
+        playing = False  # True after startup buffer is filled
+        
         # Pacer - strict 20ms cadence
         TICK = FRAME_MS / 1000.0  # 0.02s
         next_tick = time.perf_counter()
@@ -250,51 +258,82 @@ class AudioSocketSession:
                     await asyncio.sleep(sleep_for)
                 
                 # Drain queue into pending
+                stream_ended = False
                 while True:
                     try:
                         chunk = recv_queue.get_nowait()
                         if chunk is None:
-                            # End of stream
-                            if pending:
-                                frame = pending[:FRAME_SIZE].ljust(FRAME_SIZE, b'\x00')
-                                self.writer.write(header + frame)
-                                frames_sent += 1
-                            await self.writer.drain()
-                            print(f"[AUDIO] Done: {frames_sent} frames, {chunks_recv} chunks", flush=True)
-                            return
+                            stream_ended = True
+                            break
                         pending += chunk
                     except asyncio.QueueEmpty:
                         break
                 
-                # WARN if buffer gets large (but don't drop - AI sends in bursts)
-                # Buffer will naturally drain during AI's thinking pauses
-                if len(pending) > WARN_PENDING_BYTES and not warned_large_buffer:
-                    pending_ms = len(pending) * 1000 // (SAMPLE_RATE * 2)
-                    print(f"[AUDIO] ℹ Large buffer: {pending_ms}ms (AI burst - will drain)", flush=True)
-                    warned_large_buffer = True
-                elif len(pending) < WARN_PENDING_BYTES:
-                    warned_large_buffer = False
+                # Handle end of stream
+                if stream_ended:
+                    # Flush remaining audio
+                    while len(pending) >= FRAME_SIZE:
+                        frame = pending[:FRAME_SIZE]
+                        pending = pending[FRAME_SIZE:]
+                        self.writer.write(header + frame)
+                        frames_sent += 1
+                    if pending:
+                        frame = pending.ljust(FRAME_SIZE, b'\x00')
+                        self.writer.write(header + frame)
+                        frames_sent += 1
+                    await self.writer.drain()
+                    print(f"[AUDIO] Done: {frames_sent} frames, {chunks_recv} chunks", flush=True)
+                    return
                 
                 # Track max pending
                 if len(pending) > max_pending_seen:
                     max_pending_seen = len(pending)
                 
-                # Emit frame
+                pending_ms = len(pending) * 1000 // (SAMPLE_RATE * 2)
+                
+                # Large buffer warning (just informational)
+                if len(pending) > WARN_PENDING_BYTES and not warned_large_buffer:
+                    print(f"[AUDIO] ℹ Large buffer: {pending_ms}ms (AI burst)", flush=True)
+                    warned_large_buffer = True
+                elif len(pending) < WARN_PENDING_BYTES:
+                    warned_large_buffer = False
+                
+                # STARTUP GATE: Wait for buffer to fill before playing
+                if not playing:
+                    if len(pending) >= STARTUP_BYTES:
+                        playing = True
+                        print(f"[AUDIO] ▶ START: {pending_ms}ms buffered", flush=True)
+                    else:
+                        # Still buffering - send silence
+                        self.writer.write(header + SILENCE)
+                        frames_sent += 1
+                        next_tick += TICK
+                        if next_tick < time.perf_counter() - 0.1:
+                            next_tick = time.perf_counter()
+                        continue
+                
+                # REBUFFER GATE: If buffer empties, wait for refill
+                if len(pending) < FRAME_SIZE:
+                    # Buffer empty - need to rebuffer
+                    playing = False
+                    self.writer.write(header + SILENCE)
+                    frames_sent += 1
+                    next_tick += TICK
+                    if next_tick < time.perf_counter() - 0.1:
+                        next_tick = time.perf_counter()
+                    continue
+                
+                # PLAYING: Send audio frame
                 frame_time = time.perf_counter()
                 delta_ms = (frame_time - last_frame_time) * 1000
                 last_frame_time = frame_time
                 
-                if len(pending) >= FRAME_SIZE:
-                    frame = pending[:FRAME_SIZE]
-                    pending = pending[FRAME_SIZE:]
-                    self.writer.write(header + frame)
-                    frames_sent += 1
-                else:
-                    # No audio - send silence
-                    self.writer.write(header + SILENCE)
-                    frames_sent += 1
+                frame = pending[:FRAME_SIZE]
+                pending = pending[FRAME_SIZE:]
+                self.writer.write(header + frame)
+                frames_sent += 1
                 
-                # Drain writer
+                # Drain writer periodically
                 if frames_sent % 25 == 0:
                     try:
                         await self.writer.drain()
@@ -303,7 +342,6 @@ class AudioSocketSession:
                 
                 # Timing log
                 if frames_sent <= 5 or frames_sent % 500 == 0:
-                    pending_ms = len(pending) * 1000 // (SAMPLE_RATE * 2)
                     print(f"[AUDIO] #{frames_sent}: pending={pending_ms}ms, delta={delta_ms:.1f}ms, chunks={chunks_recv}", flush=True)
                 
                 next_tick += TICK
