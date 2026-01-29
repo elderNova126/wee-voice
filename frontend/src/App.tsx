@@ -26,6 +26,7 @@ import { AgentEmbedPage } from './pages/AgentEmbedPage'
 import AdminPage from './pages/AdminPage'
 import LibrariesPage from './pages/LibrariesPage'
 import SettingsPage from './pages/SettingsPage'
+import UsagePage from './pages/UsagePage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -105,6 +106,11 @@ function App() {
         <Route path="/dashboard/settings" element={
           <ProtectedRoute>
             <SettingsPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/dashboard/usage" element={
+          <ProtectedRoute>
+            <UsagePage />
           </ProtectedRoute>
         } />
         <Route path="/dashboard/profile" element={

@@ -20,7 +20,8 @@ import {
   ClockIcon,
   DevicePhoneMobileIcon,
   MagnifyingGlassIcon,
-  ShieldCheckIcon
+  ShieldCheckIcon,
+  ChartBarIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
 import { useThemeStore } from '@/store/themeStore'
@@ -40,6 +41,7 @@ const navigationItems = [
   { key: 'calls', href: '/dashboard/calls', icon: ClockIcon },
   { key: 'phoneNumbers', href: '/dashboard/phone-numbers', icon: DevicePhoneMobileIcon },
   { key: 'callbacks', href: '/dashboard/callbacks', icon: ChatBubbleLeftRightIcon },
+  { key: 'usage', href: '/dashboard/usage', icon: ChartBarIcon },
   { key: 'support', href: '/dashboard/support', icon: ChatBubbleLeftRightIcon },
 ]
 
@@ -90,6 +92,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       'libraries': t.nav.libraries,
       'phone-numbers': t.nav.phoneNumbers,
       'callbacks': t.nav.callbacks,
+      'usage': t.nav.usage,
       'support': t.nav.support,
       'settings': t.nav.settings,
       'profile': t.common.profile,
@@ -177,10 +180,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="fixed inset-y-0 left-0 flex w-72 flex-col bg-white dark:bg-gray-800 shadow-2xl">
           <div className="flex items-center justify-between px-6 py-5 ">
             <Link to="/" className="flex items-center gap-2">
-              <MicrophoneIcon className="h-8 w-8 text-white" />
-              <span className="text-xl font-bold text-white">VoiceAgent</span>
+              <img src="/weevoice_logo.svg" alt="Weevoice" className="h-8 w-auto object-contain" />
             </Link>
-            <button onClick={() => setSidebarOpen(false)} className="text-white/80 hover:text-white transition-colors">
+            <button onClick={() => setSidebarOpen(false)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors">
               <XMarkIcon className="h-6 w-6" />
             </button>
           </div>
@@ -368,10 +370,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="flex flex-col flex-grow bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-sm">
           <div className={`flex items-center ${sidebarCollapsed ? 'justify-center px-2' : 'justify-between px-6'} py-5 bg-gradient-to-r from-indigo-600 to-purple-400 relative`}>
             <Link to="/" className={`flex items-center gap-2 ${sidebarCollapsed ? 'justify-center' : ''}`}>
-              <MicrophoneIcon className="h-8 w-8 text-white flex-shrink-0" />
-              {!sidebarCollapsed && (
-                <span className="text-xl font-bold text-white whitespace-nowrap">VoiceAgent</span>
-              )}
+              <img src="/weevoice_logo.svg" alt="Weevoice" className={`object-contain invert ${sidebarCollapsed ? 'h-8 w-auto max-w-12' : 'h-8 w-auto max-w-[140px]'}`} />
             </Link>
 
           </div>
@@ -616,8 +615,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             {/* Mobile: Show current page title */}
             <div className="md:hidden flex items-center gap-2 min-w-0">
               <Link to="/" className="flex items-center gap-2">
-                <MicrophoneIcon className="h-6 w-6 text-indigo-600 flex-shrink-0" />
-                <span className="text-sm font-bold text-gray-900 dark:text-white">VoiceAgent</span>
+                <img src="/weevoice_logo.svg" alt="Weevoice" className="h-6 w-auto object-contain" />
               </Link>
               {breadcrumbs.length > 1 && (
                 <>

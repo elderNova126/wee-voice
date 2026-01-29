@@ -198,12 +198,7 @@ interface PublicAgent {
       <header className="fixed top-0 left-0 right-0 z-50 bg-white/90 dark:bg-gray-900/90 backdrop-blur-lg border-b border-gray-200 dark:border-gray-700 shadow-sm">
         <nav className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center">
-              <MicrophoneIcon className="w-6 h-6 text-white" />
-            </div>
-            <span className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-              VoiceAgent
-            </span>
+            <img src="/weevoice_logo.svg" alt="Weevoice" className="h-9 w-auto object-contain dark:invert dark:opacity-95" />
           </Link>
           <div className="flex items-center gap-3">
             {/* Public Agents Button - Highlighted */}
@@ -929,12 +924,7 @@ interface PublicAgent {
             {/* Brand + company — spans 5 cols on lg */}
             <div className="sm:col-span-2 lg:col-span-5 flex flex-col gap-6">
               <Link to="/" className="flex items-center gap-3 w-fit group">
-                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-500/25 group-hover:shadow-indigo-500/40 transition-shadow duration-300">
-                  <MicrophoneIcon className="w-6 h-6 text-white" />
-                </div>
-                <span className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                  VoiceAgent
-                </span>
+                <img src="/weevoice_logo.svg" alt="Weevoice" className="h-10 w-auto object-contain dark:invert dark:opacity-95" />
               </Link>
               <p className="text-sm text-gray-600 dark:text-gray-400 max-w-sm leading-relaxed">
                 {t.landing.footerTagline}

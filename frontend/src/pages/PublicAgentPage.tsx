@@ -518,12 +518,9 @@ export default function PublicAgentPage() {
             <span className="font-medium">{t.common.status === 'Statut' ? 'Retour à l\'accueil' : 'Back to Home'}</span>
           </Link>
           
-          <div className="flex items-center gap-2">
-            <MicrophoneIcon className="w-8 h-8 text-indigo-600" />
-            <span className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-              VoiceAgent
-            </span>
-          </div>
+          <Link to="/" className="flex items-center gap-2">
+            <img src="/weevoice_logo.svg" alt="Weevoice" className="h-8 w-auto object-contain" />
+          </Link>
         </div>
       </header>
 

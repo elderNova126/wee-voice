@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { authAPI } from '@/lib/api'
-import { MicrophoneIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline'
+import { CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline'
 
 export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams()
@@ -42,9 +42,8 @@ export default function VerifyEmailPage() {
       <div className="max-w-md w-full">
         {/* Logo */}
         <div className="text-center mb-8">
-          <Link to="/" className="inline-flex items-center space-x-2">
-            <MicrophoneIcon className="w-10 h-10 text-primary-600" />
-            <span className="text-3xl font-bold text-gray-900 dark:text-white">VoiceAgent</span>
+          <Link to="/" className="inline-flex items-center justify-center">
+            <img src="/weevoice_logo.svg" alt="Weevoice" className="h-12 w-auto object-contain" />
           </Link>
         </div>
         
