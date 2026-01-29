@@ -45,12 +45,14 @@ MSG_HANGUP = 0x00
 MSG_ERROR = 0xFF
 
 # Audio Settings
-# INPUT: 8kHz from Asterisk (ulaw/alaw native) - upsampled to 16kHz for AI models
-# OUTPUT: Model-dependent (Gemini: 24kHz, OpenAI: 16kHz) - resampled to 8kHz for Asterisk
+# INPUT: 8kHz from Asterisk (PSTN native) - upsampled to model's input rate
+# OUTPUT: Model-dependent (Gemini: 24kHz, OpenAI: 24kHz) - resampled to 8kHz for Asterisk
+# OpenAI: 8kHz → 24kHz (input), 24kHz → 8kHz (output)
+# Gemini: 8kHz → 16kHz (input), 24kHz → 8kHz (output)
 INPUT_SAMPLE_RATE = 8000   # From Asterisk (PSTN native)
 OUTPUT_SAMPLE_RATE = 24000  # Gemini output rate (legacy default)
 GEMINI_INPUT_RATE = 16000   # Gemini expects 16kHz input
-OPENAI_SAMPLE_RATE = 16000  # OpenAI Realtime uses 16kHz PCM16 (both input and output)
+OPENAI_SAMPLE_RATE = 24000  # OpenAI Realtime uses 24kHz PCM16 (both input and output)
 
 # Frame sizes (20ms frames)
 # INPUT: 8kHz * 0.02s * 2 bytes = 320 bytes
@@ -347,8 +349,8 @@ class AudioSocketSession:
         self.greeting_audio = None  # Pre-generated greeting audio (PCM 8kHz)
         self.greeting_played = False  # Flag to skip Gemini greeting if TTS greeting was played
         # LLM Model configuration
-        # - 'gemini': Native audio dialog (8kHz→16kHz input, 24kHz output)
-        # - 'gpt-*': OpenAI models (can use 8kHz directly - no input resampling needed)
+        # - 'gemini': Native audio dialog (8kHz→16kHz input, 24kHz→8kHz output)
+        # - 'gpt-*': OpenAI Realtime (8kHz→24kHz input, 24kHz→8kHz output)
         self.llm_model = 'gemini'  # Default to Gemini for voice calls
         
     async def handle(self):
@@ -521,12 +523,12 @@ class AudioSocketSession:
         print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms ({MIN_START_CHUNKS} chunks), jitter={JITTER_BUFFER_MS}ms", flush=True)
         
         # AudioSocket uses 8kHz slin by default - always send 8kHz to Asterisk
-        # AI output will be resampled: OpenAI 16kHz→8kHz, Gemini 24kHz→8kHz
+        # AI output will be resampled: OpenAI 24kHz→8kHz, Gemini 24kHz→8kHz
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
         if self.llm_model.startswith('gpt-'):
-            ai_rate = OPENAI_SAMPLE_RATE  # 16kHz from OpenAI
+            ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
             print(f"[UNIFIED] OpenAI→Asterisk: {ai_rate}Hz→{output_rate}Hz, frames={frame_size}b", flush=True)
         else:
             ai_rate = OUTPUT_SAMPLE_RATE  # 24kHz from Gemini
@@ -1572,9 +1574,15 @@ class AudioSocketSession:
             if not hasattr(self, '_caller_resample_state'):
                 self._caller_resample_state = None
             
-            # Both Gemini and OpenAI use 16kHz input - upsample from 8kHz
+            # Resample to model's input rate
+            # OpenAI uses 24kHz, Gemini uses 16kHz
+            if self.llm_model.startswith('gpt-'):
+                target_rate = OPENAI_SAMPLE_RATE  # 24kHz
+            else:
+                target_rate = GEMINI_INPUT_RATE   # 16kHz
+            
             audio_for_ai, self._caller_resample_state = simple_resample(
-                audio_8k, INPUT_SAMPLE_RATE, GEMINI_INPUT_RATE, self._caller_resample_state
+                audio_8k, INPUT_SAMPLE_RATE, target_rate, self._caller_resample_state
             )
             
             # Queue for sending to AI
@@ -1594,15 +1602,16 @@ class AudioSocketSession:
         last_send_time = None
         silence_start = None
         
-        # Both Gemini and OpenAI use 16kHz input (matching reference implementation)
-        # 16kHz * 2 bytes * 0.04s = 1280 bytes (~40ms)
-        BATCH_SIZE = 1280
-        audio_rate = 16000
-        
+        # Model-specific audio rates
+        # OpenAI: 24kHz input, Gemini: 16kHz input
         if self.llm_model.startswith('gpt-'):
-            print(f"[CALLER→AI] OpenAI mode: 16kHz audio (like reference)", flush=True)
+            audio_rate = OPENAI_SAMPLE_RATE  # 24kHz
+            BATCH_SIZE = audio_rate * 2 // 25  # 40ms = 1920 bytes at 24kHz
+            print(f"[CALLER→AI] OpenAI mode: {audio_rate}Hz audio", flush=True)
         else:
-            print(f"[CALLER→AI] Gemini mode: 16kHz audio", flush=True)
+            audio_rate = GEMINI_INPUT_RATE  # 16kHz
+            BATCH_SIZE = audio_rate * 2 // 25  # 40ms = 1280 bytes at 16kHz
+            print(f"[CALLER→AI] Gemini mode: {audio_rate}Hz audio", flush=True)
         
         print(f"[CALLER→AI] Loop STARTED (batch={BATCH_SIZE}b, rate={audio_rate}Hz)", flush=True)
         try:
@@ -1678,13 +1687,13 @@ class AudioSocketSession:
         total_bytes_out = 0
         
         # Determine source rate based on model
-        # OpenAI: 16kHz output, Gemini: 24kHz output
+        # OpenAI: 24kHz output, Gemini: 24kHz output (both are 24kHz!)
         if self.llm_model.startswith('gpt-'):
-            source_rate = OPENAI_SAMPLE_RATE  # 16kHz
-            print(f"[AI→AUDIO] Receive loop STARTED (OpenAI 16kHz → 8kHz)", flush=True)
+            source_rate = OPENAI_SAMPLE_RATE  # 24kHz
+            print(f"[AI→AUDIO] Receive loop STARTED (OpenAI {source_rate}Hz → 8kHz)", flush=True)
         else:
             source_rate = OUTPUT_SAMPLE_RATE  # 24kHz (Gemini)
-            print(f"[AI→AUDIO] Receive loop STARTED (Gemini 24kHz → 8kHz)", flush=True)
+            print(f"[AI→AUDIO] Receive loop STARTED (Gemini {source_rate}Hz → 8kHz)", flush=True)
         
         try:
             async for audio_from_ai in self.agent_service.receive_audio():

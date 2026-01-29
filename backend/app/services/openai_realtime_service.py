@@ -44,12 +44,12 @@ OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 # Supported: alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar
 OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
 
-# Audio configuration - Match OpenAI's recommended format
-# Reference: AsteriskOpenAIRealtimeAssistant uses pcm16 at 16kHz
-# This is what OpenAI Realtime API is optimized for
-AUDIO_FORMAT = "pcm16"      # 16-bit PCM (OpenAI native format)
-INPUT_SAMPLE_RATE = 16000   # 16kHz input (OpenAI optimized)
-OUTPUT_SAMPLE_RATE = 16000  # 16kHz output (OpenAI optimized)
+# Audio configuration - OpenAI Realtime API uses 24kHz PCM16
+# Reference: https://platform.openai.com/docs/guides/realtime
+# OpenAI Realtime ALWAYS uses 24000Hz sample rate for both input and output
+AUDIO_FORMAT = "pcm16"         # 16-bit PCM (OpenAI native format)
+INPUT_SAMPLE_RATE = 24000      # 24kHz input (OpenAI native)
+OUTPUT_SAMPLE_RATE = 24000     # 24kHz output (OpenAI native)
 
 
 class OpenAIRealtimeService:
@@ -212,17 +212,19 @@ VOICE QUALITY INSTRUCTIONS:
         logger.info(f"  - Model: {self.model}")
         
         # Build session config for OpenAI Realtime API
-        # Match reference implementation: 16kHz PCM16 with server VAD
+        # OpenAI Realtime uses 24kHz PCM16 - format is just a string, not an object!
         config = {
             "modalities": ["text", "audio"],
             "instructions": system_instruction,
             "voice": voice_name,
-            "input_audio_format": {"type": AUDIO_FORMAT, "sample_rate_hz": INPUT_SAMPLE_RATE},
-            "output_audio_format": {"type": AUDIO_FORMAT, "sample_rate_hz": OUTPUT_SAMPLE_RATE},
-            "input_audio_transcription": {"enabled": True},
+            "input_audio_format": AUDIO_FORMAT,    # Just "pcm16" string
+            "output_audio_format": AUDIO_FORMAT,   # Just "pcm16" string
+            "input_audio_transcription": {"model": "whisper-1"},
             "turn_detection": {
                 "type": "server_vad",
-                "silence_duration_ms": 300  # Match reference: 300ms
+                "threshold": 0.5,
+                "prefix_padding_ms": 300,
+                "silence_duration_ms": 500
             },
             "temperature": float(self.agent.temperature) if hasattr(self.agent, 'temperature') else 0.7,
         }
@@ -315,13 +317,13 @@ VOICE QUALITY INSTRUCTIONS:
                     return False
             
             # Push initial silence to warm up VAD (from reference implementation)
-            # 0.5 seconds @ 16kHz x 2 bytes = 16000 bytes
-            silence = bytes(16000)  # 0.5s silence
+            # 0.5 seconds @ 24kHz x 2 bytes = 24000 bytes
+            silence = bytes(INPUT_SAMPLE_RATE)  # 0.5s silence at 24kHz
             await self.ws.send(json.dumps({
                 "type": "input_audio_buffer.append",
                 "audio": base64.b64encode(silence).decode()
             }))
-            logger.info("Sent initial silence buffer for VAD warm-up")
+            logger.info(f"Sent initial silence buffer for VAD warm-up ({len(silence)} bytes @ {INPUT_SAMPLE_RATE}Hz)")
             
             # If greeting should be triggered, send it
             if self.agent.greeting and not self.skip_greeting_trigger:
@@ -357,9 +359,9 @@ VOICE QUALITY INSTRUCTIONS:
         logger.info(f"[OPENAI-IN] Starting audio input loop")
         audio_sent_count = 0
         
-        # Batch audio for pcm16 @ 16kHz: 16000 * 2 bytes * 0.02s = 640 bytes (20ms)
-        # Match reference implementation: 20ms frames
-        MIN_BATCH_SIZE = 640
+        # Batch audio for pcm16 @ 24kHz: 24000 * 2 bytes * 0.02s = 960 bytes (20ms)
+        # OpenAI Realtime uses 24kHz native
+        MIN_BATCH_SIZE = 960
         audio_buffer = b''
         
         try:
