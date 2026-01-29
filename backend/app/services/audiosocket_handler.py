@@ -574,7 +574,9 @@ class AudioSocketSession:
         attack_state = None
         pending = b''  # Frame remainder buffer
         startup_ready = False
-        # No rebuffer variables needed - we NEVER stop (like reference implementation)
+        # Track silence frames to reset startup_ready for each new AI response
+        silence_frames = 0
+        SILENCE_RESET_FRAMES = 15  # After 300ms of silence (15 * 20ms), reset startup gate
         last_real_emit_ts = 0.0
         
         stats = {
@@ -592,8 +594,11 @@ class AudioSocketSession:
             Key fix: NEVER stop the pacer - just emit silence during underruns.
             This matches the reference implementation which NEVER stops,
             eliminating the choppy audio from stop/wait/restart cycles.
+            
+            Key fix #2: Reset startup_ready after 300ms of silence, so each new
+            AI response gets proper startup buffering (fixes choppy first word).
             """
-            nonlocal pending, startup_ready, last_real_emit_ts
+            nonlocal pending, startup_ready, silence_frames, last_real_emit_ts
             
             next_tick = time.perf_counter()
             sentinel_seen = False
@@ -652,6 +657,9 @@ class AudioSocketSession:
                 if buf_level >= frame_size:
                     frame = pending[:frame_size]
                     pending = pending[frame_size:]
+                    
+                    # Reset silence counter - we're emitting real audio
+                    silence_frames = 0
                     
                     # Apply smooth FADE-OUT when buffer is getting low (< 160ms remaining)
                     # Uses cosine curve for natural sound
@@ -714,15 +722,26 @@ class AudioSocketSession:
                             stats['underrun_partial'] += 1
                         except:
                             break
+                        silence_frames = 0  # Partial audio - reset counter
                     else:
                         # Completely empty - just emit silence and KEEP GOING
                         # (Reference: they emit silence_factory(chunk_bytes) during underruns)
                         try:
-                            self.writer.write(header + SILENCE_FRAME)
+                            self.writer.write(header + COMFORT_NOISE_FRAME)
                             stats['sent'] += 1
                             stats['underrun_empty'] += 1
                         except:
                             break
+                        
+                        # Track consecutive silence frames
+                        silence_frames += 1
+                        
+                        # After 300ms of continuous silence, reset startup_ready
+                        # This ensures the NEXT AI response gets proper startup buffering
+                        # (fixes choppy first word after user speaks)
+                        if silence_frames >= SILENCE_RESET_FRAMES and startup_ready:
+                            startup_ready = False
+                            print(f"[PACER] 🔄 Reset startup gate (next response will buffer 400ms)", flush=True)
                     
                     stats['underruns'] += 1
                 
