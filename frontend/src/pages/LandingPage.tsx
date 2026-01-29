@@ -920,7 +920,7 @@ interface PublicAgent {
 
       {/* Footer */}
       <footer className="py-12 px-6 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <div className="max-w-7xl mx-auto">
+        <div className="max-w-7xl mx-auto space-y-6">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center">
@@ -942,6 +942,11 @@ interface PublicAgent {
                 {t.landing.support}
               </Link>
             </div>
+          </div>
+          <div className="text-center text-sm text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 pt-6">
+            <p className="font-medium text-gray-700 dark:text-gray-300">Exatek (SA)</p>
+            <p>VAT: BE 0831.113.519</p>
+            <p>Rue de la Colonne 1A, 1080 Molenbeek-Saint-Jean</p>
           </div>
         </div>
       </footer>
