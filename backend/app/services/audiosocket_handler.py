@@ -470,17 +470,17 @@ class AudioSocketSession:
             else:
                 print(f"{ts()} ⚠ No cached greeting - AI will generate", flush=True)
             
-            # Connect to Gemini IN PARALLEL with greeting playback
-            print(f"{ts()} Connecting to Gemini (parallel)...", flush=True)
+            # Connect to AI IN PARALLEL with greeting playback
+            print(f"{ts()} Connecting to AI (parallel)...", flush=True)
             gemini_start = time.time()
             if not await self._connect_gemini():
-                print(f"{ts()} [HANDLE] Gemini connection FAILED", flush=True)
+                print(f"{ts()} [HANDLE] AI connection FAILED", flush=True)
                 if greeting_task:
                     greeting_task.cancel()
                 receive_task.cancel()
                 return
             gemini_time = (time.time() - gemini_start) * 1000
-            print(f"{ts()} Gemini connected in {gemini_time:.0f}ms", flush=True)
+            print(f"{ts()} AI connected in {gemini_time:.0f}ms", flush=True)
             
             # Wait for greeting to finish if it's still playing
             if greeting_task:
@@ -533,7 +533,7 @@ class AudioSocketSession:
         Conversation is choppy because Gemini generates in real-time with pauses.
         """
         import time
-        print(f"[UNIFIED] Starting ASYNC pacer (large buffer for Gemini bursts)", flush=True)
+        print(f"[UNIFIED] Starting ASYNC pacer (large buffer for AI bursts)", flush=True)
         
         # === BUFFER SETTINGS for smooth audio ===
         # Optimized for OpenAI Realtime which sends audio in bursts
@@ -542,7 +542,7 @@ class AudioSocketSession:
         RESUME_BUFFER_MS = 300       # Buffer 300ms before resuming after dry
         JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for AI bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
-        EMPTY_BACKOFF_MAX = 5        # Mark buffer dry after 100ms (5 * 20ms) - faster detection
+        EMPTY_BACKOFF_MAX = 50       # Mark buffer dry after 1000ms (50 * 20ms) - only for real pauses
         
         # Derived values - now using actual milliseconds, not chunk counts
         TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02s = 20ms per tick
@@ -552,7 +552,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, resume={RESUME_BUFFER_MS}ms, dry={EMPTY_BACKOFF_MAX*20}ms, fade=80ms, comfort_noise=ON", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, resume={RESUME_BUFFER_MS}ms, dry_detect={EMPTY_BACKOFF_MAX*20}ms, fade=80ms, comfort_noise=ON", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
