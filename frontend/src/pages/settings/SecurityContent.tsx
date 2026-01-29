@@ -44,8 +44,7 @@ export default function SecurityContent() {
   const [ips, setIPs] = useState<IPAllowlist[]>([])
   const [logs, setLogs] = useState<SecurityLog[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'domains' | 'ips' | 'logs'>('domains')
-  
+
   // Form states
   const [showDomainModal, setShowDomainModal] = useState(false)
   const [showIPModal, setShowIPModal] = useState(false)
@@ -195,59 +194,22 @@ export default function SecurityContent() {
   const getSeverityColor = (severity: string) => {
     switch (severity.toLowerCase()) {
       case 'critical':
-        return 'bg-red-100 text-red-800'
+        return 'bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300'
       case 'error':
-        return 'bg-red-50 text-red-700'
+        return 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300'
       case 'warning':
-        return 'bg-yellow-100 text-yellow-800'
+        return 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300'
       case 'info':
-        return 'bg-blue-100 text-blue-800'
+        return 'bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300'
       default:
-        return 'bg-gray-100 text-gray-800'
+        return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
     }
   }
 
   return (
-    <div className="max-w-7xl mx-auto">
-      {/* Tabs */}
-      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
-        <nav className="-mb-px flex space-x-8">
-          <button
-            onClick={() => setActiveTab('domains')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === 'domains'
-                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-            }`}
-          >
-            {t.common.status === 'Statut' ? 'Liste blanche des domaines' : 'Domain Allowlist'}
-          </button>
-          <button
-            onClick={() => setActiveTab('ips')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === 'ips'
-                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-            }`}
-          >
-            {t.common.status === 'Statut' ? 'Liste blanche des IP' : 'IP Allowlist'}
-          </button>
-          <button
-            onClick={() => setActiveTab('logs')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === 'logs'
-                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-            }`}
-          >
-            {t.security.loginHistory}
-          </button>
-        </nav>
-      </div>
-
-      {/* Domain Allowlist Tab */}
-      {activeTab === 'domains' && (
-        <div className="space-y-6">
+    <div className="max-w-7xl mx-auto space-y-8">
+      {/* Domain Allowlist */}
+      <div className="space-y-6">
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
             <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">{t.common.status === 'Statut' ? 'À propos de la liste blanche des domaines' : 'About Domain Allowlist'}</h3>
             <p className="text-sm text-blue-800 dark:text-blue-200">
@@ -278,9 +240,9 @@ export default function SecurityContent() {
                           <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
                         </div>
                         <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-64 mb-3 animate-pulse"></div>
-                        <div className="bg-gray-50 rounded p-3 mb-2">
-                          <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-24 mb-1 animate-pulse"></div>
-                          <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-full animate-pulse"></div>
+                        <div className="bg-gray-50 dark:bg-gray-700/50 rounded p-3 mb-2">
+                          <div className="h-3 bg-gray-200 dark:bg-gray-600 rounded w-24 mb-1 animate-pulse"></div>
+                          <div className="h-3 bg-gray-200 dark:bg-gray-600 rounded w-full animate-pulse"></div>
                         </div>
                         <div className="flex gap-4">
                           <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-24 animate-pulse"></div>
@@ -366,11 +328,9 @@ export default function SecurityContent() {
             )}
           </div>
         </div>
-      )}
 
-      {/* IP Allowlist Tab */}
-      {activeTab === 'ips' && (
-        <div className="space-y-6">
+      {/* IP Allowlist */}
+      <div className="space-y-6">
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
             <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">{t.common.status === 'Statut' ? 'À propos de la liste blanche des IP' : 'About IP Allowlist'}</h3>
             <p className="text-sm text-blue-800 dark:text-blue-200">
@@ -465,12 +425,10 @@ export default function SecurityContent() {
             )}
           </div>
         </div>
-      )}
 
-      {/* Security Logs Tab */}
-      {activeTab === 'logs' && (
-        <div className="space-y-6">
-          <h2 className="text-xl font-semibold">{t.common.status === 'Statut' ? 'Événements de sécurité' : 'Security Events'}</h2>
+      {/* Login History / Security Events */}
+      <div className="space-y-6">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.security.loginHistory}</h2>
           
           <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
             {loading ? (
@@ -523,7 +481,6 @@ export default function SecurityContent() {
             )}
           </div>
         </div>
-      )}
 
       {/* Add Domain Modal */}
       {showDomainModal && (
