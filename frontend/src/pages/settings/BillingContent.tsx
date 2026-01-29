@@ -48,7 +48,6 @@ export default function BillingContent() {
   const [subscription, setSubscription] = useState<Subscription | null>(null)
   const [creditBalance, setCreditBalance] = useState<CreditBalance | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'invoices'>('overview')
   const [selectedTier, setSelectedTier] = useState<string>('')
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
   const [showTopUpModal, setShowTopUpModal] = useState(false)
@@ -191,71 +190,32 @@ export default function BillingContent() {
   ]
 
   return (
-    <div className="max-w-7xl mx-auto">
-      {/* Tabs */}
-      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
-        <nav className="-mb-px flex space-x-8">
+    <div className="max-w-7xl mx-auto space-y-6">
+      {/* Credit Balance */}
+      <div className="bg-gradient-to-r from-orange-400 to-pink-500 dark:from-orange-600 dark:to-pink-700 shadow-lg rounded-lg p-6 text-white">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm opacity-90 mb-2">{t.common.status === 'Statut' ? 'Crédits disponibles' : 'Available Credits'}</p>
+            {loading ? (
+              <div className="h-12 bg-white bg-opacity-20 rounded w-40 animate-pulse"></div>
+            ) : (
+              <p className="text-5xl font-bold">
+                ${creditBalance?.balance?.toFixed(2) || '0.00'}
+              </p>
+            )}
+            <p className="text-sm opacity-75 mt-2">{t.common.status === 'Statut' ? 'Paiement à l\'utilisation • Aucuns frais mensuels' : 'Pay-as-you-go • No monthly fees'}</p>
+          </div>
           <button
-            onClick={() => setActiveTab('overview')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === 'overview'
-                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-            }`}
+            onClick={() => setShowTopUpModal(true)}
+            className="px-8 py-3 bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 font-semibold shadow-md transition-all hover:scale-105"
           >
-            {t.common.status === 'Statut' ? 'Vue d\'ensemble' : 'Overview'}
+            + {t.common.status === 'Statut' ? 'Recharger les crédits' : 'Top Up Credits'}
           </button>
-          <button
-            onClick={() => setActiveTab('transactions')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === 'transactions'
-                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-            }`}
-          >
-            {t.common.status === 'Statut' ? 'Transactions' : 'Transactions'}
-          </button>
-          <button
-            onClick={() => setActiveTab('invoices')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === 'invoices'
-                ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-            }`}
-          >
-            {t.billing.invoices}
-          </button>
-        </nav>
+        </div>
       </div>
 
-      {/* Overview Tab */}
-      {activeTab === 'overview' && (
-        <div className="space-y-6">
-          {/* Credit Balance */}
-          <div className="bg-gradient-to-r from-orange-400 to-pink-500 dark:from-orange-600 dark:to-pink-700 shadow-lg rounded-lg p-6 text-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm opacity-90 mb-2">{t.common.status === 'Statut' ? 'Crédits disponibles' : 'Available Credits'}</p>
-                {loading ? (
-                  <div className="h-12 bg-white bg-opacity-20 rounded w-40 animate-pulse"></div>
-                ) : (
-                  <p className="text-5xl font-bold">
-                    ${creditBalance?.balance?.toFixed(2) || '0.00'}
-                  </p>
-                )}
-                <p className="text-sm opacity-75 mt-2">{t.common.status === 'Statut' ? 'Paiement à l\'utilisation • Aucuns frais mensuels' : 'Pay-as-you-go • No monthly fees'}</p>
-              </div>
-              <button
-                onClick={() => setShowTopUpModal(true)}
-                className="px-8 py-3 bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 font-semibold shadow-md transition-all hover:scale-105"
-              >
-                + {t.common.status === 'Statut' ? 'Recharger les crédits' : 'Top Up Credits'}
-              </button>
-            </div>
-          </div>
-
-          {/* Pricing Plans */}
-          {showUpgradeModal && (
+      {/* Pricing Plans Modal */}
+      {showUpgradeModal && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
               <div className="bg-white dark:bg-gray-800 rounded-lg p-8 max-w-6xl w-full mx-4 max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-6">
@@ -312,52 +272,12 @@ export default function BillingContent() {
             </div>
           )}
 
-          {/* Recent Transactions */}
-          <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
-            <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">{t.common.status === 'Statut' ? 'Transactions récentes' : 'Recent Transactions'}</h2>
-            {loading ? (
-              <div className="space-y-3">
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className="flex items-center justify-between py-3 border-b border-gray-200 dark:border-gray-700">
-                    <div className="flex-1">
-                      <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-48 mb-2 animate-pulse"></div>
-                      <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-32 animate-pulse"></div>
-                    </div>
-                    <div className="text-right">
-                      <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-20 mb-2 animate-pulse"></div>
-                      <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-16 animate-pulse"></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : transactions.length === 0 ? (
-              <p className="text-gray-500 dark:text-gray-400">{t.common.status === 'Statut' ? 'Aucune transaction pour le moment' : 'No transactions yet'}</p>
-            ) : (
-              <div className="space-y-3">
-                {transactions.slice(0, 5).map((transaction) => (
-                  <div key={transaction.id} className="flex items-center justify-between py-3 border-b border-gray-200 dark:border-gray-700">
-                    <div>
-                      <p className="font-medium text-gray-900 dark:text-white">{transaction.description || (t.common.status === 'Statut' ? 'Paiement' : 'Payment')}</p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">{formatDate(transaction.created_at)}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold text-gray-900 dark:text-white">{formatCurrency(transaction.amount, transaction.currency)}</p>
-                      <span className={`text-xs px-2 py-1 rounded ${getStatusColor(transaction.status)}`}>
-                        {transaction.status}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+      {/* Transactions */}
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.common.status === 'Statut' ? 'Transactions' : 'Transactions'}</h2>
         </div>
-      )}
-
-      {/* Transactions Tab */}
-      {activeTab === 'transactions' && (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+        <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead className="bg-gray-50 dark:bg-gray-900">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{t.common.status === 'Statut' ? 'Date' : 'Date'}</th>
@@ -409,12 +329,13 @@ export default function BillingContent() {
             </div>
           )}
         </div>
-      )}
 
-      {/* Invoices Tab */}
-      {activeTab === 'invoices' && (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+      {/* Invoices */}
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t.billing.invoices}</h2>
+        </div>
+        <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead className="bg-gray-50 dark:bg-gray-900">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{t.common.status === 'Statut' ? 'Facture #' : 'Invoice #'}</th>
@@ -485,7 +406,6 @@ export default function BillingContent() {
             </div>
           )}
         </div>
-      )}
 
       {/* Top Up Credits Modal */}
       {showTopUpModal && (
