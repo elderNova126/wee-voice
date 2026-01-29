@@ -462,9 +462,9 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
         response_count = 0
         audio_buffer = b''
         
-        # Warmup: Buffer 300ms before yielding first chunk of each response
-        # μ-law @ 8kHz: 8000 * 1 byte * 0.3s = 2400 bytes
-        WARMUP_SIZE = 2400  # 300ms warmup for each response
+        # Warmup: Buffer 400ms before yielding first chunk of each response
+        # μ-law @ 8kHz: 8000 * 1 byte * 0.4s = 3200 bytes
+        WARMUP_SIZE = 3200  # 400ms warmup for each response
         BATCH_SIZE = 800    # 100ms batches after warmup
         
         # Track per-response state
@@ -534,6 +534,9 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                             audio_buffer = b''
                         # Reset for next response - next response will warmup again
                         response_started = False
+                        # Signal response end to audiosocket handler (empty bytes = response boundary)
+                        # This allows audiosocket handler to reset startup_ready for next response
+                        yield b'__RESPONSE_END__'
                         logger.debug("Response complete, reset warmup for next")
                     
                     # Handle function calls

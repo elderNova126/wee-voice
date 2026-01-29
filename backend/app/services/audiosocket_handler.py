@@ -539,9 +539,9 @@ class AudioSocketSession:
         print(f"[UNIFIED] Starting ASYNC pacer (large buffer for AI bursts)", flush=True)
         
         # === BUFFER SETTINGS for smooth audio ===
-        # OpenAI service now pre-buffers 300ms per response, so reduce startup here
+        # OpenAI service pre-buffers 400ms per response + handler buffers 300ms
         CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
-        MIN_START_MS = 200           # Buffer 200ms (OpenAI adds 300ms = 500ms total)
+        MIN_START_MS = 300           # Buffer 300ms (OpenAI adds 400ms = 700ms total)
         # RESUME_BUFFER_MS removed - no rebuffer mode (like reference implementation)
         JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for AI bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
@@ -555,7 +555,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, NO silence_reset, OpenAI warmup=300ms/response", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, response_boundary_reset, OpenAI warmup=400ms", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 8kHz from OpenAI (NO resampling!)
@@ -576,7 +576,9 @@ class AudioSocketSession:
         startup_ready = False
         # Track underrun streak for fade-in when resuming
         underrun_streak = 0
-        FADE_IN_FRAMES = 4  # 80ms fade-in after underrun recovery
+        FADE_IN_FRAMES = 8  # 160ms fade-in after underrun recovery (was 80ms)
+        # Signal to reset startup_ready when new response starts
+        reset_startup_flag = False
         last_real_emit_ts = 0.0
         
         stats = {
@@ -595,9 +597,10 @@ class AudioSocketSession:
             This matches the reference implementation which NEVER stops,
             eliminating the choppy audio from stop/wait/restart cycles.
             
-            OpenAI service handles per-response warmup (300ms), so no reset needed here.
+            OpenAI service handles per-response warmup (300ms).
+            We also check reset_startup_flag to reset for each new response.
             """
-            nonlocal pending, startup_ready, underrun_streak, last_real_emit_ts
+            nonlocal pending, startup_ready, underrun_streak, reset_startup_flag, last_real_emit_ts
             
             next_tick = time.perf_counter()
             sentinel_seen = False
@@ -605,6 +608,12 @@ class AudioSocketSession:
             print(f"[PACER] Starting async pacer loop (20ms cadence)", flush=True)
             
             while self.is_running:
+                # === CHECK FOR RESPONSE BOUNDARY RESET ===
+                if reset_startup_flag:
+                    startup_ready = False
+                    reset_startup_flag = False
+                    print(f"[PACER] 🔄 Reset for new response (will buffer {MIN_START_MS}ms)", flush=True)
+                
                 # === TIMING (like _pacer_loop) ===
                 now = time.perf_counter()
                 sleep_for = next_tick - now
@@ -772,7 +781,7 @@ class AudioSocketSession:
             4. Apply normalization (target_rms=1400, max_gain=18dB)
             5. Send 8kHz audio to Asterisk
             """
-            nonlocal attack_state
+            nonlocal attack_state, reset_startup_flag
             first_chunk = True
             attack_done = False
             resample_state = None  # For stateful resampling
@@ -783,6 +792,14 @@ class AudioSocketSession:
                 async for audio_from_ai in self.agent_service.receive_audio():
                     if not self.is_running:
                         break
+                    
+                    # Check for response boundary marker
+                    if audio_from_ai == b'__RESPONSE_END__':
+                        # Signal pacer to reset startup_ready for next response
+                        reset_startup_flag = True
+                        print(f"[RECV] 📍 Response boundary - next response will buffer", flush=True)
+                        continue
+                    
                     if not audio_from_ai or len(audio_from_ai) < 2:
                         continue
                     if len(audio_from_ai) % 2:
