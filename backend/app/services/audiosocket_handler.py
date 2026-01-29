@@ -509,18 +509,20 @@ class AudioSocketSession:
         # Gemini sends audio in bursts with 200-500ms gaps between phrases
         # We need enough buffer to bridge these gaps smoothly
         CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
-        MIN_START_MS = 300           # Buffer 300ms before starting playback (15 frames)
+        MIN_START_MS = 200           # Buffer 200ms before starting playback (10 frames)
+        RESUME_BUFFER_MS = 100       # Buffer 100ms before RESUMING after pause (5 frames) - FIX FOR CHOPPY START
         JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for Gemini's bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
         PROVIDER_GRACE_MS = 1500     # Wait 1.5s before sending silence (Gemini pause tolerance)
         EMPTY_BACKOFF_MAX = 25       # Wait 500ms (25 * 20ms) before filler
         
         # Derived values
-        MIN_START_CHUNKS = max(1, MIN_START_MS // CHUNK_SIZE_MS)  # 6 chunks
-        LOW_WATERMARK_CHUNKS = max(0, LOW_WATERMARK_MS // CHUNK_SIZE_MS)  # 4 chunks
+        MIN_START_CHUNKS = max(1, MIN_START_MS // CHUNK_SIZE_MS)  # 10 chunks (200ms)
+        RESUME_BUFFER_CHUNKS = max(1, RESUME_BUFFER_MS // CHUNK_SIZE_MS)  # 5 chunks (100ms)
+        LOW_WATERMARK_CHUNKS = max(0, LOW_WATERMARK_MS // CHUNK_SIZE_MS)  # 10 chunks
         TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02
         
-        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms ({MIN_START_CHUNKS} chunks), jitter={JITTER_BUFFER_MS}ms", flush=True)
+        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms, resume_buf={RESUME_BUFFER_MS}ms, jitter={JITTER_BUFFER_MS}ms", flush=True)
         
         # AudioSocket uses 8kHz slin by default - always send 8kHz to Asterisk
         # AI output will be resampled: OpenAI 24kHz→8kHz, Gemini 24kHz→8kHz
@@ -544,6 +546,7 @@ class AudioSocketSession:
         attack_state = None
         pending = b''  # Frame remainder buffer
         startup_ready = False
+        needs_rebuffer = False  # True when we've been dry and need to rebuffer before resuming
         empty_backoff = 0
         last_real_emit_ts = 0.0
         
@@ -558,8 +561,12 @@ class AudioSocketSession:
             """
             ASYNC pacer loop - EXACT copy of Asterisk-AI-Voice-Agent's _pacer_loop + _drain_next_frame.
             Runs at steady 20ms cadence, draining jitter buffer.
+            
+            Key fix: When buffer goes dry during a response pause, we set needs_rebuffer=True.
+            This ensures we wait for RESUME_BUFFER_CHUNKS before resuming playback,
+            preventing the "choppy start" at the beginning of each new response.
             """
-            nonlocal pending, startup_ready, empty_backoff, last_real_emit_ts
+            nonlocal pending, startup_ready, needs_rebuffer, empty_backoff, last_real_emit_ts
             
             next_tick = time.perf_counter()
             sentinel_seen = False
@@ -605,6 +612,17 @@ class AudioSocketSession:
                         next_tick += TICK_SECONDS
                         continue  # Wait for more audio
                 
+                # === REBUFFER GATE (fix choppy start of new responses) ===
+                # When resuming after a pause, wait for minimum buffer before playing
+                if needs_rebuffer:
+                    if available_frames >= RESUME_BUFFER_CHUNKS:
+                        needs_rebuffer = False
+                        bytes_per_ms = output_rate * 2 // 1000
+                        print(f"[PACER] ▶ RESUME: {buf_level/bytes_per_ms:.0f}ms rebuffered", flush=True)
+                    else:
+                        next_tick += TICK_SECONDS
+                        continue  # Wait for rebuffer to fill
+                
                 # === EMIT FRAME ===
                 if buf_level >= frame_size:
                     # Have audio - send it
@@ -638,32 +656,30 @@ class AudioSocketSession:
                     print(f"[PACER] ✓ Done: {stats['sent']} frames ({output_rate}Hz), under={stats['underruns']}, waits={stats['wait_recoveries']}", flush=True)
                     break
                 
-                elif startup_ready and jitter_buffer.empty():
+                elif startup_ready and jitter_buffer.empty() and len(pending) < frame_size:
                     # Buffer empty after startup - use backoff to wait for more audio
                     # ROOT CAUSE OF CHOPPY: We were sending silence too quickly during Gemini pauses
                     if empty_backoff < EMPTY_BACKOFF_MAX:
                         empty_backoff += 1
                         stats['wait_recoveries'] += 1
-                        # Skip this tick - wait for more audio from Gemini
+                        # Skip this tick - wait for more audio from AI
                         # This is the key fix: WAIT instead of sending silence
                     else:
-                        # Backoff exhausted - check if we're within grace period
+                        # Backoff exhausted - set needs_rebuffer for when audio resumes
+                        # This prevents choppy start of new responses!
+                        if not needs_rebuffer:
+                            needs_rebuffer = True
+                            print(f"[PACER] ⏸ Buffer dry, will rebuffer on resume", flush=True)
+                        
+                        # Check if we're within grace period
                         time_since_real = (time.perf_counter() - last_real_emit_ts) * 1000 if last_real_emit_ts else 0
                         
                         # During PROVIDER_GRACE_MS, keep connection alive with minimal audio
-                        # This bridges Gemini's pauses without causing choppy audio
+                        # This bridges AI's pauses without causing choppy audio
                         if time_since_real < PROVIDER_GRACE_MS:
-                            # Send any partial pending data or very quiet filler
-                            if pending:
-                                frame = pending + (b'\x00' * (frame_size - len(pending)))
-                                pending = b''
-                                stats['underrun_partial'] += 1
-                            else:
-                                # Send 8kHz silence to keep audio stream alive
-                                frame = SILENCE_FRAME
-                                stats['underrun_empty'] += 1
+                            # Send silence to keep stream alive
                             stats['underruns'] += 1
-                            # Use 8kHz silence frame (AudioSocket format)
+                            stats['underrun_empty'] += 1
                             try:
                                 self.writer.write(header + SILENCE_FRAME)
                                 write_buf = self.writer.transport.get_write_buffer_size()
@@ -672,8 +688,7 @@ class AudioSocketSession:
                                 stats['sent'] += 1
                             except:
                                 break
-                        # After grace period, just wait - Gemini might be thinking
-                        # Don't reset backoff - keep waiting
+                        # After grace period, just wait - AI might be thinking
                         empty_backoff = EMPTY_BACKOFF_MAX  # Stay in wait mode
                 
                 next_tick += TICK_SECONDS
@@ -1465,6 +1480,9 @@ class AudioSocketSession:
         
         # Apply normalization for consistent volume (on 8kHz audio)
         audio_8k = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
+        
+        # Apply attack envelope to prevent pop at start of greeting
+        audio_8k, _ = apply_attack_envelope(audio_8k, INPUT_SAMPLE_RATE, AUDIO_ATTACK_MS, None)
         
         # AudioSocket uses 8kHz slin by default - NO upsampling needed!
         # The audio is already 8kHz from TTS cache
