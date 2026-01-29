@@ -51,10 +51,8 @@ AUDIO_FORMAT = "pcm16"         # PCM16 (OpenAI native format)
 INPUT_SAMPLE_RATE = 24000      # 24kHz input (OpenAI native)
 OUTPUT_SAMPLE_RATE = 24000     # 24kHz output (OpenAI native)
 
-# Warmup buffer before playback (prevents choppy first word)
-# Increased from 320ms to 500ms to ensure first word is fully buffered
-# This applies to EACH response (greeting and replies)
-WARMUP_MS = 500  # Buffer 500ms before starting playback each response
+# Note: Warmup buffering is handled by audiosocket_handler (400ms startup buffer)
+# The handler also resets the startup gate after 300ms of silence for new responses
 
 
 class OpenAIRealtimeService:
@@ -447,21 +445,16 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
         Input: PCM16 at 24kHz (OpenAI native)
         Output: PCM16 at 24kHz (resampled to 8kHz by audiosocket_handler)
         
-        Yields audio in batches of ~100ms to ensure smooth playback.
-        Uses WARMUP buffer to prevent choppy starts (like reference implementation).
+        Yields audio in batches for smooth playback.
+        Note: audiosocket_handler has its own 400ms startup buffer, so no warmup needed here.
         """
         logger.info(f"Starting audio reception (PCM16@24kHz)")
         response_count = 0
         audio_buffer = b''
-        warmup_done = False
         
         # Batch audio into ~100ms chunks for smoother playback
         # 24kHz * 2 bytes * 0.1s = 4800 bytes
         BATCH_SIZE = 4800
-        
-        # Warmup buffer: 320ms of audio before starting playback
-        # This prevents choppy start (from Asterisk-AI-Voice-Agent reference)
-        WARMUP_SIZE = int(OUTPUT_SAMPLE_RATE * 2 * WARMUP_MS / 1000)  # 320ms @ 24kHz = 15360 bytes
         
         try:
             while self._running and self.ws:
@@ -478,17 +471,8 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                             audio_data = base64.b64decode(audio_b64)  # PCM16 @ 24kHz
                             audio_buffer += audio_data
                             
-                            # WARMUP: Buffer 320ms before first yield (prevents choppy start)
-                            if not warmup_done:
-                                if len(audio_buffer) >= WARMUP_SIZE:
-                                    warmup_done = True
-                                    logger.info(f"[OPENAI-OUT] Warmup complete: {len(audio_buffer)} bytes buffered")
-                                    yield audio_buffer
-                                    audio_buffer = b''
-                                # Still warming up - don't yield yet
-                                continue
-                            
-                            # After warmup: yield when we have enough for smooth playback
+                            # Yield when we have enough for smooth playback (~100ms)
+                            # audiosocket_handler has 400ms startup buffer, so just batch here
                             if len(audio_buffer) >= BATCH_SIZE:
                                 yield audio_buffer
                                 audio_buffer = b''
@@ -521,8 +505,6 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                         if audio_buffer:
                             yield audio_buffer
                             audio_buffer = b''
-                        # Reset warmup for next response
-                        warmup_done = False
                         logger.debug("Response turn complete")
                     
                     # Handle function calls
@@ -535,12 +517,8 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                         logger.error(f"OpenAI Realtime error: {error}")
                     
                 except asyncio.TimeoutError:
-                    # Flush buffer on timeout if we have enough accumulated audio
-                    # Only yield if warmup is done OR buffer is substantial
-                    if audio_buffer and (warmup_done or len(audio_buffer) >= WARMUP_SIZE):
-                        if not warmup_done:
-                            warmup_done = True
-                            logger.info(f"[OPENAI-OUT] Warmup (timeout): {len(audio_buffer)} bytes")
+                    # Flush buffer on timeout if we have accumulated audio
+                    if audio_buffer:
                         yield audio_buffer
                         audio_buffer = b''
                     continue
