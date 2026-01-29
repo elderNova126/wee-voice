@@ -1,14 +1,19 @@
 """
-Asterisk AudioSocket Handler - Simplified Architecture
+Asterisk AudioSocket Handler - Pure 8kHz End-to-End
 
-Based on sip-to-ai reference: simple pass-through without complex buffering.
-Audio flows continuously from AI to Asterisk with minimal processing.
+NO RESAMPLING for OpenAI models:
+- Asterisk: 8kHz PCM16
+- OpenAI: 8kHz G.711 μ-law (converted to PCM16)
+- Result: Zero quality loss, zero latency from resampling
+
+Frame size: 320 bytes = 20ms @ 8kHz PCM16
 """
 import asyncio
 import socket
 import struct
 import logging
 import uuid as uuid_lib
+import time
 from typing import Optional
 from datetime import datetime
 
@@ -18,13 +23,20 @@ from app.models import Call, VoiceAgent, CallStatus, PhoneNumber
 from app.models.database import SessionLocal
 from app.api.websocket import auto_summarize_call
 from app.services.greeting_tts_service import get_greeting_tts_service, get_cached_greeting_sync
-from app.services.audio_utils import (
-    INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, GEMINI_INPUT_RATE, OPENAI_SAMPLE_RATE,
-    INPUT_FRAME_SIZE, SILENCE_8K, normalize_audio, apply_attack_envelope, simple_resample,
-    AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB, AUDIO_ATTACK_MS
-)
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# AUDIO CONSTANTS - Pure 8kHz
+# ============================================================================
+SAMPLE_RATE = 8000          # 8kHz everywhere
+FRAME_SIZE = 320            # 20ms @ 8kHz PCM16 (8000 * 0.02 * 2 bytes)
+FRAME_MS = 20               # 20ms per frame
+SILENCE = b'\x00' * FRAME_SIZE
+
+# Buffer limits
+MAX_PENDING_BYTES = 8000    # 500ms max buffer (prevents buildup)
+MAX_PENDING_MS = 500
 
 # AudioSocket message types
 MSG_UUID = 0x01
@@ -32,19 +44,48 @@ MSG_AUDIO = 0x10
 MSG_HANGUP = 0x00
 MSG_ERROR = 0xFF
 
-# Track active calls per phone number
+# Track active calls
 _active_calls: dict[int, str] = {}
 _active_calls_lock = asyncio.Lock()
 
 
+def normalize_audio(pcm: bytes, target_rms: int = 1400, max_gain_db: float = 18.0) -> bytes:
+    """Simple RMS normalization."""
+    import math
+    import array
+    
+    if len(pcm) < 4:
+        return pcm
+    
+    try:
+        buf = array.array('h')
+        buf.frombytes(pcm)
+        if not buf:
+            return pcm
+        
+        rms = math.sqrt(sum(s*s for s in buf) / len(buf))
+        if rms < 1:
+            return pcm
+        
+        gain = min(target_rms / rms, 10 ** (max_gain_db / 20))
+        if gain <= 1.01:
+            return pcm
+        
+        for i, s in enumerate(buf):
+            buf[i] = int(max(-32768, min(32767, s * gain)))
+        
+        return buf.tobytes()
+    except:
+        return pcm
+
+
 class AudioSocketSession:
     """
-    Handles a single AudioSocket call session.
+    Pure 8kHz AudioSocket session.
     
-    Simplified architecture based on sip-to-ai:
-    - Simple accumulation buffer for frame alignment
-    - No complex jitter buffer or rebuffering
-    - Continuous audio flow from AI to Asterisk
+    Audio flow (OpenAI):
+        Asterisk 8kHz PCM → OpenAI 8kHz μ-law → Asterisk 8kHz PCM
+        NO RESAMPLING!
     """
     
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -62,30 +103,27 @@ class AudioSocketSession:
         self.is_busy_response = False
         self.busy_config = None
         self.greeting_audio = None
-        self.greeting_played = False
         self.llm_model = 'gemini'
         self.caller_id = None
         
     async def handle(self):
-        """Main entry point for handling a call."""
-        import time
-        t0 = time.time()
-        
+        """Main entry point."""
+        t0 = time.perf_counter()
         addr = self.writer.get_extra_info('peername')
-        print(f"[{self._ts(t0)}] === AudioSocket CONNECTED from {addr} ===", flush=True)
+        print(f"[{self._ms(t0)}] === AudioSocket from {addr} ===", flush=True)
         
         try:
             self.is_running = True
             
-            # Set TCP_NODELAY for low latency
+            # TCP_NODELAY for low latency
             sock = self.writer.get_extra_info('socket')
             if sock:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             
-            # Send initial silence frames
-            header = struct.pack('>BH', MSG_AUDIO, INPUT_FRAME_SIZE)
+            # Initial silence
+            header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
             for _ in range(5):
-                self.writer.write(header + SILENCE_8K)
+                self.writer.write(header + SILENCE)
             await self.writer.drain()
             
             # Read UUID
@@ -93,52 +131,45 @@ class AudioSocketSession:
             if not self.call_uuid:
                 return
             
-            # Setup call (DB, agent, restrictions)
-            if not await self._setup_call_quick():
+            # Setup
+            if not await self._setup_call():
                 if self.is_busy_response:
-                    await self._play_busy_message()
+                    await self._play_busy()
                 return
             
-            # Start receiving from Asterisk (drain buffer during setup)
-            receive_task = asyncio.create_task(self._receive_loop())
+            # Start receive loop
+            recv_task = asyncio.create_task(self._receive_loop())
             
-            # Handle greeting based on model
+            # Greeting (Gemini only - OpenAI generates its own)
             greeting_task = None
-            if self.llm_model.startswith('gpt-'):
-                # OpenAI: Let AI generate greeting (same voice)
-                print(f"[{self._ts(t0)}] 🔵 OpenAI: AI will generate greeting", flush=True)
-                self.greeting_audio = None
-            elif self.greeting_audio:
-                # Gemini: Use TTS greeting
-                greeting_task = asyncio.create_task(self._play_tts_greeting())
+            if not self.llm_model.startswith('gpt-') and self.greeting_audio:
+                greeting_task = asyncio.create_task(self._play_greeting())
+            elif self.llm_model.startswith('gpt-'):
+                print(f"[{self._ms(t0)}] 🔵 OpenAI: AI generates greeting", flush=True)
             
-            # Connect to AI
+            # Connect AI
             if not await self._connect_ai():
                 if greeting_task:
                     greeting_task.cancel()
-                receive_task.cancel()
+                recv_task.cancel()
                 return
             
-            # Wait for greeting to finish
             if greeting_task:
                 try:
                     await greeting_task
                 except asyncio.CancelledError:
                     pass
             
-            # Signal AI is ready
             self.ai_ready.set()
-            print(f"[{self._ts(t0)}] AI READY", flush=True)
+            print(f"[{self._ms(t0)}] ✅ AI READY (pure 8kHz)", flush=True)
             
-            # Start audio loops
+            # Start audio tasks
             audio_task = asyncio.create_task(self._audio_loop())
-            caller_task = asyncio.create_task(self._caller_to_ai_loop())
+            caller_task = asyncio.create_task(self._caller_to_ai())
             input_task = asyncio.create_task(self.agent_service.send_realtime_input())
             
-            # Wait for call to end
-            await receive_task
+            await recv_task
             
-            # Cleanup tasks
             for task in [audio_task, caller_task, input_task]:
                 if task and not task.done():
                     task.cancel()
@@ -154,74 +185,63 @@ class AudioSocketSession:
         finally:
             await self._cleanup()
     
-    def _ts(self, t0):
-        """Timestamp helper."""
-        import time
-        return f"{(time.time()-t0)*1000:.0f}ms"
+    def _ms(self, t0):
+        return f"{(time.perf_counter()-t0)*1000:.0f}ms"
     
-    # =========================================================================
-    # SIMPLIFIED AUDIO LOOP - Based on sip-to-ai approach
-    # =========================================================================
+    # ========================================================================
+    # PURE 8kHz AUDIO LOOP - NO RESAMPLING
+    # ========================================================================
     
     async def _audio_loop(self):
         """
-        Simple audio loop: receive from AI, send to Asterisk.
+        Pure 8kHz audio loop.
         
-        Key insight from sip-to-ai: Don't over-engineer buffering.
-        AI services provide reasonably-timed audio. Just:
-        1. Receive chunks from AI
-        2. Accumulate into 20ms frames
-        3. Send immediately
+        - Receives 8kHz PCM from OpenAI (converted from μ-law)
+        - Sends 8kHz PCM to Asterisk
+        - NO RESAMPLING
+        - Strict 20ms frame timing
+        - Buffer capped at 500ms to prevent buildup
         """
-        import time
-        print(f"[AUDIO] Starting simple audio loop", flush=True)
+        print(f"[AUDIO] Starting pure 8kHz loop (NO resampling)", flush=True)
         
-        frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
-        header = struct.pack('>BH', MSG_AUDIO, frame_size)
-        
-        # Simple accumulation buffer (like sip-to-ai's AudioAdapter)
+        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         pending = b''
         frames_sent = 0
         chunks_recv = 0
+        last_frame_time = time.perf_counter()
         
-        # Determine AI output rate
-        if self.llm_model.startswith('gpt-'):
-            ai_rate = OPENAI_SAMPLE_RATE  # 8kHz
-        else:
-            ai_rate = OUTPUT_SAMPLE_RATE  # 24kHz
+        # Stats
+        total_drops = 0
+        max_pending_seen = 0
         
-        resample_state = None
-        attack_state = None
-        attack_done = False
+        # Queue for receiving from AI
+        recv_queue = asyncio.Queue(maxsize=50)
         
-        # Pacer timing
-        TICK = 0.02  # 20ms
+        async def receiver():
+            """Receive from AI and normalize."""
+            nonlocal chunks_recv
+            try:
+                async for audio in self.agent_service.receive_audio():
+                    if not self.is_running:
+                        break
+                    if audio and len(audio) >= 2:
+                        # Normalize volume
+                        audio = normalize_audio(audio)
+                        chunks_recv += 1
+                        await recv_queue.put(audio)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                print(f"[AUDIO] Recv error: {e}", flush=True)
+            await recv_queue.put(None)
+        
+        recv_task = asyncio.create_task(receiver())
+        
+        # Pacer - strict 20ms cadence
+        TICK = FRAME_MS / 1000.0  # 0.02s
         next_tick = time.perf_counter()
         
-        print(f"[AUDIO] AI rate: {ai_rate}Hz → Asterisk 8kHz", flush=True)
-        
         try:
-            # Create receiver task to fill pending buffer
-            recv_queue = asyncio.Queue(maxsize=50)
-            
-            async def receiver():
-                nonlocal chunks_recv
-                try:
-                    async for audio in self.agent_service.receive_audio():
-                        if not self.is_running:
-                            break
-                        if audio and len(audio) >= 2:
-                            chunks_recv += 1
-                            await recv_queue.put(audio)
-                except asyncio.CancelledError:
-                    pass
-                except Exception as e:
-                    print(f"[AUDIO] Receiver error: {e}", flush=True)
-                await recv_queue.put(None)  # Sentinel
-            
-            recv_task = asyncio.create_task(receiver())
-            
-            # Main pacer loop - emit frames at 20ms cadence
             while self.is_running:
                 # Wait for next tick
                 now = time.perf_counter()
@@ -229,73 +249,67 @@ class AudioSocketSession:
                 if sleep_for > 0:
                     await asyncio.sleep(sleep_for)
                 
-                # Drain all available audio from queue into pending
+                # Drain queue into pending
                 while True:
                     try:
                         chunk = recv_queue.get_nowait()
                         if chunk is None:
                             # End of stream
                             if pending:
-                                # Send remaining with padding
-                                frame = pending.ljust(frame_size, b'\x00')
+                                frame = pending[:FRAME_SIZE].ljust(FRAME_SIZE, b'\x00')
                                 self.writer.write(header + frame)
                                 frames_sent += 1
                             await self.writer.drain()
-                            print(f"[AUDIO] Done: {frames_sent} frames, {chunks_recv} chunks", flush=True)
-                            recv_task.cancel()
+                            print(f"[AUDIO] Done: {frames_sent} frames, {chunks_recv} chunks, drops={total_drops}", flush=True)
                             return
-                        
-                        # Resample to 8kHz if needed
-                        if ai_rate != INPUT_SAMPLE_RATE:
-                            chunk, resample_state = simple_resample(
-                                chunk, ai_rate, INPUT_SAMPLE_RATE, resample_state
-                            )
-                        
-                        # Skip empty chunks
-                        if len(chunk) < 2:
-                            continue
-                        
-                        # Apply attack envelope at start
-                        if not attack_done:
-                            chunk, attack_state = apply_attack_envelope(
-                                chunk, INPUT_SAMPLE_RATE, AUDIO_ATTACK_MS, attack_state
-                            )
-                            if attack_state and attack_state.get('bytes_remaining', 0) <= 0:
-                                attack_done = True
-                        
-                        # Normalize
-                        chunk = normalize_audio(chunk, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
-                        
                         pending += chunk
-                        
                     except asyncio.QueueEmpty:
                         break
                 
+                # CAP BUFFER - drop oldest if too much
+                if len(pending) > MAX_PENDING_BYTES:
+                    drop_bytes = len(pending) - MAX_PENDING_BYTES
+                    # Round to frame boundary
+                    drop_frames = (drop_bytes // FRAME_SIZE) * FRAME_SIZE
+                    if drop_frames > 0:
+                        pending = pending[drop_frames:]
+                        total_drops += drop_frames // FRAME_SIZE
+                        print(f"[AUDIO] ⚠ Dropped {drop_frames//FRAME_SIZE} frames (buffer overflow)", flush=True)
+                
+                # Track max pending
+                if len(pending) > max_pending_seen:
+                    max_pending_seen = len(pending)
+                
                 # Emit frame
-                if len(pending) >= frame_size:
-                    frame = pending[:frame_size]
-                    pending = pending[frame_size:]
+                frame_time = time.perf_counter()
+                delta_ms = (frame_time - last_frame_time) * 1000
+                last_frame_time = frame_time
+                
+                if len(pending) >= FRAME_SIZE:
+                    frame = pending[:FRAME_SIZE]
+                    pending = pending[FRAME_SIZE:]
                     self.writer.write(header + frame)
                     frames_sent += 1
                 else:
-                    # Not enough audio - send silence
-                    self.writer.write(header + SILENCE_8K)
+                    # No audio - send silence
+                    self.writer.write(header + SILENCE)
                     frames_sent += 1
                 
-                # Drain writer periodically
+                # Drain writer
                 if frames_sent % 25 == 0:
                     try:
                         await self.writer.drain()
                     except:
                         break
                 
-                # Log progress
-                if frames_sent == 1 or frames_sent % 500 == 0:
-                    print(f"[AUDIO] {frames_sent} frames, pending={len(pending)}b, chunks={chunks_recv}", flush=True)
+                # Timing log
+                if frames_sent <= 5 or frames_sent % 500 == 0:
+                    pending_ms = len(pending) * 1000 // (SAMPLE_RATE * 2)
+                    print(f"[AUDIO] #{frames_sent}: pending={pending_ms}ms, delta={delta_ms:.1f}ms, chunks={chunks_recv}", flush=True)
                 
                 next_tick += TICK
                 
-                # Reset if behind
+                # Reset if way behind
                 if next_tick < time.perf_counter() - 0.1:
                     next_tick = time.perf_counter()
                     
@@ -303,132 +317,103 @@ class AudioSocketSession:
             pass
         except Exception as e:
             print(f"[AUDIO] Error: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
+        finally:
+            recv_task.cancel()
         
-        print(f"[AUDIO] Ended: {frames_sent} frames sent", flush=True)
+        print(f"[AUDIO] Ended: {frames_sent} frames, max_pending={max_pending_seen}b, drops={total_drops}", flush=True)
     
-    # =========================================================================
-    # ASTERISK RECEIVE LOOP
-    # =========================================================================
+    # ========================================================================
+    # RECEIVE FROM ASTERISK
+    # ========================================================================
     
     async def _receive_loop(self):
-        """Receive audio from Asterisk."""
+        """Receive 8kHz PCM from Asterisk."""
         frames = 0
         try:
             while self.is_running:
                 try:
                     header = await asyncio.wait_for(self.reader.readexactly(3), timeout=60.0)
-                except asyncio.IncompleteReadError:
-                    break
-                except asyncio.TimeoutError:
+                except (asyncio.IncompleteReadError, asyncio.TimeoutError):
                     break
                 
                 msg_type = header[0]
                 payload_len = struct.unpack('>H', header[1:3])[0]
                 
+                payload = b''
                 if payload_len > 0:
                     try:
                         payload = await self.reader.readexactly(payload_len)
                     except asyncio.IncompleteReadError:
                         break
-                else:
-                    payload = b''
                 
                 if msg_type == MSG_AUDIO:
                     frames += 1
-                    if frames <= 10 or frames % 50 == 0:
-                        print(f"[RECV] Frame #{frames}", flush=True)
+                    if frames <= 10 or frames % 100 == 0:
+                        print(f"[RECV] #{frames} ({payload_len}b)", flush=True)
                     await self._process_audio(payload)
-                elif msg_type == MSG_HANGUP:
-                    print(f"[RECV] HANGUP", flush=True)
-                    break
-                elif msg_type == MSG_ERROR:
-                    print(f"[RECV] ERROR", flush=True)
+                elif msg_type in (MSG_HANGUP, MSG_ERROR):
+                    print(f"[RECV] {'HANGUP' if msg_type == MSG_HANGUP else 'ERROR'}", flush=True)
                     break
                     
         except Exception as e:
-            print(f"[RECV] Exception: {e}", flush=True)
+            print(f"[RECV] Error: {e}", flush=True)
         
         print(f"[RECV] Ended: {frames} frames", flush=True)
     
-    async def _process_audio(self, audio_8k: bytes):
-        """Process audio from Asterisk and queue for AI."""
-        if not self.ai_ready.is_set() or len(audio_8k) < 2:
+    async def _process_audio(self, audio: bytes):
+        """Queue 8kHz PCM for AI - NO RESAMPLING."""
+        if not self.ai_ready.is_set() or len(audio) < 2:
             return
         
+        # Ensure even length
+        if len(audio) % 2:
+            audio = audio[:-1]
+        
+        # Direct passthrough - NO RESAMPLING for OpenAI
         try:
-            if len(audio_8k) % 2:
-                audio_8k = audio_8k[:-1]
-            
-            # OpenAI: 8kHz passthrough, Gemini: 8kHz → 16kHz
-            if self.llm_model.startswith('gpt-'):
-                audio_for_ai = audio_8k
-            else:
-                if not hasattr(self, '_caller_resample_state'):
-                    self._caller_resample_state = None
-                audio_for_ai, self._caller_resample_state = simple_resample(
-                    audio_8k, INPUT_SAMPLE_RATE, GEMINI_INPUT_RATE, self._caller_resample_state
-                )
-            
-            try:
-                self.caller_audio_queue.put_nowait(audio_for_ai)
-            except asyncio.QueueFull:
-                pass
-        except Exception as e:
-            print(f"[PROCESS] Error: {e}", flush=True)
+            self.caller_audio_queue.put_nowait(audio)
+        except asyncio.QueueFull:
+            pass
     
-    async def _caller_to_ai_loop(self):
-        """Forward caller audio to AI."""
-        import time
+    async def _caller_to_ai(self):
+        """Send caller audio to AI - pure 8kHz."""
         packets = 0
-        audio_buffer = b''
+        buffer = b''
+        BATCH = 640  # 40ms @ 8kHz
         
-        if self.llm_model.startswith('gpt-'):
-            audio_rate = OPENAI_SAMPLE_RATE
-            batch_size = 640  # 40ms at 8kHz
-        else:
-            audio_rate = GEMINI_INPUT_RATE
-            batch_size = 1280  # 40ms at 16kHz
-        
-        print(f"[CALLER→AI] Started ({audio_rate}Hz)", flush=True)
+        print(f"[CALLER→AI] Started (8kHz, batch={BATCH}b)", flush=True)
         
         try:
             while self.is_running:
                 try:
                     chunk = await asyncio.wait_for(self.caller_audio_queue.get(), timeout=0.04)
-                    audio_buffer += chunk
+                    buffer += chunk
                 except asyncio.TimeoutError:
-                    # Send what we have
-                    if len(audio_buffer) >= 320 and self.agent_service:
+                    if len(buffer) >= 320 and self.agent_service:
                         packets += 1
-                        await self.agent_service.send_audio(audio_buffer)
-                        audio_buffer = b''
+                        await self.agent_service.send_audio(buffer)
+                        buffer = b''
                     continue
                 
-                if len(audio_buffer) >= batch_size and self.agent_service:
+                if len(buffer) >= BATCH and self.agent_service:
                     packets += 1
-                    await self.agent_service.send_audio(audio_buffer, 
-                        mime_type=f"audio/pcm;rate={audio_rate}")
-                    audio_buffer = b''
+                    await self.agent_service.send_audio(buffer)
+                    buffer = b''
                     
                     if packets <= 10 or packets % 100 == 0:
                         print(f"[CALLER→AI] #{packets}", flush=True)
                         
         except asyncio.CancelledError:
             pass
-        except Exception as e:
-            print(f"[CALLER→AI] Error: {e}", flush=True)
         
-        print(f"[CALLER→AI] Ended: {packets} packets", flush=True)
+        print(f"[CALLER→AI] Ended: {packets}", flush=True)
     
-    # =========================================================================
-    # CALL SETUP
-    # =========================================================================
+    # ========================================================================
+    # SETUP
+    # ========================================================================
     
     async def _read_uuid(self):
         """Read UUID from AudioSocket."""
-        import os
         try:
             header = await asyncio.wait_for(self.reader.readexactly(3), timeout=5.0)
             msg_type = header[0]
@@ -452,18 +437,17 @@ class AudioSocketSession:
             if not self.call_uuid:
                 self.call_uuid = str(uuid_lib.uuid4())
             
-            # Read caller ID file
-            if self.call_uuid:
-                await asyncio.sleep(0.1)
-                self._read_caller_id_file()
-                
-            print(f"[UUID] {self.call_uuid}, caller={self.caller_id}", flush=True)
+            # Read caller ID
+            await asyncio.sleep(0.1)
+            self._read_caller_id()
+            
+            print(f"[UUID] {self.call_uuid}", flush=True)
             
         except Exception as e:
             print(f"[UUID] Error: {e}", flush=True)
             self.call_uuid = str(uuid_lib.uuid4())
     
-    def _read_caller_id_file(self):
+    def _read_caller_id(self):
         """Read caller ID from temp file."""
         import os
         try:
@@ -479,21 +463,20 @@ class AudioSocketSession:
                     self.caller_id = raw
                     if self.caller_id[0].isdigit() and len(self.caller_id) > 9:
                         self.caller_id = '+' + self.caller_id
-        except Exception as e:
-            print(f"[CALLER_ID] Error: {e}", flush=True)
+        except:
+            pass
     
-    async def _setup_call_quick(self) -> bool:
-        """Quick setup: DB, agent, restrictions."""
+    async def _setup_call(self) -> bool:
+        """Setup call: DB, agent, restrictions."""
         self.db = SessionLocal()
         try:
-            # Find phone with SIP config
             phone = self.db.query(PhoneNumber).filter(
                 PhoneNumber.agent_id.isnot(None),
                 PhoneNumber.sip_username.isnot(None)
             ).first()
             
             if not phone:
-                print(f"[SETUP] No phone with SIP config", flush=True)
+                print(f"[SETUP] No phone with SIP", flush=True)
                 return False
             
             self.db.refresh(phone)
@@ -511,31 +494,27 @@ class AudioSocketSession:
                 _active_calls[phone.id] = self.call_uuid
             
             # Get agent
-            self.agent = self.db.query(VoiceAgent).filter(
-                VoiceAgent.id == phone.agent_id
-            ).first()
-            
+            self.agent = self.db.query(VoiceAgent).filter(VoiceAgent.id == phone.agent_id).first()
             if not self.agent:
                 self.agent = self.db.query(VoiceAgent).first()
-            
             if not self.agent:
                 await self._release_line()
                 return False
             
             # Check restrictions
-            caller_phone = self.caller_id or "Unknown"
-            if self._is_caller_blocked(phone, caller_phone):
+            caller = self.caller_id or "Unknown"
+            if self._is_blocked(phone, caller):
                 self.is_busy_response = True
                 self.busy_config = {'action': 'busy_tone'}
                 await self._release_line()
                 return False
             
-            # Create call record
+            # Create call
             self.call = Call(
                 user_id=self.agent.user_id,
                 agent_id=self.agent.id,
-                caller_phone=caller_phone,
-                caller_name=caller_phone,
+                caller_phone=caller,
+                caller_name=caller,
                 direction="inbound",
                 status=CallStatus.INITIATED,
                 session_id=f"audiosocket_{self.call_uuid}",
@@ -545,7 +524,7 @@ class AudioSocketSession:
             self.db.commit()
             self.db.refresh(self.call)
             
-            # Get cached greeting (for Gemini only)
+            # Cached greeting (Gemini only)
             if self.agent.greeting and not self.llm_model.startswith('gpt-'):
                 self.greeting_audio = get_cached_greeting_sync(
                     self.agent.greeting,
@@ -562,21 +541,20 @@ class AudioSocketSession:
             await self._release_line()
             return False
     
-    def _is_caller_blocked(self, phone, caller_phone: str) -> bool:
+    def _is_blocked(self, phone, caller: str) -> bool:
         """Check if caller is blocked."""
         import json
-        
         mode = phone.restriction_mode or 'none'
         if mode == 'none':
             return False
         
-        def parse_list(val):
+        def parse(val):
             if not val:
                 return []
             if isinstance(val, list):
                 return val
             if isinstance(val, str):
-                if val.startswith('{') and val.endswith('}') and not val.startswith('{"'):
+                if val.startswith('{') and not val.startswith('{"'):
                     return [x.strip().strip('"') for x in val[1:-1].split(',') if x.strip()]
                 try:
                     return json.loads(val) if val else []
@@ -584,41 +562,29 @@ class AudioSocketSession:
                     return []
             return []
         
-        blocked_countries = parse_list(phone.blocked_countries)
-        blocked_numbers = parse_list(phone.blocked_numbers)
-        allowed_countries = parse_list(phone.allowed_countries)
+        blocked = parse(phone.blocked_countries)
+        allowed = parse(phone.allowed_countries)
         
-        # Get country from number
+        # Simple country detection
         country = ''
-        prefixes = {'+1': 'US', '+44': 'UK', '+33': 'FR', '+49': 'DE', '+32': 'BE',
-                    '+84': 'VN', '+81': 'JP', '+86': 'CN', '+91': 'IN'}
-        for prefix, code in sorted(prefixes.items(), key=lambda x: -len(x[0])):
-            if caller_phone.startswith(prefix):
+        for prefix, code in {'+1': 'US', '+44': 'UK', '+33': 'FR', '+32': 'BE', '+84': 'VN'}.items():
+            if caller.startswith(prefix):
                 country = code
                 break
         
         if mode == 'blacklist':
-            if country and country.upper() in [c.upper() for c in blocked_countries]:
-                return True
-            for pattern in blocked_numbers:
-                if caller_phone == pattern or (pattern.endswith('*') and caller_phone.startswith(pattern[:-1])):
-                    return True
-            return False
-        
+            return country.upper() in [c.upper() for c in blocked]
         elif mode == 'whitelist':
-            if not allowed_countries:
-                return True
-            return not (country and country.upper() in [c.upper() for c in allowed_countries])
-        
+            return not (country.upper() in [c.upper() for c in allowed]) if allowed else True
         return False
     
     async def _connect_ai(self) -> bool:
-        """Connect to AI service."""
+        """Connect to AI."""
         try:
             from app.services.openai_realtime_service import get_voice_agent_service, is_openai_model
             
             if is_openai_model(self.llm_model):
-                print(f"[AI] 🔵 OpenAI Realtime ({self.llm_model})", flush=True)
+                print(f"[AI] 🔵 OpenAI Realtime - pure 8kHz", flush=True)
             else:
                 print(f"[AI] 🟢 Gemini Live", flush=True)
             
@@ -644,42 +610,34 @@ class AudioSocketSession:
             await self._release_line()
             return False
     
-    # =========================================================================
+    # ========================================================================
     # GREETING & BUSY
-    # =========================================================================
+    # ========================================================================
     
-    async def _play_tts_greeting(self):
-        """Play pre-generated greeting."""
+    async def _play_greeting(self):
+        """Play cached greeting (8kHz)."""
         if not self.greeting_audio:
             return
         
-        import time
-        
-        # Normalize and apply attack envelope
-        audio = normalize_audio(self.greeting_audio, AUDIO_TARGET_RMS, AUDIO_MAX_GAIN_DB)
-        audio, _ = apply_attack_envelope(audio, INPUT_SAMPLE_RATE, AUDIO_ATTACK_MS, None)
-        
-        header = struct.pack('>BH', MSG_AUDIO, INPUT_FRAME_SIZE)
-        frames = 0
+        audio = normalize_audio(self.greeting_audio)
+        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
         # Lead-in silence
         for _ in range(8):
-            self.writer.write(header + SILENCE_8K)
+            self.writer.write(header + SILENCE)
         await self.writer.drain()
         
-        # Send audio
-        TICK = 0.02
+        # Send frames
+        TICK = FRAME_MS / 1000.0
         next_tick = time.perf_counter()
+        frames = 0
         
-        for i in range(0, len(audio), INPUT_FRAME_SIZE):
+        for i in range(0, len(audio), FRAME_SIZE):
             if not self.is_running:
                 break
             
-            chunk = audio[i:i + INPUT_FRAME_SIZE]
-            if len(chunk) < INPUT_FRAME_SIZE:
-                chunk += b'\x00' * (INPUT_FRAME_SIZE - len(chunk))
-            
-            self.writer.write(header + chunk)
+            frame = audio[i:i + FRAME_SIZE].ljust(FRAME_SIZE, b'\x00')
+            self.writer.write(header + frame)
             frames += 1
             
             if frames % 25 == 0:
@@ -691,47 +649,37 @@ class AudioSocketSession:
                 await asyncio.sleep(sleep)
         
         await self.writer.drain()
-        self.greeting_played = True
-        print(f"[GREETING] Done: {frames} frames", flush=True)
+        print(f"[GREETING] {frames} frames", flush=True)
     
-    async def _play_busy_message(self):
-        """Play busy tone and hangup."""
+    async def _play_busy(self):
+        """Play busy tone."""
         import math
-        import time
         
-        # Generate busy tone (480Hz + 620Hz)
-        sample_rate = INPUT_SAMPLE_RATE
-        duration = 0.5
-        samples = int(sample_rate * duration)
-        
+        # 480Hz + 620Hz busy tone
+        samples = int(SAMPLE_RATE * 0.5)
         tone = b''
         for i in range(samples):
-            val = int(8000 * (math.sin(2 * math.pi * 480 * i / sample_rate) +
-                              math.sin(2 * math.pi * 620 * i / sample_rate)))
+            val = int(8000 * (math.sin(2 * math.pi * 480 * i / SAMPLE_RATE) +
+                              math.sin(2 * math.pi * 620 * i / SAMPLE_RATE)))
             tone += struct.pack('<h', max(-32768, min(32767, val)))
         
-        silence = b'\x00' * (samples * 2)
-        header = struct.pack('>BH', MSG_AUDIO, INPUT_FRAME_SIZE)
+        silence = SILENCE * 25  # 500ms silence
+        header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        TICK = 0.02
+        TICK = FRAME_MS / 1000.0
         next_tick = time.perf_counter()
         
-        for _ in range(3):  # 3 beeps
+        for _ in range(3):
             for audio in [tone, silence]:
-                for i in range(0, len(audio), INPUT_FRAME_SIZE):
-                    chunk = audio[i:i + INPUT_FRAME_SIZE]
-                    if len(chunk) < INPUT_FRAME_SIZE:
-                        chunk += b'\x00' * (INPUT_FRAME_SIZE - len(chunk))
-                    self.writer.write(header + chunk)
-                    
+                for i in range(0, len(audio), FRAME_SIZE):
+                    frame = audio[i:i + FRAME_SIZE].ljust(FRAME_SIZE, b'\x00')
+                    self.writer.write(header + frame)
                     next_tick += TICK
                     sleep = next_tick - time.perf_counter()
                     if sleep > 0:
                         await asyncio.sleep(sleep)
         
         await self.writer.drain()
-        
-        # Send hangup
         self.writer.write(struct.pack('>BH', MSG_HANGUP, 0))
         await self.writer.drain()
         
@@ -741,19 +689,16 @@ class AudioSocketSession:
         except:
             pass
     
-    # =========================================================================
+    # ========================================================================
     # CLEANUP
-    # =========================================================================
+    # ========================================================================
     
     async def _release_line(self):
-        """Release phone line."""
         if self.phone_number_id:
             async with _active_calls_lock:
-                if self.phone_number_id in _active_calls:
-                    del _active_calls[self.phone_number_id]
+                _active_calls.pop(self.phone_number_id, None)
     
     async def _cleanup(self):
-        """Cleanup resources."""
         self.is_running = False
         await self._release_line()
         
@@ -784,30 +729,29 @@ class AudioSocketSession:
 
 
 class AudioSocketServer:
-    """AudioSocket server for handling incoming calls."""
+    """AudioSocket server."""
     
     def __init__(self, host='0.0.0.0', port=9092):
         self.host = host
         self.port = port
         self.server = None
-        self._greetings_prewarmed = False
+        self._prewarmed = False
     
     async def start(self):
         self.server = await asyncio.start_server(self._handle, self.host, self.port)
-        print(f"[AudioSocket] ✅ Server started on port {self.port}", flush=True)
+        print(f"[AudioSocket] ✅ Server on port {self.port} (pure 8kHz)", flush=True)
         
-        if not self._greetings_prewarmed:
-            asyncio.create_task(self._prewarm_greetings())
-        
+        if not self._prewarmed:
+            asyncio.create_task(self._prewarm())
         asyncio.create_task(self._serve())
     
-    async def _prewarm_greetings(self):
+    async def _prewarm(self):
         try:
             from app.services.greeting_tts_service import prewarm_all_agent_greetings
             await prewarm_all_agent_greetings()
-            self._greetings_prewarmed = True
-        except Exception as e:
-            print(f"[AudioSocket] Greeting prewarm failed: {e}", flush=True)
+            self._prewarmed = True
+        except:
+            pass
     
     async def _serve(self):
         try:
