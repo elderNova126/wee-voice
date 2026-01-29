@@ -161,21 +161,34 @@ GREETING PROTOCOL:
         # Select voice
         voice_name = self._get_voice_name()
         
-        # Voice quality instruction
+        # Language and voice quality instruction - CRITICAL for consistency
+        language_name = "French" if is_french else "English"
         if is_french:
             voice_instruction = f"""
-VOICE QUALITY INSTRUCTIONS:
-- Speak in French only
+=== LANGUAGE REQUIREMENT (MANDATORY) ===
+YOU MUST SPEAK ONLY IN FRENCH. This is non-negotiable.
+- ALWAYS respond in French, regardless of what language the user speaks
+- If the user speaks English, respond in French anyway
+- Never switch to English under any circumstances
+- Use standard French pronunciation
+
+=== VOICE QUALITY ===
 - Speed: Moderate pace - NEVER rush
 - Clarity: Articulate every syllable clearly
-- Use standard French pronunciation
+- Maintain consistent volume
 """
         else:
             voice_instruction = f"""
-VOICE QUALITY INSTRUCTIONS:
-- Speed: Moderate pace - NEVER rush
+=== LANGUAGE REQUIREMENT (MANDATORY) ===
+YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
+- ALWAYS respond in English, regardless of what language the user speaks
+- Never switch to another language under any circumstances
+- Use clear, standard pronunciation
+
+=== VOICE QUALITY ===
+- Speed: Moderate pace - NEVER rush  
 - Clarity: Articulate every word clearly
-- Volume: Speak at consistent, clear volume
+- Maintain consistent volume
 """
         
         # Build system instruction
@@ -199,11 +212,13 @@ VOICE QUALITY INSTRUCTIONS:
 {greeting_instruction}
 
 === CRITICAL REMINDER ===
+- SPEAK ONLY IN {language_name.upper()} - this is mandatory
 - Your identity and role are defined above
 - Never use generic responses
 - Respond naturally to what the user says
 - NO EMOJIS in voice responses
 - INTRODUCE YOURSELF ONLY ONCE
+- MAINTAIN {language_name.upper()} throughout the entire conversation
 """
         
         logger.info(f"Voice selection for OpenAI agent {self.agent.id}:")

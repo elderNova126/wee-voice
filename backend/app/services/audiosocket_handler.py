@@ -71,6 +71,24 @@ SILENCE_FRAME = b'\x00' * INPUT_FRAME_SIZE
 SILENCE_FRAME_24K = b'\x00' * OUTPUT_FRAME_SIZE
 SILENCE_FRAME_16K = b'\x00' * OPENAI_FRAME_SIZE
 
+# Comfort noise frame - very low level noise that masks silence-to-audio transitions
+# This is standard telephony practice to make transitions less jarring
+def _generate_comfort_noise(frame_size: int, level: int = 50) -> bytes:
+    """Generate comfort noise frame with very low amplitude"""
+    import random
+    # Generate low-level random samples (very quiet, ~-40dB)
+    noise = bytes([random.randint(128-level, 128+level) if i % 2 == 0 else random.randint(128-level, 128+level) for i in range(frame_size)])
+    # Convert to signed PCM16
+    samples = []
+    for i in range(0, frame_size, 2):
+        # Very quiet noise around zero
+        val = random.randint(-level, level)
+        samples.extend([val & 0xFF, (val >> 8) & 0xFF])
+    return bytes(samples[:frame_size])
+
+# Pre-generate comfort noise frames (regenerate occasionally for variation)
+COMFORT_NOISE_FRAME = _generate_comfort_noise(INPUT_FRAME_SIZE, 30)
+
 # Audio Quality Settings - EXACT values from Asterisk-AI-Voice-Agent golden config
 AUDIO_TARGET_RMS = 1400   # Target RMS level for normalization
 AUDIO_MAX_GAIN_DB = 18.0  # Golden config uses 18dB - matches their setting exactly
@@ -534,7 +552,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, resume={RESUME_BUFFER_MS}ms, dry={EMPTY_BACKOFF_MAX*20}ms, fade=50ms", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, resume={RESUME_BUFFER_MS}ms, dry={EMPTY_BACKOFF_MAX*20}ms, fade=80ms, comfort_noise=ON", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
@@ -615,9 +633,10 @@ class AudioSocketSession:
                         lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
                         print(f"[PACER] ▶ START: {buf_ms}ms buffered ({output_rate}Hz), latency={lat_ms:.0f}ms", flush=True)
                     else:
-                        # Not enough buffer yet - send silence to keep stream alive
+                        # Not enough buffer yet - send comfort noise to keep stream alive
+                        # Comfort noise masks the transition better than pure silence
                         try:
-                            self.writer.write(header + SILENCE_FRAME)
+                            self.writer.write(header + COMFORT_NOISE_FRAME)
                             stats['sent'] += 1
                         except:
                             break
@@ -630,41 +649,43 @@ class AudioSocketSession:
                     if buf_ms >= RESUME_BUFFER_MS:
                         needs_rebuffer = False
                         empty_backoff = 0  # Reset backoff counter
-                        # Apply smooth fade-in over 50ms (longer = smoother transition)
+                        # Apply smooth fade-in over 80ms (longer = smoother transition)
                         if len(pending) >= frame_size:
-                            fade_samples = min(len(pending) // 2, 400)  # 50ms fade at 8kHz (400 samples)
+                            fade_samples = min(len(pending) // 2, 640)  # 80ms fade at 8kHz (640 samples)
                             try:
                                 buf = np.frombuffer(pending[:fade_samples * 2], dtype=np.int16).copy()
-                                # Use smooth exponential fade-in curve
-                                fade_curve = np.linspace(0.0, 1.0, len(buf)) ** 0.5  # sqrt for smoother start
+                                # Use smooth S-curve (sine) for most natural fade
+                                t = np.linspace(0, np.pi/2, len(buf))
+                                fade_curve = np.sin(t)  # Smooth S-curve
                                 buf = (buf * fade_curve).astype(np.int16)
                                 pending = buf.tobytes() + pending[fade_samples * 2:]
                             except:
                                 pass
-                        print(f"[PACER] ▶ RESUME: {buf_ms}ms rebuffered (50ms fade-in)", flush=True)
+                        print(f"[PACER] ▶ RESUME: {buf_ms}ms rebuffered (80ms fade-in)", flush=True)
                     else:
-                        # Not enough buffer yet - send silence to keep stream alive
+                        # Not enough buffer yet - send comfort noise
                         try:
-                            self.writer.write(header + SILENCE_FRAME)
+                            self.writer.write(header + COMFORT_NOISE_FRAME)
                             stats['sent'] += 1
                         except:
                             break
                         next_tick += TICK_SECONDS
                         continue
                 
-                # === EMIT FRAME with fade-out when buffer is draining ===
+                # === EMIT FRAME with smooth fade-out when buffer is draining ===
                 if buf_level >= frame_size:
                     frame = pending[:frame_size]
                     pending = pending[frame_size:]
                     
-                    # Apply FADE-OUT when buffer is getting low (< 100ms remaining)
-                    # This smooths the transition to silence
-                    LOW_BUFFER_THRESHOLD = frame_size * 5  # 100ms at 8kHz
-                    if len(pending) < LOW_BUFFER_THRESHOLD and len(pending) > 0:
-                        # We're running low - apply gradual fade to remaining audio
-                        remaining_frames = len(pending) // frame_size + 1
-                        current_frame_idx = (LOW_BUFFER_THRESHOLD - len(pending)) // frame_size
-                        fade_factor = max(0.3, 1.0 - (current_frame_idx / (remaining_frames + 5)))
+                    # Apply smooth FADE-OUT when buffer is getting low (< 160ms remaining)
+                    # Uses cosine curve for natural sound
+                    LOW_BUFFER_THRESHOLD = frame_size * 8  # 160ms at 8kHz
+                    if len(pending) < LOW_BUFFER_THRESHOLD:
+                        # Calculate fade factor based on how much buffer remains
+                        # From 1.0 (full) to 0.2 (nearly out) using cosine curve
+                        buffer_ratio = len(pending) / LOW_BUFFER_THRESHOLD
+                        # Cosine fade: smooth start, smooth end
+                        fade_factor = 0.2 + 0.8 * (np.cos((1 - buffer_ratio) * np.pi / 2))
                         
                         try:
                             frame_arr = np.frombuffer(frame, dtype=np.int16).copy()
@@ -725,9 +746,9 @@ class AudioSocketSession:
                                 needs_rebuffer = True
                                 print(f"[PACER] ⏸ Buffer dry, will rebuffer on resume", flush=True)
                         
-                        # Send silence
+                        # Send comfort noise (sounds more natural than pure silence)
                         try:
-                            self.writer.write(header + SILENCE_FRAME)
+                            self.writer.write(header + COMFORT_NOISE_FRAME)
                             stats['sent'] += 1
                             stats['underrun_empty'] += 1
                         except:
