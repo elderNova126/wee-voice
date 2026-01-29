@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import { authAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
-import { MicrophoneIcon } from '@heroicons/react/24/outline'
 import { useTranslation } from '@/lib/translations'
 
 export default function LoginPage() {
@@ -88,9 +87,8 @@ export default function LoginPage() {
       <div className="max-w-md w-full">
         {/* Logo */}
         <div className="text-center mb-8">
-          <Link to="/" className="inline-flex items-center space-x-2">
-            <MicrophoneIcon className="w-10 h-10 text-primary-600" />
-            <span className="text-3xl font-bold text-gray-900 dark:text-white">VoiceAgent</span>
+          <Link to="/" className="inline-flex items-center justify-center">
+            <img src="/weevoice_logo.svg" alt="Weevoice" className="h-12 w-auto object-contain" />
           </Link>
         </div>
         
