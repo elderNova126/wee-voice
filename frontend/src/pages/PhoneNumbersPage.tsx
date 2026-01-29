@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -1526,10 +1527,11 @@ export const PhoneNumbersPage: React.FC = () => {
         </div>
       )}
 
-      {/* Phone Number Settings Modal */}
-      {showEditModal && selectedNumber && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 px-4 py-6 overflow-y-auto">
-          <Card className="max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+      {/* Phone Number Settings Modal - portaled so overlay covers full viewport */}
+      {showEditModal && selectedNumber && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-6 overflow-y-auto">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setShowEditModal(false)} />
+          <Card className="relative z-10 max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
                 {t?.phoneNumbers?.phoneNumberSettings || 'Phone Number Settings'}: {selectedNumber.phone_number}
@@ -2033,7 +2035,8 @@ export const PhoneNumbersPage: React.FC = () => {
               </Button>
             </div>
           </Card>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Collaborators Modal */}

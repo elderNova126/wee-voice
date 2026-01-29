@@ -13,7 +13,6 @@ import {
   ShieldCheckIcon,
   SunIcon,
   MoonIcon,
-  ComputerDesktopIcon,
   ChevronDownIcon,
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
@@ -23,11 +22,15 @@ import {
   FunnelIcon,
   XMarkIcon,
   ChevronLeftIcon,
-  ChevronRightIcon
+  ChevronRightIcon,
+  MapPinIcon,
+  BuildingOffice2Icon,
+  ArrowTopRightOnSquareIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
 import { useNavigate } from 'react-router-dom'
+import ThemeToggle from '../components/ThemeToggle'
 import { api } from '../lib/api'
 import { useTranslation } from '../lib/translations'
 import LanguageSwitcher from '../components/LanguageSwitcher'
@@ -35,7 +38,7 @@ import LanguageSwitcher from '../components/LanguageSwitcher'
 export default function LandingPage() {
   const t = useTranslation()
   const { isAuthenticated, user, logout } = useAuthStore()
-  const { theme, setTheme } = useThemeStore()
+  const { theme } = useThemeStore()
   const navigate = useNavigate()
   const [publicAgents, setPublicAgents] = useState<PublicAgent[]>([])
   const [loadingAgents, setLoadingAgents] = useState(true)
@@ -181,13 +184,7 @@ interface PublicAgent {
     selectedInteractionMode !== 'all' ||
     selectedRagEnabled !== 'all'
 
-  const themeOptions = [
-    { name: 'Light', value: 'light' as const, icon: SunIcon },
-    { name: 'Dark', value: 'dark' as const, icon: MoonIcon },
-    { name: 'System', value: 'system' as const, icon: ComputerDesktopIcon },
-  ]
-
-  const ThemeIcon = themeOptions.find(opt => opt.value === theme)?.icon || SunIcon
+  const ThemeIcon = theme === 'dark' ? MoonIcon : SunIcon
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
@@ -195,12 +192,7 @@ interface PublicAgent {
       <header className="fixed top-0 left-0 right-0 z-50 bg-white/90 dark:bg-gray-900/90 backdrop-blur-lg border-b border-gray-200 dark:border-gray-700 shadow-sm">
         <nav className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center">
-              <MicrophoneIcon className="w-6 h-6 text-white" />
-            </div>
-            <span className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-              VoiceAgent
-            </span>
+            <img src="/weevoice_logo.svg" alt="Weevoice" className="h-9 w-auto object-contain dark:invert dark:opacity-95" />
           </Link>
           <div className="flex items-center gap-3">
             {/* Public Agents Button - Highlighted */}
@@ -302,36 +294,17 @@ interface PublicAgent {
                     </div>
                   </div>
 
-                  {/* Theme Settings */}
+                  {/* Theme Toggle */}
                   <div className="p-1">
-                    <div className="px-4 py-2.5 pb-1">
+                    <div className="px-4 py-2.5">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                           <ThemeIcon className="w-4 h-4" />
                           {t.settings.theme}
                         </span>
                       </div>
+                      <ThemeToggle />
                     </div>
-                    {themeOptions.map((option) => (
-                      <Menu.Item key={option.value}>
-                        {({ active }) => (
-                          <button
-                            onClick={() => setTheme(option.value)}
-                            className={`${
-                              active ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
-                            } ${
-                              theme === option.value ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
-                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
-                          >
-                            <option.icon className="mr-3 h-5 w-5" />
-                            {option.name}
-                            {theme === option.value && (
-                              <span className="ml-auto text-indigo-600 dark:text-indigo-400">✓</span>
-                            )}
-                          </button>
-                        )}
-                      </Menu.Item>
-                    ))}
                   </div>
 
                   {/* Logout (only if authenticated) */}
@@ -918,29 +891,89 @@ interface PublicAgent {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="py-12 px-6 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center">
-                <MicrophoneIcon className="w-5 h-5 text-white" />
+      {/* Footer - modern layout with rounded top, accent bars, icon support */}
+      <footer className="relative mt-16 overflow-hidden rounded-t-3xl bg-gray-100 dark:bg-gray-800/90 border-t border-gray-200/80 dark:border-gray-700/80 shadow-[0_-4px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_-4px_24px_-4px_rgba(0,0,0,0.2)]">
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-indigo-500/[0.02] to-transparent dark:via-indigo-400/[0.03] pointer-events-none" aria-hidden="true" />
+        <div className="relative max-w-7xl mx-auto px-6 sm:px-8 py-14 sm:py-16">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-12 lg:gap-10">
+            {/* Brand + company — spans 5 cols on lg */}
+            <div className="sm:col-span-2 lg:col-span-5 flex flex-col gap-6">
+              <Link to="/" className="flex items-center gap-3 w-fit group">
+                <img src="/weevoice_logo.svg" alt="Weevoice" className="h-10 w-auto object-contain dark:invert dark:opacity-95" />
+              </Link>
+              <p className="text-sm text-gray-600 dark:text-gray-400 max-w-sm leading-relaxed">
+                {t.landing.footerTagline}
+              </p>
+              <div className="flex flex-col gap-3 text-sm">
+                <div className="flex items-start gap-3">
+                  <BuildingOffice2Icon className="w-5 h-5 text-indigo-500 dark:text-indigo-400 shrink-0 mt-0.5" />
+                  <div className="text-gray-600 dark:text-gray-400 space-y-0.5">
+                    <p className="font-semibold text-gray-800 dark:text-gray-200">Exatek (SA)</p>
+                    <p>VAT: BE 0831.113.519</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <MapPinIcon className="w-5 h-5 text-indigo-500 dark:text-indigo-400 shrink-0 mt-0.5" />
+                  <p className="text-gray-600 dark:text-gray-400">
+                    Rue de la Colonne 1A, 1080 Molenbeek-Saint-Jean
+                  </p>
+                </div>
               </div>
-              <span className="text-lg font-bold text-gray-900 dark:text-white">VoiceAgent</span>
             </div>
-            <div className="text-center text-gray-600 dark:text-gray-400">
-              <p>&copy; 2025 VoiceAgent SaaS. {t.landing.tousDroitsReserves}</p>
+            {/* Product — 3 cols */}
+            <div className="lg:col-span-3">
+              <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-5 flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-gradient-to-b from-indigo-500 to-purple-500" />
+                {t.landing.product}
+              </h3>
+              <nav className="flex flex-col gap-3" aria-label={t.landing.product}>
+                <Link to="/demo" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.demo}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+                <Link to="/docs" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.documentation}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+                <Link to="/support" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.support}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+              </nav>
             </div>
-            <div className="flex gap-6">
-              <Link to="/demo" className="text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                {t.landing.demo}
-              </Link>
-              <a href="#" className="text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                {t.landing.documentation}
-              </a>
-              <Link to="/support" className="text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                {t.landing.support}
-              </Link>
+            {/* Legal — 4 cols */}
+            <div className="lg:col-span-4">
+              <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-5 flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-gradient-to-b from-indigo-500 to-purple-500" />
+                {t.landing.legal}
+              </h3>
+              <nav className="flex flex-col gap-3" aria-label={t.landing.legal}>
+                <Link to="/about" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.about}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+                <Link to="/support" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.contact}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+                <Link to="/privacy" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.privacyPolicy}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+                <Link to="/terms" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.termsOfService}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+              </nav>
+            </div>
+          </div>
+          <div className="mt-14 pt-8 border-t border-gray-200/80 dark:border-gray-700/80 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-sm text-gray-500 dark:text-gray-400 order-2 sm:order-1">
+              &copy; {new Date().getFullYear()} VoiceAgent SaaS. {t.landing.tousDroitsReserves}
+            </p>
+            <div className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 order-1 sm:order-2" aria-hidden="true">
+              <span className="w-2 h-2 rounded-full bg-indigo-400/60" />
+              <span>Exatek (SA)</span>
             </div>
           </div>
         </div>

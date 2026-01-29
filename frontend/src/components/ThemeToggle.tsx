@@ -1,5 +1,5 @@
 import { useThemeStore } from '@/store/themeStore'
-import { SunIcon, MoonIcon, ComputerDesktopIcon } from '@heroicons/react/24/outline'
+import { SunIcon, MoonIcon } from '@heroicons/react/24/outline'
 
 interface ThemeToggleProps {
   showLabel?: boolean
@@ -11,7 +11,6 @@ const ThemeToggle = ({ showLabel = false }: ThemeToggleProps) => {
   const themes = [
     { value: 'light' as const, icon: SunIcon, label: 'Light' },
     { value: 'dark' as const, icon: MoonIcon, label: 'Dark' },
-    { value: 'system' as const, icon: ComputerDesktopIcon, label: 'System' },
   ]
 
   if (showLabel) {
@@ -41,13 +40,13 @@ const ThemeToggle = ({ showLabel = false }: ThemeToggleProps) => {
   }
 
   return (
-    <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+    <div className="flex w-full items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
       {themes.map(({ value, icon: Icon, label }) => (
         <button
           key={value}
           onClick={() => setTheme(value)}
           title={label}
-          className={`p-2 rounded-md transition-all ${
+          className={`flex-1 flex items-center justify-center py-2.5 rounded-md transition-all ${
             theme === value
               ? 'bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
               : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'

@@ -3,18 +3,17 @@ import { useSearchParams } from 'react-router-dom'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import { useTranslation } from '@/lib/translations'
 import BillingContent from './settings/BillingContent'
-import UsageContent from './settings/UsageContent'
 import SecurityContent from './settings/SecurityContent'
 import ApiKeysContent from './settings/ApiKeysContent'
 
-type SettingsTab = 'billing' | 'usage' | 'security' | 'apiKeys'
+type SettingsTab = 'billing' | 'security' | 'apiKeys'
 
 export default function SettingsPage() {
   const t = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
     const tab = searchParams.get('tab') as SettingsTab
-    return tab && ['billing', 'usage', 'security', 'apiKeys'].includes(tab) ? tab : 'billing'
+    return tab && ['billing', 'security', 'apiKeys'].includes(tab) ? tab : 'billing'
   })
 
   useEffect(() => {
@@ -23,7 +22,6 @@ export default function SettingsPage() {
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'billing', label: t.nav.billing || 'Billing' },
-    { id: 'usage', label: t.nav.usage || 'Usage' },
     { id: 'security', label: t.nav.security || 'Security' },
     { id: 'apiKeys', label: t.nav.apiKeys || 'API Keys' },
   ]
@@ -32,8 +30,6 @@ export default function SettingsPage() {
     switch (activeTab) {
       case 'billing':
         return <BillingContent />
-      case 'usage':
-        return <UsageContent />
       case 'security':
         return <SecurityContent />
       case 'apiKeys':
@@ -52,7 +48,7 @@ export default function SettingsPage() {
             {t.common.status === 'Statut' ? 'Paramètres' : 'Settings'}
           </h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            {t.common.status === 'Statut' ? 'Gérez votre facturation, utilisation, sécurité et clés API' : 'Manage your billing, usage, security, and API keys'}
+            {t.common.status === 'Statut' ? 'Gérez votre facturation, sécurité et clés API' : 'Manage your billing, security, and API keys'}
           </p>
         </div>
 

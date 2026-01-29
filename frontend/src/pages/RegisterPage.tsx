@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { authAPI } from '@/lib/api'
 import toast from 'react-hot-toast'
-import { MicrophoneIcon, CheckCircleIcon } from '@heroicons/react/24/outline'
+import { CheckCircleIcon } from '@heroicons/react/24/outline'
 import { useTranslation } from '@/lib/translations'
 
 export default function RegisterPage() {
@@ -63,9 +63,8 @@ export default function RegisterPage() {
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center px-6">
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
-            <Link to="/" className="inline-flex items-center space-x-2">
-              <MicrophoneIcon className="w-10 h-10 text-primary-600" />
-              <span className="text-3xl font-bold text-gray-900 dark:text-white">VoiceAgent</span>
+            <Link to="/" className="inline-flex items-center justify-center">
+              <img src="/weevoice_logo.svg" alt="Weevoice" className="h-12 w-auto object-contain" />
             </Link>
           </div>
           
@@ -120,9 +119,8 @@ export default function RegisterPage() {
       <div className="max-w-md w-full">
         {/* Logo */}
         <div className="text-center mb-8">
-          <Link to="/" className="inline-flex items-center space-x-2">
-            <MicrophoneIcon className="w-10 h-10 text-primary-600" />
-            <span className="text-3xl font-bold text-gray-900 dark:text-white">VoiceAgent</span>
+          <Link to="/" className="inline-flex items-center justify-center">
+            <img src="/weevoice_logo.svg" alt="Weevoice" className="h-12 w-auto object-contain" />
           </Link>
         </div>
         
