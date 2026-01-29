@@ -550,10 +550,11 @@ endpoint=zadarma-endpoint
     def reload_asterisk(self) -> Dict[str, Any]:
         """
         Reload Asterisk configuration to apply changes.
-        For registration changes to take effect, we need to:
-        1. Unregister the current registration
-        2. Reload PJSIP config
-        3. The new registration will start automatically
+        
+        The correct sequence for registration changes:
+        1. Unregister current registration
+        2. Use 'pjsip reload' (NOT module reload) - this properly re-reads all config
+        3. Wait for automatic re-registration
         
         Returns status dict with success/failure and details.
         """
@@ -563,7 +564,7 @@ endpoint=zadarma-endpoint
             'success': False,
             'pjsip_reload': None,
             'dialplan_reload': None,
-            'registration_reload': None,
+            'registration_status': None,
             'errors': []
         }
         
@@ -586,64 +587,62 @@ endpoint=zadarma-endpoint
                 result['errors'].append("Asterisk is not running or not accessible")
                 return result
             
-            # For credential changes to take effect, we need to:
-            # 1. Unregister and stop the registration
-            # 2. Reload the outbound registration module (not just pjsip)
-            # 3. This forces it to re-read credentials and re-authenticate
-            
-            # Unregister current registration
+            logger.info("Step 1: Unregistering current registration")
             run_ast('pjsip send unregister zadarma-registration')
-            time.sleep(2)
-            
-            # Reload PJSIP modules to pick up new credentials
-            pjsip_cmd = run_ast('module reload res_pjsip.so', timeout=30)
             time.sleep(1)
             
-            # Reload outbound registration module
-            run_ast('module reload res_pjsip_outbound_registration.so', timeout=30)
+            # CRITICAL: Use 'pjsip reload' - this is the correct command
+            # 'module reload res_pjsip.so' does NOT properly reload config files!
+            logger.info("Step 2: Running 'pjsip reload' to re-read all config")
+            pjsip_cmd = run_ast('pjsip reload', timeout=30)
             
             result['pjsip_reload'] = {
                 'returncode': pjsip_cmd.returncode,
-                'stdout': pjsip_cmd.stdout,
-                'stderr': pjsip_cmd.stderr
+                'stdout': pjsip_cmd.stdout.strip(),
+                'stderr': pjsip_cmd.stderr.strip()
             }
-            
-            # Wait for module reload to complete
-            time.sleep(3)
-            
-            # Force re-registration with new credentials
-            reg_cmd = run_ast('pjsip send register zadarma-registration')
-            result['registration_reload'] = {
-                'returncode': reg_cmd.returncode,
-                'stdout': reg_cmd.stdout,
-                'stderr': reg_cmd.stderr
-            }
-            
-            # Wait for registration to complete
-            time.sleep(5)
             
             if pjsip_cmd.returncode != 0:
                 result['errors'].append(f"PJSIP reload failed: {pjsip_cmd.stderr}")
+            else:
+                logger.info(f"PJSIP reload output: {pjsip_cmd.stdout.strip()}")
+            
+            # Wait for PJSIP to process the reload and start registration
+            logger.info("Step 3: Waiting for registration to establish")
+            time.sleep(3)
+            
+            # Check registration status
+            reg_status_cmd = run_ast('pjsip show registrations')
+            result['registration_status'] = reg_status_cmd.stdout.strip()
+            logger.info(f"Registration status:\n{reg_status_cmd.stdout}")
             
             # Reload dialplan
+            logger.info("Step 4: Reloading dialplan")
             dialplan_cmd = run_ast('dialplan reload', timeout=30)
             result['dialplan_reload'] = {
                 'returncode': dialplan_cmd.returncode,
-                'stdout': dialplan_cmd.stdout,
-                'stderr': dialplan_cmd.stderr
+                'stdout': dialplan_cmd.stdout.strip(),
+                'stderr': dialplan_cmd.stderr.strip()
             }
             
             if dialplan_cmd.returncode != 0:
                 result['errors'].append(f"Dialplan reload failed: {dialplan_cmd.stderr}")
             
-            # Check if both reloads succeeded
+            # Check if registration is now "Registered"
+            is_registered = 'Registered' in result.get('registration_status', '')
+            
+            # Overall success
             result['success'] = (
                 pjsip_cmd.returncode == 0 and 
                 dialplan_cmd.returncode == 0
             )
             
             if result['success']:
-                logger.info("Asterisk configuration reloaded successfully")
+                if is_registered:
+                    logger.info("✅ Asterisk configuration reloaded and registered successfully")
+                else:
+                    logger.warning("⚠️ Asterisk config reloaded but registration may still be in progress")
+                    result['errors'].append("Registration not confirmed yet - check 'pjsip show registrations'")
             else:
                 logger.warning(f"Asterisk reload had issues: {result['errors']}")
             
