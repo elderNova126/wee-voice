@@ -245,12 +245,16 @@ class StreamingResampler:
     for smooth, gap-free audio.
     
     Uses VHQ (Very High Quality) mode for best audio quality.
+    
+    IMPORTANT: We "prime" the resampler with silence to eliminate initial latency.
+    soxr's streaming mode has filter delay that causes the first output to be empty.
     """
     def __init__(self, from_rate: int, to_rate: int, quality: str = 'VHQ'):
         self.from_rate = from_rate
         self.to_rate = to_rate
         self.resampler = None
         self.quality = quality
+        self.primed = False
         
         if SOXR_AVAILABLE:
             try:
@@ -270,7 +274,15 @@ class StreamingResampler:
                     dtype=np.float32,
                     quality=soxr_quality  # Use VHQ for best quality
                 )
-                print(f"[RESAMPLE] Using soxr {quality} quality: {from_rate}Hz -> {to_rate}Hz", flush=True)
+                
+                # Prime the resampler with silence to eliminate initial latency
+                # This fills the filter's internal buffer so first real audio outputs immediately
+                prime_samples = int(from_rate * 0.05)  # 50ms of silence
+                silence = np.zeros(prime_samples, dtype=np.float32)
+                _ = self.resampler.resample_chunk(silence)  # Discard priming output
+                self.primed = True
+                
+                print(f"[RESAMPLE] Using soxr {quality} quality: {from_rate}Hz -> {to_rate}Hz (primed)", flush=True)
             except Exception as e:
                 print(f"[RESAMPLE] soxr stream init error: {e}", flush=True)
         
@@ -506,15 +518,15 @@ class AudioSocketSession:
         print(f"[UNIFIED] Starting ASYNC pacer (large buffer for Gemini bursts)", flush=True)
         
         # === LARGE BUFFER settings to fix choppy audio ===
-        # Gemini sends audio in bursts with 200-500ms gaps between phrases
+        # AI models send audio in bursts with gaps between phrases
         # We need enough buffer to bridge these gaps smoothly
         CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
-        MIN_START_MS = 200           # Buffer 200ms before starting playback (10 frames)
-        RESUME_BUFFER_MS = 100       # Buffer 100ms before RESUMING after pause (5 frames) - FIX FOR CHOPPY START
-        JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for Gemini's bursts
+        MIN_START_MS = 400           # Buffer 400ms before starting playback (20 frames) - prevents choppy greeting start
+        RESUME_BUFFER_MS = 300       # Buffer 300ms before RESUMING after pause (15 frames) - prevents choppy response starts
+        JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for AI bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
-        PROVIDER_GRACE_MS = 1500     # Wait 1.5s before sending silence (Gemini pause tolerance)
-        EMPTY_BACKOFF_MAX = 25       # Wait 500ms (25 * 20ms) before filler
+        PROVIDER_GRACE_MS = 2000     # Wait 2s before sending silence (AI thinking tolerance)
+        EMPTY_BACKOFF_MAX = 50       # Wait 1000ms (50 * 20ms) before marking buffer dry
         
         # Derived values
         MIN_START_CHUNKS = max(1, MIN_START_MS // CHUNK_SIZE_MS)  # 10 chunks (200ms)
@@ -617,8 +629,19 @@ class AudioSocketSession:
                 if needs_rebuffer:
                     if available_frames >= RESUME_BUFFER_CHUNKS:
                         needs_rebuffer = False
+                        # Apply fade-in to the buffered audio to smooth the transition
+                        # This prevents pops/clicks when resuming
+                        if len(pending) >= frame_size:
+                            fade_samples = min(len(pending) // 2, 160)  # 10ms fade at 8kHz
+                            try:
+                                buf = np.frombuffer(pending[:fade_samples * 2], dtype=np.int16).copy()
+                                for i in range(len(buf)):
+                                    buf[i] = int(buf[i] * (i / len(buf)))
+                                pending = buf.tobytes() + pending[fade_samples * 2:]
+                            except:
+                                pass  # If fade fails, continue without it
                         bytes_per_ms = output_rate * 2 // 1000
-                        print(f"[PACER] ▶ RESUME: {buf_level/bytes_per_ms:.0f}ms rebuffered", flush=True)
+                        print(f"[PACER] ▶ RESUME: {buf_level/bytes_per_ms:.0f}ms rebuffered (fade-in applied)", flush=True)
                     else:
                         next_tick += TICK_SECONDS
                         continue  # Wait for rebuffer to fill
@@ -742,6 +765,10 @@ class AudioSocketSession:
                     audio_8k, resample_state = simple_resample(
                         audio_from_ai, ai_rate, output_rate, resample_state
                     )
+                    
+                    # Skip empty chunks (can happen due to resampler latency)
+                    if len(audio_8k) < 2:
+                        continue
                     
                     # === Apply attack envelope ONLY at very start (prevents pop) ===
                     if not attack_done:
