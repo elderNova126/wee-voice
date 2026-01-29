@@ -525,19 +525,17 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                             await self._save_message("user", transcript)
                             self.conversation_buffer.append({"role": "user", "text": transcript})
                     
-                    # Handle response done - flush buffer and reset for next response
+                    # Handle response done - flush buffer but DON'T reset warmup
+                    # This allows continuous audio flow without 400ms gaps between responses
                     elif msg_type == "response.done":
                         if audio_buffer:
                             # Flush any remaining audio
                             pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
                             yield pcm16_data
                             audio_buffer = b''
-                        # Reset for next response - next response will warmup again
-                        response_started = False
-                        # Signal response end to audiosocket handler (empty bytes = response boundary)
-                        # This allows audiosocket handler to reset startup_ready for next response
-                        yield b'__RESPONSE_END__'
-                        logger.debug("Response complete, reset warmup for next")
+                        # DON'T reset response_started - let audio flow continuously
+                        # The 400ms warmup was causing gaps between responses
+                        logger.debug("Response complete, continuing audio flow")
                     
                     # Handle function calls
                     elif msg_type == "response.function_call_arguments.done":
