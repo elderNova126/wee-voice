@@ -452,63 +452,37 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
     async def receive_audio(self) -> AsyncGenerator[bytes, None]:
         """Receive audio responses from OpenAI Realtime API
         
+        ZERO BUFFERING: Yield audio immediately as received.
+        audiosocket_handler does all buffering and pacing.
+        
         Input: G.711 μ-law at 8kHz (OpenAI native)
-        Output: PCM16 at 8kHz (direct to audiosocket_handler - NO RESAMPLING!)
-        
-        Key fix: Per-response warmup buffer - accumulate 300ms before yielding
-        the first chunk of each response. This ensures smooth starts.
+        Output: PCM16 at 8kHz (direct to audiosocket_handler)
         """
-        logger.info(f"Starting audio reception (μ-law→PCM16 @ 8kHz, per-response warmup)")
-        response_count = 0
-        audio_buffer = b''
-        
-        # Warmup: Buffer 400ms before yielding first chunk of each response
-        # μ-law @ 8kHz: 8000 * 1 byte * 0.4s = 3200 bytes
-        WARMUP_SIZE = 3200  # 400ms warmup for each response
-        BATCH_SIZE = 800    # 100ms batches after warmup
-        
-        # Track per-response state
-        response_started = False  # True after first audio of response is yielded
+        logger.info(f"Starting audio reception (μ-law→PCM16 @ 8kHz, zero buffering)")
+        chunk_count = 0
         
         try:
             while self._running and self.ws:
                 try:
-                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.05)  # Fast polling
+                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.05)
                     msg = json.loads(msg_str)
                     msg_type = msg.get("type", "")
                     
-                    # Handle audio delta (streaming audio response)
+                    # Handle audio delta - YIELD IMMEDIATELY
                     if msg_type == "response.audio.delta":
-                        response_count += 1
                         audio_b64 = msg.get("delta", "")
                         if audio_b64:
-                            ulaw_data = base64.b64decode(audio_b64)  # G.711 μ-law @ 8kHz
-                            audio_buffer += ulaw_data
-                            
-                            # Per-response warmup: buffer 300ms before first yield
-                            if not response_started:
-                                if len(audio_buffer) >= WARMUP_SIZE:
-                                    # First yield of this response - send all accumulated
-                                    pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
-                                    logger.debug(f"[WARMUP] First yield: {len(audio_buffer)}b μ-law → {len(pcm16_data)}b PCM16")
-                                    yield pcm16_data
-                                    audio_buffer = b''
-                                    response_started = True
-                                # else: keep buffering until we have 300ms
-                            else:
-                                # After warmup, stream in 100ms batches
-                                if len(audio_buffer) >= BATCH_SIZE:
-                                    pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
-                                    yield pcm16_data
-                                    audio_buffer = b''
+                            ulaw_data = base64.b64decode(audio_b64)
+                            pcm16_data = audioop.ulaw2lin(ulaw_data, 2)
+                            chunk_count += 1
+                            yield pcm16_data
                     
-                    # Handle audio transcript (what the AI said)
+                    # Handle transcripts
                     elif msg_type == "response.audio_transcript.delta":
                         text = msg.get("delta", "")
                         if text:
                             self._agent_transcript_buffer.append(text)
                     
-                    # Handle response completion
                     elif msg_type == "response.audio_transcript.done":
                         transcript = msg.get("transcript", "")
                         if transcript:
@@ -517,7 +491,6 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                             self.conversation_buffer.append({"role": "agent", "text": transcript})
                         self._agent_transcript_buffer.clear()
                     
-                    # Handle input transcription (what the user said)
                     elif msg_type == "conversation.item.input_audio_transcription.completed":
                         transcript = msg.get("transcript", "")
                         if transcript:
@@ -525,34 +498,17 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                             await self._save_message("user", transcript)
                             self.conversation_buffer.append({"role": "user", "text": transcript})
                     
-                    # Handle response done - flush buffer but DON'T reset warmup
-                    # This allows continuous audio flow without 400ms gaps between responses
                     elif msg_type == "response.done":
-                        if audio_buffer:
-                            # Flush any remaining audio
-                            pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
-                            yield pcm16_data
-                            audio_buffer = b''
-                        # DON'T reset response_started - let audio flow continuously
-                        # The 400ms warmup was causing gaps between responses
-                        logger.debug("Response complete, continuing audio flow")
+                        logger.debug("Response complete")
                     
-                    # Handle function calls
                     elif msg_type == "response.function_call_arguments.done":
                         await self._handle_function_call(msg)
                     
-                    # Handle errors
                     elif msg_type == "error":
                         error = msg.get("error", {})
                         logger.error(f"OpenAI Realtime error: {error}")
                     
                 except asyncio.TimeoutError:
-                    # Flush buffer on timeout if we have accumulated audio
-                    # But only if response already started (don't break warmup)
-                    if audio_buffer and response_started:
-                        pcm16_data = audioop.ulaw2lin(audio_buffer, 2)
-                        yield pcm16_data
-                        audio_buffer = b''
                     continue
                 except ConnectionClosed:
                     logger.info("OpenAI Realtime WebSocket closed")
@@ -562,7 +518,7 @@ YOU MUST SPEAK ONLY IN ENGLISH. This is non-negotiable.
                     break
                 except Exception as e:
                     logger.error(f"Error receiving from OpenAI: {e}")
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.01)
                     
         except Exception as e:
             logger.error(f"Error in receive loop: {e}")

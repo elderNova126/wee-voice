@@ -219,15 +219,14 @@ class AudioSocketSession:
         recv_queue = asyncio.Queue(maxsize=50)
         
         async def receiver():
-            """Receive from AI and normalize."""
+            """Receive from AI - pass through directly."""
             nonlocal chunks_recv
             try:
                 async for audio in self.agent_service.receive_audio():
                     if not self.is_running:
                         break
                     if audio and len(audio) >= 2:
-                        # Normalize volume
-                        audio = normalize_audio(audio)
+                        # Pass through directly - no processing
                         chunks_recv += 1
                         await recv_queue.put(audio)
             except asyncio.CancelledError:
