@@ -609,10 +609,17 @@ class AudioSocketSession:
             
             while self.is_running:
                 # === CHECK FOR RESPONSE BOUNDARY RESET ===
+                # Only reset if buffer is low - don't interrupt mid-playback!
                 if reset_startup_flag:
-                    startup_ready = False
                     reset_startup_flag = False
-                    print(f"[PACER] 🔄 Reset for new response (will buffer {MIN_START_MS}ms)", flush=True)
+                    # Calculate current buffer in ms
+                    current_buf_ms = len(pending) // (output_rate * 2 // 1000)
+                    if current_buf_ms < 100:  # Only reset if nearly empty
+                        startup_ready = False
+                        underrun_streak = 0  # Reset fade state too
+                        print(f"[PACER] 🔄 Reset for new response (buffer was {current_buf_ms}ms)", flush=True)
+                    else:
+                        print(f"[PACER] 📍 Response boundary (buffer={current_buf_ms}ms, continuing playback)", flush=True)
                 
                 # === TIMING (like _pacer_loop) ===
                 now = time.perf_counter()
@@ -667,12 +674,14 @@ class AudioSocketSession:
                     pending = pending[frame_size:]
                     
                     # Check if we're recovering from underrun - apply FADE-IN
+                    # Use sine curve for smooth perceptual transition
                     recovering = underrun_streak > 0
                     if recovering:
-                        # Calculate fade-in factor (0.2 → 1.0 over FADE_IN_FRAMES)
-                        # Start at 20% to avoid harsh click
+                        # Fade from 30% → 100% over FADE_IN_FRAMES (160ms)
+                        # Use sine curve for smooth perceptual ramp
                         fade_progress = min(1.0, (FADE_IN_FRAMES - underrun_streak + 1) / FADE_IN_FRAMES)
-                        fade_factor = 0.2 + 0.8 * fade_progress
+                        # Sine curve: slow start, faster middle, slow end
+                        fade_factor = 0.3 + 0.7 * (np.sin(fade_progress * np.pi / 2))
                         underrun_streak = max(0, underrun_streak - 1)
                         
                         try:
@@ -682,15 +691,14 @@ class AudioSocketSession:
                         except:
                             pass
                     
-                    # Apply smooth FADE-OUT when buffer is getting low (< 160ms remaining)
-                    # Uses cosine curve for natural sound
-                    elif len(pending) < frame_size * 8:  # < 160ms remaining
-                        LOW_BUFFER_THRESHOLD = frame_size * 8
-                        # Calculate fade factor based on how much buffer remains
-                        # From 1.0 (full) to 0.2 (nearly out) using cosine curve
+                    # Apply smooth FADE-OUT when buffer is getting low (< 200ms remaining)
+                    # Use cosine curve for natural sound
+                    elif len(pending) < frame_size * 10:  # < 200ms remaining
+                        LOW_BUFFER_THRESHOLD = frame_size * 10
+                        # Fade from 100% → 30% (match fade-in start point)
                         buffer_ratio = len(pending) / LOW_BUFFER_THRESHOLD
                         # Cosine fade: smooth start, smooth end
-                        fade_factor = 0.2 + 0.8 * (np.cos((1 - buffer_ratio) * np.pi / 2))
+                        fade_factor = 0.3 + 0.7 * (np.cos((1 - buffer_ratio) * np.pi / 2))
                         
                         try:
                             frame_arr = np.frombuffer(frame, dtype=np.int16).copy()
