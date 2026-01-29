@@ -131,49 +131,32 @@ def list_calls(
             )
         )
     
-    # Filter by action required
-    # Note: This is a simplified filter. For production, consider using PostgreSQL JSON/array functions
-    # or maintaining a separate boolean column for action_required
+    # Filter by action required using SQL-level filtering for performance
+    # Uses callback_requested flag and JSONB operators for action_tags
     if action_required is not None:
-        # First, get all matching calls to check action_tags and action_items
-        # This is not ideal for large datasets but works for the current implementation
-        temp_query = query
-        all_matching_calls = temp_query.all()
+        from sqlalchemy import text
         
-        filtered_call_ids = []
-        for call in all_matching_calls:
-            # Ensure action_tags are up-to-date
-            if call.action_items:
-                update_call_follow_up_data(call, call.action_items)
-            
-            has_action_required = False
-            
-            # Check callback_requested flag
-            if getattr(call, 'callback_requested', False):
-                has_action_required = True
-            
-            # Check action_tags - match frontend logic: tags containing "request"
-            if not has_action_required and call.action_tags and len(call.action_tags) > 0:
-                # Frontend checks if tag includes "request" (case-insensitive)
-                has_action_required = any('request' in tag.lower() for tag in call.action_tags)
-            
-            # Also check action_items for callback/follow-up keywords as fallback
-            if not has_action_required and call.action_items and len(call.action_items) > 0:
-                action_items_str = ' '.join(call.action_items).lower()
-                has_action_required = any(keyword in action_items_str for keyword in [
-                    'callback', 'follow-up', 'call back', 'contact', 'reach out', 'followup', 'rappel', 'rappeler'
-                ])
-            
-            if action_required and has_action_required:
-                filtered_call_ids.append(call.id)
-            elif not action_required and not has_action_required:
-                filtered_call_ids.append(call.id)
-        
-        if filtered_call_ids:
-            query = query.filter(Call.id.in_(filtered_call_ids))
+        if action_required:
+            # Filter calls that have action required:
+            # 1. callback_requested is True, OR
+            # 2. action_tags contains any tag with "request" (case-insensitive)
+            query = query.filter(
+                or_(
+                    Call.callback_requested == True,
+                    # PostgreSQL: check if any element in action_tags array contains 'request'
+                    text("EXISTS (SELECT 1 FROM jsonb_array_elements_text(action_tags) AS tag WHERE LOWER(tag) LIKE '%request%')")
+                )
+            )
         else:
-            # No calls match the filter, return empty result
-            query = query.filter(Call.id == -1)  # Impossible condition
+            # Filter calls without action required
+            query = query.filter(
+                Call.callback_requested != True,
+                # Ensure no action_tags contain 'request'
+                or_(
+                    Call.action_tags == None,
+                    text("NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(action_tags, '[]'::jsonb)) AS tag WHERE LOWER(tag) LIKE '%request%')")
+                )
+            )
     
     # Get total count before pagination
     total = query.count()
@@ -183,13 +166,6 @@ def list_calls(
     
     # Apply pagination
     calls = query.order_by(desc(Call.created_at)).offset(offset).limit(per_page).all()
-
-    # Ensure follow-up tags are refreshed using the latest action items data
-    # Note: This is already done in the action_required filter above, but we do it again
-    # to ensure all calls have up-to-date tags when returned
-    for call in calls:
-        if call.action_items:
-            update_call_follow_up_data(call, call.action_items)
     
     # Check which calls have messages (for text chat detection)
     call_ids = [call.id for call in calls]

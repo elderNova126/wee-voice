@@ -268,12 +268,15 @@ async def get_usage_analytics(
     current_user: User = Depends(get_current_user)
 ):
     """Get complete usage analytics"""
+    import asyncio
     
-    # Get all data in parallel
-    summary = await get_usage_summary(db=db, current_user=current_user)
-    by_month = await get_usage_by_month(db=db, current_user=current_user)
-    by_day = await get_usage_by_day(db=db, current_user=current_user)
-    by_agent = await get_usage_by_agent(db=db, current_user=current_user)
+    # Get all data in parallel using asyncio.gather
+    summary, by_month, by_day, by_agent = await asyncio.gather(
+        get_usage_summary(db=db, current_user=current_user),
+        get_usage_by_month(db=db, current_user=current_user),
+        get_usage_by_day(db=db, current_user=current_user),
+        get_usage_by_agent(db=db, current_user=current_user)
+    )
     
     return UsageAnalytics(
         summary=summary,

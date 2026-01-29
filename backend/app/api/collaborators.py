@@ -45,6 +45,8 @@ def list_collaborators(
     db: Session = Depends(get_db)
 ):
     """List all collaborators for an agent"""
+    from sqlalchemy.orm import joinedload
+    
     # Check if user has access to the agent
     has_access, agent, role = check_agent_access(db, agent_id, current_user.id)
     
@@ -55,13 +57,16 @@ def list_collaborators(
     if role != "owner" and not can_manage_collaborators(db, agent_id, current_user.id):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     
-    collaborators = db.query(AgentCollaborator).filter(
+    # Use joinedload to fetch users in single query (avoid N+1)
+    collaborators = db.query(AgentCollaborator).options(
+        joinedload(AgentCollaborator.user)
+    ).filter(
         AgentCollaborator.agent_id == agent_id
     ).all()
     
     result = []
     for collab in collaborators:
-        user = db.query(User).filter(User.id == collab.user_id).first()
+        user = collab.user  # Already loaded via joinedload
         result.append({
             "id": collab.id,
             "agent_id": collab.agent_id,
@@ -168,11 +173,16 @@ def update_collaborator(
     db: Session = Depends(get_db)
 ):
     """Update a collaborator's permissions"""
+    from sqlalchemy.orm import joinedload
+    
     # Check if user can manage collaborators
     if not can_manage_collaborators(db, agent_id, current_user.id):
         raise HTTPException(status_code=403, detail="Insufficient permissions to manage collaborators")
     
-    collaborator = db.query(AgentCollaborator).filter(
+    # Fetch collaborator with user in single query
+    collaborator = db.query(AgentCollaborator).options(
+        joinedload(AgentCollaborator.user)
+    ).filter(
         AgentCollaborator.id == collaborator_id,
         AgentCollaborator.agent_id == agent_id
     ).first()
@@ -191,7 +201,7 @@ def update_collaborator(
     db.commit()
     db.refresh(collaborator)
     
-    user = db.query(User).filter(User.id == collaborator.user_id).first()
+    user = collaborator.user  # Already loaded via joinedload
     
     return {
         "id": collaborator.id,

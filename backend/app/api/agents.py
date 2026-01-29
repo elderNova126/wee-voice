@@ -107,8 +107,23 @@ class AgentResponse(BaseModel):
         from_attributes = True
 
 
-def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, db: Optional[Session] = None) -> AgentResponse:
-    """Convert a VoiceAgent model instance into an AgentResponse."""
+def _serialize_agent(
+    agent: VoiceAgent, 
+    current_user_id: Optional[int] = None, 
+    db: Optional[Session] = None,
+    integration_ids_cache: Optional[dict] = None,
+    collaborator_cache: Optional[dict] = None
+) -> AgentResponse:
+    """
+    Convert a VoiceAgent model instance into an AgentResponse.
+    
+    Args:
+        agent: The agent to serialize
+        current_user_id: Current user's ID for permission checks
+        db: Database session
+        integration_ids_cache: Pre-fetched dict of agent_id -> list of integration_ids
+        collaborator_cache: Pre-fetched dict of agent_id -> collaborator object
+    """
     phone_record = getattr(agent, "phone_number", None)
     phone_number = None
     phone_status = None
@@ -127,8 +142,12 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
         if is_owner:
             permissions = ["view", "edit", "delete", "manage_collaborators"]
         else:
-            # Get collaborator permissions
-            if db:
+            # Get collaborator permissions from cache first
+            if collaborator_cache is not None and agent.id in collaborator_cache:
+                collaborator = collaborator_cache[agent.id]
+                if collaborator:
+                    permissions = collaborator.permissions.split(",")
+            elif db:
                 collaborator = db.query(AgentCollaborator).filter(
                     AgentCollaborator.agent_id == agent.id,
                     AgentCollaborator.user_id == current_user_id,
@@ -136,14 +155,6 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
                 ).first()
                 if collaborator:
                     permissions = collaborator.permissions.split(",")
-            else:
-                from app.core.permissions import get_user_permissions
-                from app.models.database import SessionLocal
-                temp_db = SessionLocal()
-                try:
-                    permissions = get_user_permissions(temp_db, agent.id, current_user_id)
-                finally:
-                    temp_db.close()
     
     # Parse workflow questions if stored as JSON
     workflow_questions = getattr(agent, 'workflow_questions', None) or []
@@ -153,9 +164,11 @@ def _serialize_agent(agent: VoiceAgent, current_user_id: Optional[int] = None, d
             for q in workflow_questions
         ]
     
-    # Get integration IDs for this agent
+    # Get integration IDs from cache first, then fallback to query
     integration_ids = []
-    if db:
+    if integration_ids_cache is not None:
+        integration_ids = integration_ids_cache.get(agent.id, [])
+    elif db:
         agent_integrations = db.query(AgentIntegration).filter(
             AgentIntegration.agent_id == agent.id
         ).all()
@@ -273,13 +286,19 @@ def list_agents(
     db: Session = Depends(get_db)
 ):
     """List all agents for current user (owned and collaborated)"""
-    # Get owned agents
-    owned_agents = db.query(VoiceAgent).filter(
+    from sqlalchemy.orm import joinedload
+    
+    # Get owned agents with eager loading
+    owned_agents = db.query(VoiceAgent).options(
+        joinedload(VoiceAgent.phone_number)
+    ).filter(
         VoiceAgent.user_id == current_user.id
     ).all()
     
-    # Get collaborated agents
-    collaborations = db.query(AgentCollaborator).filter(
+    # Get collaborated agents with eager loading
+    collaborations = db.query(AgentCollaborator).options(
+        joinedload(AgentCollaborator.agent).joinedload(VoiceAgent.phone_number)
+    ).filter(
         AgentCollaborator.user_id == current_user.id,
         AgentCollaborator.is_active == True
     ).all()
@@ -288,8 +307,32 @@ def list_agents(
     
     # Combine and deduplicate (in case user is both owner and collaborator)
     all_agents = {agent.id: agent for agent in owned_agents + collaborated_agents}
+    agent_ids = list(all_agents.keys())
     
-    return [_serialize_agent(agent, current_user.id, db) for agent in all_agents.values()]
+    # Batch fetch integration IDs for all agents (prevents N+1)
+    integration_ids_cache = {}
+    if agent_ids:
+        agent_integrations = db.query(AgentIntegration).filter(
+            AgentIntegration.agent_id.in_(agent_ids)
+        ).all()
+        for ai in agent_integrations:
+            if ai.agent_id not in integration_ids_cache:
+                integration_ids_cache[ai.agent_id] = []
+            integration_ids_cache[ai.agent_id].append(ai.integration_id)
+    
+    # Build collaborator cache for collaborated agents
+    collaborator_cache = {collab.agent_id: collab for collab in collaborations}
+    
+    return [
+        _serialize_agent(
+            agent, 
+            current_user.id, 
+            db, 
+            integration_ids_cache=integration_ids_cache,
+            collaborator_cache=collaborator_cache
+        ) 
+        for agent in all_agents.values()
+    ]
 
 
 @router.get("/public/list", response_model=List[AgentResponse])
@@ -481,7 +524,8 @@ def get_agent_leads(
     db: Session = Depends(get_db)
 ):
     """Get potential customers (leads) for a specific agent"""
-    from sqlalchemy import func, desc
+    from sqlalchemy import func, desc, and_
+    from sqlalchemy.orm import aliased
     from app.models import Call
     
     has_access, agent, role = check_agent_access(db, agent_id, current_user.id, "view")
@@ -489,37 +533,51 @@ def get_agent_leads(
     if not has_access or not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    # Get unique callers with their last call info
-    leads_query = db.query(
+    # Subquery to get the max started_at for each caller_phone
+    latest_call_subq = db.query(
         Call.caller_phone,
-        Call.caller_name,
-        func.count(Call.id).label('call_count'),
-        func.max(Call.started_at).label('last_contact'),
-        func.sum(Call.duration_minutes).label('total_duration')
+        func.max(Call.started_at).label('max_started_at')
     ).filter(
         Call.agent_id == agent_id,
         Call.caller_phone.isnot(None)
-    ).group_by(
+    ).group_by(Call.caller_phone).subquery()
+    
+    # Main query: aggregate stats with last call details in one query
+    # Join with the subquery to get only the latest call per phone
+    leads_query = db.query(
         Call.caller_phone,
-        Call.caller_name
-    ).order_by(desc('last_contact')).all()
+        Call.caller_name,
+        Call.sentiment.label('last_sentiment'),
+        Call.callback_requested.label('has_action_required'),
+        Call.started_at.label('last_contact'),
+        func.count(Call.id).over(partition_by=Call.caller_phone).label('call_count'),
+        func.sum(Call.duration_minutes).over(partition_by=Call.caller_phone).label('total_duration')
+    ).join(
+        latest_call_subq,
+        and_(
+            Call.caller_phone == latest_call_subq.c.caller_phone,
+            Call.started_at == latest_call_subq.c.max_started_at
+        )
+    ).filter(
+        Call.agent_id == agent_id
+    ).distinct().order_by(desc(Call.started_at)).all()
     
     leads = []
+    seen_phones = set()
     for lead in leads_query:
-        # Get the last call's sentiment and action status
-        last_call = db.query(Call).filter(
-            Call.agent_id == agent_id,
-            Call.caller_phone == lead.caller_phone
-        ).order_by(desc(Call.started_at)).first()
+        # Deduplicate in case of ties
+        if lead.caller_phone in seen_phones:
+            continue
+        seen_phones.add(lead.caller_phone)
         
         leads.append({
             "phone": lead.caller_phone,
             "name": lead.caller_name,
             "call_count": lead.call_count,
-            "last_contact": last_call.started_at if last_call else None,
+            "last_contact": lead.last_contact,
             "total_duration": round(float(lead.total_duration or 0), 2),
-            "last_sentiment": last_call.sentiment if last_call else None,
-            "has_action_required": last_call.callback_requested if last_call else False
+            "last_sentiment": lead.last_sentiment,
+            "has_action_required": lead.has_action_required or False
         })
     
     return {"leads": leads, "total": len(leads)}
