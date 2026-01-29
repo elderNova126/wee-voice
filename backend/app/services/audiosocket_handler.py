@@ -540,10 +540,10 @@ class AudioSocketSession:
         # Optimized for OpenAI Realtime which sends audio in bursts
         CHUNK_SIZE_MS = 20           # Fixed: 20ms frames for Asterisk
         MIN_START_MS = 400           # Buffer 400ms before starting playback
-        RESUME_BUFFER_MS = 300       # Buffer 300ms before resuming after dry
+        # RESUME_BUFFER_MS removed - no rebuffer mode (like reference implementation)
         JITTER_BUFFER_MS = 2000      # 2 second jitter buffer for AI bursts
         LOW_WATERMARK_MS = 200       # Refill when below 200ms
-        EMPTY_BACKOFF_MAX = 50       # Mark buffer dry after 1000ms (50 * 20ms) - only for real pauses
+        # NO rebuffer mode - reference implementation NEVER stops the pacer!
         
         # Derived values - now using actual milliseconds, not chunk counts
         TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02s = 20ms per tick
@@ -553,7 +553,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, resume={RESUME_BUFFER_MS}ms, dry_detect={EMPTY_BACKOFF_MAX*20}ms, fade=80ms, comfort_noise=ON", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, NO_REBUFFER (like reference), fade=80ms", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
@@ -572,8 +572,7 @@ class AudioSocketSession:
         attack_state = None
         pending = b''  # Frame remainder buffer
         startup_ready = False
-        needs_rebuffer = False  # True when we've been dry and need to rebuffer before resuming
-        empty_backoff = 0
+        # No rebuffer variables needed - we NEVER stop (like reference implementation)
         last_real_emit_ts = 0.0
         
         stats = {
@@ -585,14 +584,14 @@ class AudioSocketSession:
         
         async def pacer_loop():
             """
-            ASYNC pacer loop - EXACT copy of Asterisk-AI-Voice-Agent's _pacer_loop + _drain_next_frame.
+            ASYNC pacer loop - based on Asterisk-AI-Voice-Agent's _pacer_loop.
             Runs at steady 20ms cadence, draining jitter buffer.
             
-            Key fix: When buffer goes dry during a response pause, we set needs_rebuffer=True.
-            This ensures we wait for RESUME_BUFFER_CHUNKS before resuming playback,
-            preventing the "choppy start" at the beginning of each new response.
+            Key fix: NEVER stop the pacer - just emit silence during underruns.
+            This matches the reference implementation which NEVER stops,
+            eliminating the choppy audio from stop/wait/restart cycles.
             """
-            nonlocal pending, startup_ready, needs_rebuffer, empty_backoff, last_real_emit_ts
+            nonlocal pending, startup_ready, last_real_emit_ts
             
             next_tick = time.perf_counter()
             sentinel_seen = False
@@ -644,34 +643,8 @@ class AudioSocketSession:
                         next_tick += TICK_SECONDS
                         continue
                 
-                # === REBUFFER GATE - Use actual buffer SIZE in milliseconds ===
-                # When resuming after a pause, wait for minimum buffer before playing
-                if needs_rebuffer:
-                    if buf_ms >= RESUME_BUFFER_MS:
-                        needs_rebuffer = False
-                        empty_backoff = 0  # Reset backoff counter
-                        # Apply smooth fade-in over 80ms (longer = smoother transition)
-                        if len(pending) >= frame_size:
-                            fade_samples = min(len(pending) // 2, 640)  # 80ms fade at 8kHz (640 samples)
-                            try:
-                                buf = np.frombuffer(pending[:fade_samples * 2], dtype=np.int16).copy()
-                                # Use smooth S-curve (sine) for most natural fade
-                                t = np.linspace(0, np.pi/2, len(buf))
-                                fade_curve = np.sin(t)  # Smooth S-curve
-                                buf = (buf * fade_curve).astype(np.int16)
-                                pending = buf.tobytes() + pending[fade_samples * 2:]
-                            except:
-                                pass
-                        print(f"[PACER] ▶ RESUME: {buf_ms}ms rebuffered (80ms fade-in)", flush=True)
-                    else:
-                        # Not enough buffer yet - send comfort noise
-                        try:
-                            self.writer.write(header + COMFORT_NOISE_FRAME)
-                            stats['sent'] += 1
-                        except:
-                            break
-                        next_tick += TICK_SECONDS
-                        continue
+                # NO REBUFFER GATE - Reference implementation NEVER stops!
+                # Just keep emitting audio or silence at 20ms cadence
                 
                 # === EMIT FRAME with smooth fade-out when buffer is draining ===
                 if buf_level >= frame_size:
@@ -701,7 +674,6 @@ class AudioSocketSession:
                         if write_buf > 4096:
                             await self.writer.drain()
                         stats['sent'] += 1
-                        empty_backoff = 0
                         last_real_emit_ts = time.perf_counter()
                     except:
                         break
@@ -728,9 +700,10 @@ class AudioSocketSession:
                     break
                 
                 elif startup_ready and len(pending) < frame_size:
-                    # Buffer empty - send silence (we already faded out above)
+                    # Buffer empty - emit silence and keep going (NEVER stop!)
+                    # This is the key insight from the reference implementation
                     if len(pending) > 0:
-                        # Send remaining partial audio (already faded above)
+                        # Send remaining partial audio padded with silence
                         frame = pending + (b'\x00' * (frame_size - len(pending)))
                         pending = b''
                         try:
@@ -740,16 +713,10 @@ class AudioSocketSession:
                         except:
                             break
                     else:
-                        # Completely empty - mark for rebuffer
-                        if not needs_rebuffer:
-                            empty_backoff += 1
-                            if empty_backoff >= EMPTY_BACKOFF_MAX:
-                                needs_rebuffer = True
-                                print(f"[PACER] ⏸ Buffer dry, will rebuffer on resume", flush=True)
-                        
-                        # Send comfort noise (sounds more natural than pure silence)
+                        # Completely empty - just emit silence and KEEP GOING
+                        # (Reference: they emit silence_factory(chunk_bytes) during underruns)
                         try:
-                            self.writer.write(header + COMFORT_NOISE_FRAME)
+                            self.writer.write(header + SILENCE_FRAME)
                             stats['sent'] += 1
                             stats['underrun_empty'] += 1
                         except:
