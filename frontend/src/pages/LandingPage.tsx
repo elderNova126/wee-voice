@@ -23,7 +23,10 @@ import {
   FunnelIcon,
   XMarkIcon,
   ChevronLeftIcon,
-  ChevronRightIcon
+  ChevronRightIcon,
+  MapPinIcon,
+  BuildingOffice2Icon,
+  ArrowTopRightOnSquareIcon
 } from '@heroicons/react/24/outline'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
@@ -918,35 +921,95 @@ interface PublicAgent {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="py-12 px-6 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <div className="max-w-7xl mx-auto space-y-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center">
-                <MicrophoneIcon className="w-5 h-5 text-white" />
+      {/* Footer - modern layout with rounded top, accent bars, icon support */}
+      <footer className="relative mt-16 overflow-hidden rounded-t-3xl bg-gray-100 dark:bg-gray-800/90 border-t border-gray-200/80 dark:border-gray-700/80 shadow-[0_-4px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_-4px_24px_-4px_rgba(0,0,0,0.2)]">
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-indigo-500/[0.02] to-transparent dark:via-indigo-400/[0.03] pointer-events-none" aria-hidden="true" />
+        <div className="relative max-w-7xl mx-auto px-6 sm:px-8 py-14 sm:py-16">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-12 lg:gap-10">
+            {/* Brand + company — spans 5 cols on lg */}
+            <div className="sm:col-span-2 lg:col-span-5 flex flex-col gap-6">
+              <Link to="/" className="flex items-center gap-3 w-fit group">
+                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-500/25 group-hover:shadow-indigo-500/40 transition-shadow duration-300">
+                  <MicrophoneIcon className="w-6 h-6 text-white" />
+                </div>
+                <span className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+                  VoiceAgent
+                </span>
+              </Link>
+              <p className="text-sm text-gray-600 dark:text-gray-400 max-w-sm leading-relaxed">
+                {t.landing.footerTagline}
+              </p>
+              <div className="flex flex-col gap-3 text-sm">
+                <div className="flex items-start gap-3">
+                  <BuildingOffice2Icon className="w-5 h-5 text-indigo-500 dark:text-indigo-400 shrink-0 mt-0.5" />
+                  <div className="text-gray-600 dark:text-gray-400 space-y-0.5">
+                    <p className="font-semibold text-gray-800 dark:text-gray-200">Exatek (SA)</p>
+                    <p>VAT: BE 0831.113.519</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <MapPinIcon className="w-5 h-5 text-indigo-500 dark:text-indigo-400 shrink-0 mt-0.5" />
+                  <p className="text-gray-600 dark:text-gray-400">
+                    Rue de la Colonne 1A, 1080 Molenbeek-Saint-Jean
+                  </p>
+                </div>
               </div>
-              <span className="text-lg font-bold text-gray-900 dark:text-white">VoiceAgent</span>
             </div>
-            <div className="text-center text-gray-600 dark:text-gray-400">
-              <p>&copy; 2025 VoiceAgent SaaS. {t.landing.tousDroitsReserves}</p>
+            {/* Product — 3 cols */}
+            <div className="lg:col-span-3">
+              <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-5 flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-gradient-to-b from-indigo-500 to-purple-500" />
+                {t.landing.product}
+              </h3>
+              <nav className="flex flex-col gap-3" aria-label={t.landing.product}>
+                <Link to="/demo" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.demo}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+                <a href="#" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.documentation}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </a>
+                <Link to="/support" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.support}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+              </nav>
             </div>
-            <div className="flex gap-6">
-              <Link to="/demo" className="text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                {t.landing.demo}
-              </Link>
-              <a href="#" className="text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                {t.landing.documentation}
-              </a>
-              <Link to="/support" className="text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
-                {t.landing.support}
-              </Link>
+            {/* Legal — 4 cols */}
+            <div className="lg:col-span-4">
+              <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-5 flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-gradient-to-b from-indigo-500 to-purple-500" />
+                {t.landing.legal}
+              </h3>
+              <nav className="flex flex-col gap-3" aria-label={t.landing.legal}>
+                <a href="#about" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.about}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </a>
+                <Link to="/support" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.contact}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </Link>
+                <a href="#privacy" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.privacyPolicy}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </a>
+                <a href="#terms" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                  <span>{t.landing.termsOfService}</span>
+                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
+                </a>
+              </nav>
             </div>
           </div>
-          <div className="text-center text-sm text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 pt-6">
-            <p className="font-medium text-gray-700 dark:text-gray-300">Exatek (SA)</p>
-            <p>VAT: BE 0831.113.519</p>
-            <p>Rue de la Colonne 1A, 1080 Molenbeek-Saint-Jean</p>
+          <div className="mt-14 pt-8 border-t border-gray-200/80 dark:border-gray-700/80 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-sm text-gray-500 dark:text-gray-400 order-2 sm:order-1">
+              &copy; {new Date().getFullYear()} VoiceAgent SaaS. {t.landing.tousDroitsReserves}
+            </p>
+            <div className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 order-1 sm:order-2" aria-hidden="true">
+              <span className="w-2 h-2 rounded-full bg-indigo-400/60" />
+              <span>Exatek (SA)</span>
+            </div>
           </div>
         </div>
       </footer>

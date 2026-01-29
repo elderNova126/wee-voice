@@ -916,6 +916,13 @@ export interface Translations {
     documentation: string
     support: string
     knowledgeBase: string
+    footerTagline: string
+    about: string
+    contact: string
+    privacyPolicy: string
+    termsOfService: string
+    product: string
+    legal: string
   }
 }
 
@@ -1765,6 +1772,13 @@ const translations: Record<Language, Translations> = {
       documentation: 'Documentation',
       support: 'Support',
       knowledgeBase: 'Base de connaissances',
+      footerTagline: 'Agents vocaux IA en français. Latence ultra-faible, intégration simple.',
+      about: 'À propos',
+      contact: 'Contact',
+      privacyPolicy: 'Politique de confidentialité',
+      termsOfService: 'Conditions d\'utilisation',
+      product: 'Produit',
+      legal: 'Mentions légales',
     },
   },
   en: {
@@ -2612,6 +2626,13 @@ const translations: Record<Language, Translations> = {
       documentation: 'Documentation',
       support: 'Support',
       knowledgeBase: 'Knowledge Base',
+      footerTagline: 'AI voice agents in French. Ultra-low latency, simple integration.',
+      about: 'About',
+      contact: 'Contact',
+      privacyPolicy: 'Privacy Policy',
+      termsOfService: 'Terms of Service',
+      product: 'Product',
+      legal: 'Legal',
     },
   },
 }
