@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from collections import defaultdict
 
-from app.models import get_db, User, UsageRecord, Call
+from app.models import get_db, User, UsageRecord, Call, VoiceAgent
 from app.core.security import get_current_user
 
 router = APIRouter()
@@ -102,20 +102,20 @@ async def get_usage_records(
     return records
 
 
-# Get usage summary
+# Get usage summary (from Call table for real call data)
 @router.get("/summary", response_model=UsageSummary)
 async def get_usage_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get usage summary for the current user"""
+    """Get usage summary for the current user from actual calls"""
     
-    # Total usage
+    # Total usage from Call table
     total_result = db.query(
-        func.sum(UsageRecord.minutes_used).label("total_minutes"),
-        func.sum(UsageRecord.cost).label("total_cost"),
-        func.count(UsageRecord.id).label("total_calls")
-    ).filter(UsageRecord.user_id == current_user.id).first()
+        func.coalesce(func.sum(Call.duration_minutes), 0).label("total_minutes"),
+        func.coalesce(func.sum(Call.cost), 0).label("total_cost"),
+        func.count(Call.id).label("total_calls")
+    ).filter(Call.user_id == current_user.id).first()
     
     total_minutes = float(total_result.total_minutes or 0)
     total_cost = float(total_result.total_cost or 0)
@@ -124,16 +124,16 @@ async def get_usage_summary(
     # Average call duration
     average_duration = total_minutes / total_calls if total_calls > 0 else 0
     
-    # Current month usage
+    # Current month usage (use started_at or created_at for date)
     now = datetime.utcnow()
-    current_month = now.strftime("%Y-%m")
+    current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     
     month_result = db.query(
-        func.sum(UsageRecord.minutes_used).label("month_minutes"),
-        func.sum(UsageRecord.cost).label("month_cost")
+        func.coalesce(func.sum(Call.duration_minutes), 0).label("month_minutes"),
+        func.coalesce(func.sum(Call.cost), 0).label("month_cost")
     ).filter(
-        UsageRecord.user_id == current_user.id,
-        UsageRecord.month == current_month
+        Call.user_id == current_user.id,
+        func.coalesce(Call.started_at, Call.created_at) >= current_month_start
     ).first()
     
     current_month_minutes = float(month_result.month_minutes or 0)
@@ -149,31 +149,38 @@ async def get_usage_summary(
     )
 
 
-# Get usage by month
+# Get usage by month (from Call table)
 @router.get("/by-month", response_model=List[UsageByMonth])
 async def get_usage_by_month(
     months: int = 12,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get usage grouped by month"""
+    """Get usage grouped by month from actual calls"""
+    
+    call_date = func.coalesce(Call.started_at, Call.created_at)
+    dialect_name = db.get_bind().dialect.name if hasattr(db.get_bind(), 'dialect') else 'sqlite'
+    if dialect_name == 'postgresql':
+        month_col = func.to_char(call_date, 'YYYY-MM')
+    else:
+        month_col = func.strftime("%Y-%m", call_date)
     
     results = db.query(
-        UsageRecord.month,
-        func.sum(UsageRecord.minutes_used).label("minutes"),
-        func.sum(UsageRecord.cost).label("cost"),
-        func.count(UsageRecord.id).label("calls")
+        month_col.label("month"),
+        func.coalesce(func.sum(Call.duration_minutes), 0).label("minutes"),
+        func.coalesce(func.sum(Call.cost), 0).label("cost"),
+        func.count(Call.id).label("calls")
     ).filter(
-        UsageRecord.user_id == current_user.id
+        Call.user_id == current_user.id
     ).group_by(
-        UsageRecord.month
+        month_col
     ).order_by(
-        UsageRecord.month.desc()
+        month_col.desc()
     ).limit(months).all()
     
     return [
         UsageByMonth(
-            month=r.month,
+            month=r.month or "",
             minutes=float(r.minutes or 0),
             cost=float(r.cost or 0),
             calls=int(r.calls or 0)
@@ -182,34 +189,35 @@ async def get_usage_by_month(
     ]
 
 
-# Get usage by day
+# Get usage by day (from Call table)
 @router.get("/by-day", response_model=List[UsageByDay])
 async def get_usage_by_day(
     days: int = 30,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get usage grouped by day"""
+    """Get usage grouped by day from actual calls"""
     
     start_date = datetime.utcnow() - timedelta(days=days)
+    call_date = func.coalesce(Call.started_at, Call.created_at)
     
     results = db.query(
-        func.date(UsageRecord.date).label("date"),
-        func.sum(UsageRecord.minutes_used).label("minutes"),
-        func.sum(UsageRecord.cost).label("cost"),
-        func.count(UsageRecord.id).label("calls")
+        func.date(call_date).label("date"),
+        func.coalesce(func.sum(Call.duration_minutes), 0).label("minutes"),
+        func.coalesce(func.sum(Call.cost), 0).label("cost"),
+        func.count(Call.id).label("calls")
     ).filter(
-        UsageRecord.user_id == current_user.id,
-        UsageRecord.date >= start_date
+        Call.user_id == current_user.id,
+        call_date >= start_date
     ).group_by(
-        func.date(UsageRecord.date)
+        func.date(call_date)
     ).order_by(
-        func.date(UsageRecord.date).desc()
+        func.date(call_date).desc()
     ).all()
     
     return [
         UsageByDay(
-            date=str(r.date),
+            date=str(r.date) if r.date else "",
             minutes=float(r.minutes or 0),
             cost=float(r.cost or 0),
             calls=int(r.calls or 0)
@@ -218,35 +226,33 @@ async def get_usage_by_day(
     ]
 
 
-# Get usage by agent
+# Get usage by agent (from Call table)
 @router.get("/by-agent", response_model=List[UsageByAgent])
 async def get_usage_by_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get usage grouped by agent"""
-    from app.models import VoiceAgent
+    """Get usage grouped by agent from actual calls"""
     
     results = db.query(
-        UsageRecord.agent_id,
+        Call.agent_id,
         VoiceAgent.name.label("agent_name"),
-        func.sum(UsageRecord.minutes_used).label("minutes"),
-        func.sum(UsageRecord.cost).label("cost"),
-        func.count(UsageRecord.id).label("calls")
+        func.coalesce(func.sum(Call.duration_minutes), 0).label("minutes"),
+        func.coalesce(func.sum(Call.cost), 0).label("cost"),
+        func.count(Call.id).label("calls")
     ).join(
-        VoiceAgent, UsageRecord.agent_id == VoiceAgent.id
+        VoiceAgent, Call.agent_id == VoiceAgent.id
     ).filter(
-        UsageRecord.user_id == current_user.id,
-        UsageRecord.agent_id.isnot(None)
+        Call.user_id == current_user.id
     ).group_by(
-        UsageRecord.agent_id,
+        Call.agent_id,
         VoiceAgent.name
     ).all()
     
     return [
         UsageByAgent(
             agent_id=r.agent_id,
-            agent_name=r.agent_name,
+            agent_name=r.agent_name or "",
             minutes=float(r.minutes or 0),
             cost=float(r.cost or 0),
             calls=int(r.calls or 0)

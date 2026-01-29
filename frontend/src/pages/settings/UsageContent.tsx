@@ -65,6 +65,7 @@ export default function UsageContent() {
       setAnalytics(response.data)
     } catch (error) {
       console.error('Error loading usage analytics:', error)
+      toast.error(t.common.status === 'Statut' ? 'Impossible de charger les données d\'utilisation' : 'Failed to load usage data')
     } finally {
       setLoading(false)
     }
