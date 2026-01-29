@@ -99,7 +99,7 @@ class AudioSocketSession:
         self.is_running = False
         self.db = None
         self.ai_ready = asyncio.Event()
-        self.caller_audio_queue = asyncio.Queue(maxsize=100)
+        self.caller_audio_queue = asyncio.Queue(maxsize=200)  # Larger for reliability
         self.phone_number_id = None
         self.is_busy_response = False
         self.busy_config = None
@@ -223,8 +223,8 @@ class AudioSocketSession:
         max_pending_seen = 0
         warned_large_buffer = False
         
-        # Queue for receiving from AI
-        recv_queue = asyncio.Queue(maxsize=50)
+        # Queue for receiving from AI (larger for burst handling)
+        recv_queue = asyncio.Queue(maxsize=200)  # ~4 seconds of audio
         
         async def receiver():
             """Receive from AI - pass through directly."""
@@ -245,11 +245,16 @@ class AudioSocketSession:
         
         recv_task = asyncio.create_task(receiver())
         
-        # Startup gate - buffer before playing to prevent choppy starts
-        STARTUP_MS = 300   # Buffer 300ms before starting playback (fast response)
-        STARTUP_BYTES = STARTUP_MS * SAMPLE_RATE * 2 // 1000  # 4800 bytes
+        # =====================================================================
+        # WEB-AGENT-LIKE QUALITY: Simple jitter buffer
+        # - One-time startup buffer (200ms) for initial smoothness
+        # - After that, continuous playback (audio or silence)
+        # - NO rebuffering - this causes skips!
+        # =====================================================================
+        STARTUP_MS = 200   # Initial buffer only (fast response)
+        STARTUP_BYTES = STARTUP_MS * SAMPLE_RATE * 2 // 1000  # 3200 bytes
         
-        playing = False  # True after startup buffer is filled
+        started = False  # True after first audio starts
         
         # Pacer - strict 20ms cadence
         TICK = FRAME_MS / 1000.0  # 0.02s
@@ -262,8 +267,13 @@ class AudioSocketSession:
                 sleep_for = next_tick - now
                 if sleep_for > 0:
                     await asyncio.sleep(sleep_for)
+                next_tick += TICK
                 
-                # Drain queue into pending
+                # Prevent drift
+                if next_tick < time.perf_counter() - 0.1:
+                    next_tick = time.perf_counter()
+                
+                # Drain queue into pending buffer
                 stream_ended = False
                 while True:
                     try:
@@ -275,9 +285,8 @@ class AudioSocketSession:
                     except asyncio.QueueEmpty:
                         break
                 
-                # Handle end of stream
+                # Handle end of stream - flush all remaining audio
                 if stream_ended:
-                    # Flush remaining audio
                     while len(pending) >= FRAME_SIZE:
                         frame = pending[:FRAME_SIZE]
                         pending = pending[FRAME_SIZE:]
@@ -291,51 +300,31 @@ class AudioSocketSession:
                     print(f"[AUDIO] Done: {frames_sent} frames, {chunks_recv} chunks", flush=True)
                     return
                 
-                # Track max pending
+                # Track stats
                 if len(pending) > max_pending_seen:
                     max_pending_seen = len(pending)
                 
-                pending_ms = len(pending) * 1000 // (SAMPLE_RATE * 2)
-                
-                # Large buffer warning (just informational)
-                if len(pending) > WARN_PENDING_BYTES and not warned_large_buffer:
-                    print(f"[AUDIO] ℹ Large buffer: {pending_ms}ms (AI burst)", flush=True)
-                    warned_large_buffer = True
-                elif len(pending) < WARN_PENDING_BYTES:
-                    warned_large_buffer = False
-                
-                # STARTUP GATE: Wait for buffer to fill before playing
-                if not playing:
+                # ONE-TIME STARTUP: Buffer before first audio
+                if not started:
                     if len(pending) >= STARTUP_BYTES:
-                        playing = True
+                        started = True
+                        pending_ms = len(pending) * 1000 // (SAMPLE_RATE * 2)
                         print(f"[AUDIO] ▶ START: {pending_ms}ms buffered", flush=True)
                     else:
-                        # Still buffering - send silence
+                        # Still waiting for first audio - send silence
                         self.writer.write(header + SILENCE)
                         frames_sent += 1
-                        next_tick += TICK
-                        if next_tick < time.perf_counter() - 0.1:
-                            next_tick = time.perf_counter()
                         continue
                 
-                # REBUFFER GATE: If buffer empties, wait for refill
-                if len(pending) < FRAME_SIZE:
-                    # Buffer empty - need to rebuffer
-                    playing = False
-                    self.writer.write(header + SILENCE)
-                    frames_sent += 1
-                    next_tick += TICK
-                    if next_tick < time.perf_counter() - 0.1:
-                        next_tick = time.perf_counter()
-                    continue
+                # CONTINUOUS PLAYBACK: Audio if available, silence if not
+                # NO REBUFFERING - this is key for smooth audio like web agent
+                if len(pending) >= FRAME_SIZE:
+                    frame = pending[:FRAME_SIZE]
+                    pending = pending[FRAME_SIZE:]
+                else:
+                    # Buffer underrun - send silence but DON'T stop playback
+                    frame = SILENCE
                 
-                # PLAYING: Send audio frame
-                frame_time = time.perf_counter()
-                delta_ms = (frame_time - last_frame_time) * 1000
-                last_frame_time = frame_time
-                
-                frame = pending[:FRAME_SIZE]
-                pending = pending[FRAME_SIZE:]
                 self.writer.write(header + frame)
                 frames_sent += 1
                 
@@ -346,7 +335,7 @@ class AudioSocketSession:
                     except:
                         break
                 
-                # Timing log
+                # Timing log (reduced frequency)
                 if frames_sent <= 5 or frames_sent % 500 == 0:
                     print(f"[AUDIO] #{frames_sent}: pending={pending_ms}ms, delta={delta_ms:.1f}ms, chunks={chunks_recv}", flush=True)
                 
@@ -658,15 +647,16 @@ class AudioSocketSession:
     # ========================================================================
     
     async def _play_greeting(self):
-        """Play cached greeting (8kHz)."""
+        """Play cached greeting (8kHz) - NO processing for clean audio."""
         if not self.greeting_audio:
             return
         
-        audio = normalize_audio(self.greeting_audio)
+        # Use raw audio - no normalization (cleaner sound)
+        audio = self.greeting_audio
         header = struct.pack('>BH', MSG_AUDIO, FRAME_SIZE)
         
-        # Minimal lead-in silence (3 frames = 60ms)
-        for _ in range(3):
+        # Minimal lead-in silence (2 frames = 40ms)
+        for _ in range(2):
             self.writer.write(header + SILENCE)
         await self.writer.drain()
         
