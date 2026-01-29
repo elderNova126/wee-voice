@@ -34,9 +34,10 @@ FRAME_SIZE = 320            # 20ms @ 8kHz PCM16 (8000 * 0.02 * 2 bytes)
 FRAME_MS = 20               # 20ms per frame
 SILENCE = b'\x00' * FRAME_SIZE
 
-# Buffer limits
-MAX_PENDING_BYTES = 8000    # 500ms max buffer (prevents buildup)
-MAX_PENDING_MS = 500
+# Buffer limits - OpenAI sends in bursts, need larger buffer
+# Don't drop frames - just warn if buffer gets large
+MAX_PENDING_BYTES = 64000   # 4 seconds max (warn only, don't drop)
+WARN_PENDING_BYTES = 16000  # 1 second - warn threshold
 
 # AudioSocket message types
 MSG_UUID = 0x01
@@ -211,8 +212,8 @@ class AudioSocketSession:
         last_frame_time = time.perf_counter()
         
         # Stats
-        total_drops = 0
         max_pending_seen = 0
+        warned_large_buffer = False
         
         # Queue for receiving from AI
         recv_queue = asyncio.Queue(maxsize=50)
@@ -260,21 +261,20 @@ class AudioSocketSession:
                                 self.writer.write(header + frame)
                                 frames_sent += 1
                             await self.writer.drain()
-                            print(f"[AUDIO] Done: {frames_sent} frames, {chunks_recv} chunks, drops={total_drops}", flush=True)
+                            print(f"[AUDIO] Done: {frames_sent} frames, {chunks_recv} chunks", flush=True)
                             return
                         pending += chunk
                     except asyncio.QueueEmpty:
                         break
                 
-                # CAP BUFFER - drop oldest if too much
-                if len(pending) > MAX_PENDING_BYTES:
-                    drop_bytes = len(pending) - MAX_PENDING_BYTES
-                    # Round to frame boundary
-                    drop_frames = (drop_bytes // FRAME_SIZE) * FRAME_SIZE
-                    if drop_frames > 0:
-                        pending = pending[drop_frames:]
-                        total_drops += drop_frames // FRAME_SIZE
-                        print(f"[AUDIO] ⚠ Dropped {drop_frames//FRAME_SIZE} frames (buffer overflow)", flush=True)
+                # WARN if buffer gets large (but don't drop - AI sends in bursts)
+                # Buffer will naturally drain during AI's thinking pauses
+                if len(pending) > WARN_PENDING_BYTES and not warned_large_buffer:
+                    pending_ms = len(pending) * 1000 // (SAMPLE_RATE * 2)
+                    print(f"[AUDIO] ℹ Large buffer: {pending_ms}ms (AI burst - will drain)", flush=True)
+                    warned_large_buffer = True
+                elif len(pending) < WARN_PENDING_BYTES:
+                    warned_large_buffer = False
                 
                 # Track max pending
                 if len(pending) > max_pending_seen:
@@ -320,7 +320,7 @@ class AudioSocketSession:
         finally:
             recv_task.cancel()
         
-        print(f"[AUDIO] Ended: {frames_sent} frames, max_pending={max_pending_seen}b, drops={total_drops}", flush=True)
+        print(f"[AUDIO] Ended: {frames_sent} frames, max_pending={max_pending_seen}b", flush=True)
     
     # ========================================================================
     # RECEIVE FROM ASTERISK
