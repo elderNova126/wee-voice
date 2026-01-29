@@ -57,7 +57,7 @@ Internet
 │                                                          │
 │  ┌──────────┐    ┌──────────┐    ┌──────────────────┐  │
 │  │  Nginx   │───►│ Frontend │    │    Asterisk      │  │
-│  │  :80/443 │    │  :3000   │    │  :5060 (SIP)     │  │
+│  │  :80/443 │    │  :3000   │    │  :4783 (SIP)     │  │
 │  └────┬─────┘    └──────────┘    │  :8089 (WSS)     │  │
 │       │                          └────────┬─────────┘  │
 │       ▼                                   │            │
@@ -82,7 +82,7 @@ Internet
 | Nginx HTTPS | 443 | Yes |
 | Backend API | 8000 | No (via Nginx) |
 | Frontend | 3000 | No (via Nginx) |
-| Asterisk SIP | 5060 | Yes |
+| Asterisk SIP | 4783 | Yes |
 | Asterisk WSS | 8089 | Yes |
 | AudioSocket | 9092 | No (localhost) |
 
@@ -94,7 +94,7 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 
 # Allow SIP
-ufw allow 5060/udp
+ufw allow 4783/udp
 
 # Allow WebSocket SIP
 ufw allow 8089/tcp

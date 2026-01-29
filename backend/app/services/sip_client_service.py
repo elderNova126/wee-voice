@@ -88,7 +88,7 @@ class SIPClientService:
         
         # Extract host from ws_url for Via header
         self.local_ip = "127.0.0.1"  # Will be updated on connection
-        self.local_port = 5060
+        self.local_port = 4783
         
         # SIP state
         self.cseq = 1

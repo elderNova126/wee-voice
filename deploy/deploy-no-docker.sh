@@ -780,7 +780,7 @@ sleep 3
 if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
     ufw allow 80/tcp > /dev/null
     ufw allow 443/tcp > /dev/null
-    ufw allow 5060/udp > /dev/null
+    ufw allow 4783/udp > /dev/null
     ufw allow 8089/tcp > /dev/null
     ufw allow 9092/tcp > /dev/null  # AudioSocket for Asterisk audio streaming
 fi

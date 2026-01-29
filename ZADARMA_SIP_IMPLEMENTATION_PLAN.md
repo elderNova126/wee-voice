@@ -32,7 +32,7 @@ You need a **Python SIP server** that can:
 **Problem**: Railway is designed for HTTP/WebSocket apps, not SIP servers.
 
 **Requirements**:
-- Open UDP port 5060 (SIP signaling)
+- Open UDP port 4783 (SIP signaling)
 - Open UDP ports 10000-20000 (RTP audio)
 - Static IP or domain for SIP URI
 - Firewall rules to allow Zadarma IPs
@@ -50,7 +50,7 @@ TBD - Need to get from Zadarma support
 [Zadarma Phone Number]
    ↓
 [Zadarma PBX Extension] (Configured via dashboard)
-   ↓ SIP INVITE to: user@your-railway-app.railway.app:5060
+   ↓ SIP INVITE to: user@your-railway-app.railway.app:4783
 [Your SIP Server on Railway]
    ↓
 [RTP Audio Stream]
@@ -68,7 +68,7 @@ TBD - Need to get from Zadarma support
 1. **No UDP support by default** (SIP requires UDP)
 2. **Dynamic IPs** (SIP needs static IP/domain)
 3. **HTTP-focused** (no SIP protocol support)
-4. **Port restrictions** (may not allow UDP 5060)
+4. **Port restrictions** (may not allow UDP 4783)
 
 ### ✅ Alternative Solutions:
 
@@ -79,7 +79,7 @@ TBD - Need to get from Zadarma support
 
 #### Option 2: Separate SIP Server
 - Deploy SIP server on VPS (DigitalOcean, Linode)
-- Open UDP ports 5060 + RTP ports
+- Open UDP ports 4783 + RTP ports
 - SIP server forwards audio to Railway app via HTTP/WebSocket
 
 #### Option 3: WebRTC Bridge
@@ -117,7 +117,7 @@ Deploy separate SIP server:
 sudo apt install python3-pjsua2
 
 # Configure firewall
-sudo ufw allow 5060/udp
+sudo ufw allow 4783/udp
 sudo ufw allow 10000:20000/udp
 
 # Run SIP server

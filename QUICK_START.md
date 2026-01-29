@@ -75,10 +75,10 @@ Expected output:
 ### 5. Get Your SIP URI
 
 ```bash
-echo "agent@$(curl -s ifconfig.me):5060"
+echo "agent@$(curl -s ifconfig.me):4783"
 ```
 
-Copy this! Example: `agent@123.45.67.89:5060`
+Copy this! Example: `agent@123.45.67.89:4783`
 
 ### 6. Configure Zadarma
 
@@ -87,7 +87,7 @@ Copy this! Example: `agent@123.45.67.89:5060`
 3. Select extension (e.g., 100)
 4. Set "Call forwarding to":
    - Type: **External server (SIP URI)**
-   - Value: `agent@YOUR_VPS_IP:5060`
+   - Value: `agent@YOUR_VPS_IP:4783`
 5. Save
 
 6. Configure incoming calls:
@@ -103,7 +103,7 @@ Copy this! Example: `agent@123.45.67.89:5060`
 3. Enter:
    - Phone: +3242833288
    - Country: BE
-   - SIP URI: `agent@123.45.67.89:5060` (optional)
+   - SIP URI: `agent@123.45.67.89:4783` (optional)
 4. Click: **Add Phone Number**
 5. Click: **Assign Agent** → Select your agent
 
@@ -122,7 +122,7 @@ You should hear your AI agent! 🎉
 sudo systemctl status freeswitch
 
 # Check SIP port
-sudo netstat -tulpn | grep 5060
+sudo netstat -tulpn | grep 4783
 
 # If not running
 sudo systemctl start freeswitch

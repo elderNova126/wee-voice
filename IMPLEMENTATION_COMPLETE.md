@@ -26,7 +26,7 @@
 │  Your VPS          │
 │  IP: 123.45.67.89  │
 │  FreeSWITCH         │
-│  Port: 5060/UDP     │
+│  Port: 4783/UDP     │
 └──────────┬──────────┘
            │ WebSocket (wss://)
            ↓
@@ -101,7 +101,7 @@ sudo systemctl enable freeswitch
 sudo systemctl status freeswitch
 
 # Check SIP port
-sudo netstat -tulpn | grep 5060
+sudo netstat -tulpn | grep 4783
 ```
 
 ### Step 4: Configure Firewall
@@ -109,7 +109,7 @@ sudo netstat -tulpn | grep 5060
 ```bash
 # Allow SIP and RTP
 sudo ufw allow 22/tcp      # SSH
-sudo ufw allow 5060/udp    # SIP
+sudo ufw allow 4783/udp    # SIP
 sudo ufw allow 10000:20000/udp  # RTP audio
 
 # Enable firewall
@@ -120,10 +120,10 @@ sudo ufw enable
 
 ```bash
 # Your SIP URI is:
-echo "agent@$(curl -s ifconfig.me):5060"
+echo "agent@$(curl -s ifconfig.me):4783"
 ```
 
-Example output: `agent@123.45.67.89:5060`
+Example output: `agent@123.45.67.89:4783`
 
 ### Step 6: Configure Zadarma Dashboard
 
@@ -132,7 +132,7 @@ Example output: `agent@123.45.67.89:5060`
 3. Select or create extension (e.g., extension 100)
 4. In "Call forwarding to" section:
    - Select **"External server (SIP URI)"**
-   - Enter: `agent@YOUR_VPS_IP:5060`
+   - Enter: `agent@YOUR_VPS_IP:4783`
 5. Click **Save**
 
 6. **Configure your virtual number**:
@@ -148,7 +148,7 @@ Example output: `agent@123.45.67.89:5060`
 3. Fill in:
    - **Phone Number**: +3242833288
    - **Country Code**: BE
-   - **SIP URI** (optional): `agent@123.45.67.89:5060`
+   - **SIP URI** (optional): `agent@123.45.67.89:4783`
    - **Business Name**: Your Company
 4. Click **Add Phone Number**
 
@@ -183,7 +183,7 @@ Example output: `agent@123.45.67.89:5060`
 
 - [ ] VPS is accessible via SSH
 - [ ] FreeSWITCH is running (`systemctl status freeswitch`)
-- [ ] Firewall allows UDP 5060 and 10000-20000
+- [ ] Firewall allows UDP 4783 and 10000-20000
 - [ ] WebSocket connection test passes
 - [ ] Zadarma PBX extension configured
 - [ ] Phone number added in your app
@@ -201,7 +201,7 @@ Example output: `agent@123.45.67.89:5060`
 1. PBX extension not configured in Zadarma
 2. Wrong SIP URI
 3. FreeSWITCH not running
-4. Firewall blocking port 5060
+4. Firewall blocking port 4783
 
 **Solution**:
 ```bash
@@ -209,7 +209,7 @@ Example output: `agent@123.45.67.89:5060`
 sudo systemctl status freeswitch
 
 # Check SIP port
-sudo netstat -tulpn | grep 5060
+sudo netstat -tulpn | grep 4783
 
 # Check firewall
 sudo ufw status
@@ -281,7 +281,7 @@ wscat -c "wss://your-app.railway.app/api/v1/ws/voice/1?api_key=YOUR_KEY"
 2. **Whitelist Zadarma IPs only**:
    ```bash
    # Get IPs from Zadarma support
-   sudo ufw allow from ZADARMA_IP to any port 5060 proto udp
+   sudo ufw allow from ZADARMA_IP to any port 4783 proto udp
    ```
 
 3. **Enable fail2ban**:
