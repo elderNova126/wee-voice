@@ -555,7 +555,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, silence_reset=100ms, OpenAI warmup=300ms", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, NO silence_reset, OpenAI warmup=300ms/response", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 8kHz from OpenAI (NO resampling!)
@@ -574,9 +574,9 @@ class AudioSocketSession:
         attack_state = None
         pending = b''  # Frame remainder buffer
         startup_ready = False
-        # Track silence frames to reset startup_ready for each new AI response
-        silence_frames = 0
-        SILENCE_RESET_FRAMES = 5  # After 100ms of silence (5 * 20ms), reset startup gate
+        # Track underrun streak for fade-in when resuming
+        underrun_streak = 0
+        FADE_IN_FRAMES = 4  # 80ms fade-in after underrun recovery
         last_real_emit_ts = 0.0
         
         stats = {
@@ -595,10 +595,9 @@ class AudioSocketSession:
             This matches the reference implementation which NEVER stops,
             eliminating the choppy audio from stop/wait/restart cycles.
             
-            Key fix #2: Reset startup_ready after 300ms of silence, so each new
-            AI response gets proper startup buffering (fixes choppy first word).
+            OpenAI service handles per-response warmup (300ms), so no reset needed here.
             """
-            nonlocal pending, startup_ready, silence_frames, last_real_emit_ts
+            nonlocal pending, startup_ready, underrun_streak, last_real_emit_ts
             
             next_tick = time.perf_counter()
             sentinel_seen = False
@@ -653,18 +652,31 @@ class AudioSocketSession:
                 # NO REBUFFER GATE - Reference implementation NEVER stops!
                 # Just keep emitting audio or silence at 20ms cadence
                 
-                # === EMIT FRAME with smooth fade-out when buffer is draining ===
+                # === EMIT FRAME with fade-in/fade-out for smooth transitions ===
                 if buf_level >= frame_size:
                     frame = pending[:frame_size]
                     pending = pending[frame_size:]
                     
-                    # Reset silence counter - we're emitting real audio
-                    silence_frames = 0
+                    # Check if we're recovering from underrun - apply FADE-IN
+                    recovering = underrun_streak > 0
+                    if recovering:
+                        # Calculate fade-in factor (0.2 → 1.0 over FADE_IN_FRAMES)
+                        # Start at 20% to avoid harsh click
+                        fade_progress = min(1.0, (FADE_IN_FRAMES - underrun_streak + 1) / FADE_IN_FRAMES)
+                        fade_factor = 0.2 + 0.8 * fade_progress
+                        underrun_streak = max(0, underrun_streak - 1)
+                        
+                        try:
+                            frame_arr = np.frombuffer(frame, dtype=np.int16).copy()
+                            frame_arr = (frame_arr * fade_factor).astype(np.int16)
+                            frame = frame_arr.tobytes()
+                        except:
+                            pass
                     
                     # Apply smooth FADE-OUT when buffer is getting low (< 160ms remaining)
                     # Uses cosine curve for natural sound
-                    LOW_BUFFER_THRESHOLD = frame_size * 8  # 160ms at 8kHz
-                    if len(pending) < LOW_BUFFER_THRESHOLD:
+                    elif len(pending) < frame_size * 8:  # < 160ms remaining
+                        LOW_BUFFER_THRESHOLD = frame_size * 8
                         # Calculate fade factor based on how much buffer remains
                         # From 1.0 (full) to 0.2 (nearly out) using cosine curve
                         buffer_ratio = len(pending) / LOW_BUFFER_THRESHOLD
@@ -710,7 +722,7 @@ class AudioSocketSession:
                     break
                 
                 elif startup_ready and len(pending) < frame_size:
-                    # Buffer empty - emit silence and keep going (NEVER stop!)
+                    # Buffer empty - emit comfort noise and keep going (NEVER stop!)
                     # This is the key insight from the reference implementation
                     if len(pending) > 0:
                         # Send remaining partial audio padded with silence
@@ -722,26 +734,16 @@ class AudioSocketSession:
                             stats['underrun_partial'] += 1
                         except:
                             break
-                        silence_frames = 0  # Partial audio - reset counter
                     else:
-                        # Completely empty - just emit silence and KEEP GOING
-                        # (Reference: they emit silence_factory(chunk_bytes) during underruns)
+                        # Completely empty - emit comfort noise and KEEP GOING
+                        # Set underrun_streak so next real audio gets fade-in
+                        underrun_streak = FADE_IN_FRAMES
                         try:
                             self.writer.write(header + COMFORT_NOISE_FRAME)
                             stats['sent'] += 1
                             stats['underrun_empty'] += 1
                         except:
                             break
-                        
-                        # Track consecutive silence frames
-                        silence_frames += 1
-                        
-                        # After 300ms of continuous silence, reset startup_ready
-                        # This ensures the NEXT AI response gets proper startup buffering
-                        # (fixes choppy first word after user speaks)
-                        if silence_frames >= SILENCE_RESET_FRAMES and startup_ready:
-                            startup_ready = False
-                            print(f"[PACER] 🔄 Reset startup gate (100ms silence detected)", flush=True)
                     
                     stats['underruns'] += 1
                 
