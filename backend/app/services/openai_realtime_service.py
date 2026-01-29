@@ -51,9 +51,10 @@ AUDIO_FORMAT = "pcm16"         # PCM16 (OpenAI native format)
 INPUT_SAMPLE_RATE = 24000      # 24kHz input (OpenAI native)
 OUTPUT_SAMPLE_RATE = 24000     # 24kHz output (OpenAI native)
 
-# Warmup buffer before playback (prevents choppy start)
-# Reference: Asterisk-AI-Voice-Agent uses 320ms warmup
-WARMUP_MS = 320  # Buffer 320ms before starting playback
+# Warmup buffer before playback (prevents choppy first word)
+# Increased from 320ms to 500ms to ensure first word is fully buffered
+# This applies to EACH response (greeting and replies)
+WARMUP_MS = 500  # Buffer 500ms before starting playback each response
 
 
 class OpenAIRealtimeService:

@@ -553,7 +553,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, NO_REBUFFER (like reference), fade=80ms", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, silence_reset={SILENCE_RESET_FRAMES*20}ms, NO_REBUFFER", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
@@ -572,7 +572,9 @@ class AudioSocketSession:
         attack_state = None
         pending = b''  # Frame remainder buffer
         startup_ready = False
-        # No rebuffer variables needed - we NEVER stop (like reference implementation)
+        # Track silence duration to detect new response starts
+        silence_frames = 0  # Count consecutive silence frames
+        SILENCE_RESET_FRAMES = 15  # After 300ms of silence (15 * 20ms), reset startup gate
         last_real_emit_ts = 0.0
         
         stats = {
@@ -591,7 +593,7 @@ class AudioSocketSession:
             This matches the reference implementation which NEVER stops,
             eliminating the choppy audio from stop/wait/restart cycles.
             """
-            nonlocal pending, startup_ready, last_real_emit_ts
+            nonlocal pending, startup_ready, silence_frames, last_real_emit_ts
             
             next_tick = time.perf_counter()
             sentinel_seen = False
@@ -674,6 +676,7 @@ class AudioSocketSession:
                         if write_buf > 4096:
                             await self.writer.drain()
                         stats['sent'] += 1
+                        silence_frames = 0  # Reset silence counter - we're emitting real audio
                         last_real_emit_ts = time.perf_counter()
                     except:
                         break
@@ -706,6 +709,7 @@ class AudioSocketSession:
                         # Send remaining partial audio padded with silence
                         frame = pending + (b'\x00' * (frame_size - len(pending)))
                         pending = b''
+                        silence_frames = 0  # Reset silence counter - we had partial audio
                         try:
                             self.writer.write(header + frame)
                             stats['sent'] += 1
@@ -713,8 +717,15 @@ class AudioSocketSession:
                         except:
                             break
                     else:
-                        # Completely empty - just emit silence and KEEP GOING
-                        # (Reference: they emit silence_factory(chunk_bytes) during underruns)
+                        # Completely empty - emit silence and KEEP GOING
+                        silence_frames += 1
+                        
+                        # After 300ms of continuous silence, reset startup gate
+                        # This ensures the NEXT response gets proper warmup buffering
+                        if silence_frames >= SILENCE_RESET_FRAMES and startup_ready:
+                            startup_ready = False
+                            print(f"[PACER] 🔄 Reset startup gate (new response will buffer)", flush=True)
+                        
                         try:
                             self.writer.write(header + SILENCE_FRAME)
                             stats['sent'] += 1
