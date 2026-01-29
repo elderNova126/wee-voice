@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-type Theme = 'light' | 'dark' | 'system'
+type Theme = 'light' | 'dark'
 
 interface ThemeState {
   theme: Theme
@@ -10,66 +10,43 @@ interface ThemeState {
   updateIsDark: () => void
 }
 
-// Check system preference
-const getSystemTheme = (): boolean => {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-}
-
 // Apply theme to document
-const applyTheme = (theme: Theme, systemIsDark: boolean) => {
-  const isDark = theme === 'dark' || (theme === 'system' && systemIsDark)
-  
-  console.log('Applying theme:', { theme, systemIsDark, isDark, currentClasses: document.documentElement.className })
-  
+const applyTheme = (theme: Theme) => {
+  const isDark = theme === 'dark'
   if (isDark) {
     document.documentElement.classList.add('dark')
   } else {
     document.documentElement.classList.remove('dark')
   }
-  
-  console.log('Theme applied. New classes:', document.documentElement.className)
-  
   return isDark
 }
 
 export const useThemeStore = create<ThemeState>()(
   persist(
-    (set, get) => {
-      // Listen for system theme changes
-      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-        const currentTheme = get().theme
-        if (currentTheme === 'system') {
-          const isDark = applyTheme('system', e.matches)
-          set({ isDark })
-        }
-      })
-
-      return {
-        theme: 'system',
-        isDark: false,
-        setTheme: (theme: Theme) => {
-          const systemIsDark = getSystemTheme()
-          const isDark = applyTheme(theme, systemIsDark)
-          set({ theme, isDark })
-        },
-        updateIsDark: () => {
-          const { theme } = get()
-          const systemIsDark = getSystemTheme()
-          const isDark = applyTheme(theme, systemIsDark)
-          set({ isDark })
-        },
-      }
-    },
+    (set, get) => ({
+      theme: 'light',
+      isDark: false,
+      setTheme: (theme: Theme) => {
+        const isDark = applyTheme(theme)
+        set({ theme, isDark })
+      },
+      updateIsDark: () => {
+        const { theme } = get()
+        const isDark = applyTheme(theme)
+        set({ isDark })
+      },
+    }),
     {
       name: 'theme-storage',
       partialize: (state) => ({ theme: state.theme }),
       onRehydrateStorage: () => (state) => {
-        // Apply theme after rehydration
         if (state) {
-          const systemIsDark = getSystemTheme()
-          const isDark = applyTheme(state.theme, systemIsDark)
-          // Update the isDark state after rehydration
-          state.isDark = isDark
+          // Migrate old 'system' preference to light or dark
+          const resolved: Theme = state.theme === 'system'
+            ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : state.theme
+          state.theme = resolved
+          state.isDark = applyTheme(resolved)
         }
       },
     }

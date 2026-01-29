@@ -13,7 +13,6 @@ import {
   ShieldCheckIcon,
   SunIcon,
   MoonIcon,
-  ComputerDesktopIcon,
   ChevronDownIcon,
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
@@ -31,6 +30,7 @@ import {
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
 import { useNavigate } from 'react-router-dom'
+import ThemeToggle from '../components/ThemeToggle'
 import { api } from '../lib/api'
 import { useTranslation } from '../lib/translations'
 import LanguageSwitcher from '../components/LanguageSwitcher'
@@ -38,7 +38,7 @@ import LanguageSwitcher from '../components/LanguageSwitcher'
 export default function LandingPage() {
   const t = useTranslation()
   const { isAuthenticated, user, logout } = useAuthStore()
-  const { theme, setTheme } = useThemeStore()
+  const { theme } = useThemeStore()
   const navigate = useNavigate()
   const [publicAgents, setPublicAgents] = useState<PublicAgent[]>([])
   const [loadingAgents, setLoadingAgents] = useState(true)
@@ -184,13 +184,7 @@ interface PublicAgent {
     selectedInteractionMode !== 'all' ||
     selectedRagEnabled !== 'all'
 
-  const themeOptions = [
-    { name: 'Light', value: 'light' as const, icon: SunIcon },
-    { name: 'Dark', value: 'dark' as const, icon: MoonIcon },
-    { name: 'System', value: 'system' as const, icon: ComputerDesktopIcon },
-  ]
-
-  const ThemeIcon = themeOptions.find(opt => opt.value === theme)?.icon || SunIcon
+  const ThemeIcon = theme === 'dark' ? MoonIcon : SunIcon
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
@@ -300,36 +294,17 @@ interface PublicAgent {
                     </div>
                   </div>
 
-                  {/* Theme Settings */}
+                  {/* Theme Toggle */}
                   <div className="p-1">
-                    <div className="px-4 py-2.5 pb-1">
+                    <div className="px-4 py-2.5">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
                           <ThemeIcon className="w-4 h-4" />
                           {t.settings.theme}
                         </span>
                       </div>
+                      <ThemeToggle />
                     </div>
-                    {themeOptions.map((option) => (
-                      <Menu.Item key={option.value}>
-                        {({ active }) => (
-                          <button
-                            onClick={() => setTheme(option.value)}
-                            className={`${
-                              active ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
-                            } ${
-                              theme === option.value ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
-                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
-                          >
-                            <option.icon className="mr-3 h-5 w-5" />
-                            {option.name}
-                            {theme === option.value && (
-                              <span className="ml-auto text-indigo-600 dark:text-indigo-400">✓</span>
-                            )}
-                          </button>
-                        )}
-                      </Menu.Item>
-                    ))}
                   </div>
 
                   {/* Logout (only if authenticated) */}
@@ -956,10 +931,10 @@ interface PublicAgent {
                   <span>{t.landing.demo}</span>
                   <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
                 </Link>
-                <a href="#" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                <Link to="/docs" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
                   <span>{t.landing.documentation}</span>
                   <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
-                </a>
+                </Link>
                 <Link to="/support" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
                   <span>{t.landing.support}</span>
                   <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
@@ -973,22 +948,22 @@ interface PublicAgent {
                 {t.landing.legal}
               </h3>
               <nav className="flex flex-col gap-3" aria-label={t.landing.legal}>
-                <a href="#about" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                <Link to="/about" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
                   <span>{t.landing.about}</span>
                   <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
-                </a>
+                </Link>
                 <Link to="/support" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
                   <span>{t.landing.contact}</span>
                   <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
                 </Link>
-                <a href="#privacy" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                <Link to="/privacy" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
                   <span>{t.landing.privacyPolicy}</span>
                   <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
-                </a>
-                <a href="#terms" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
+                </Link>
+                <Link to="/terms" className="text-sm text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors duration-200 w-fit flex items-center gap-1.5 group">
                   <span>{t.landing.termsOfService}</span>
                   <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 opacity-0 -translate-y-0.5 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-200" />
-                </a>
+                </Link>
               </nav>
             </div>
           </div>

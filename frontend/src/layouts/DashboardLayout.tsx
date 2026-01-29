@@ -10,9 +10,6 @@ import {
   Bars3Icon,
   XMarkIcon,
   ChatBubbleLeftRightIcon,
-  SunIcon,
-  MoonIcon,
-  ComputerDesktopIcon,
   ChevronUpIcon,
   ChevronRightIcon,
   Cog6ToothIcon,
@@ -28,6 +25,7 @@ import { useThemeStore } from '@/store/themeStore'
 import { useLanguageStore } from '@/store/languageStore'
 import { useTranslation } from '@/lib/translations'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
+import ThemeToggle from '@/components/ThemeToggle'
 
 interface DashboardLayoutProps {
   children: ReactNode
@@ -49,7 +47,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
-  const { theme, setTheme } = useThemeStore()
+  const { theme } = useThemeStore()
   const { language } = useLanguageStore()
   const t = useTranslation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -163,12 +161,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     logout()
     navigate('/login')
   }
-
-  const themeOptions = [
-    { name: 'Light', value: 'light' as const, icon: SunIcon },
-    { name: 'Dark', value: 'dark' as const, icon: MoonIcon },
-    { name: 'System', value: 'system' as const, icon: ComputerDesktopIcon },
-  ]
 
   const isSettingsActive = location.pathname.startsWith('/dashboard/settings')
 
@@ -319,28 +311,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                       <LanguageSwitcher />
                     </div>
                   </div>
-                  {/* Theme Options */}
+                  {/* Theme Toggle */}
                   <div className="p-1">
-                    {themeOptions.map((option) => (
-                      <Menu.Item key={option.value}>
-                        {({ active }) => (
-                          <button
-                            onClick={() => setTheme(option.value)}
-                            className={`${
-                              active ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
-                            } ${
-                              theme === option.value ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
-                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
-                          >
-                            <option.icon className="mr-3 h-5 w-5" />
-                            {option.name}
-                            {theme === option.value && (
-                              <span className="ml-auto text-indigo-600 dark:text-indigo-400">✓</span>
-                            )}
-                          </button>
-                        )}
-                      </Menu.Item>
-                    ))}
+                    <div className="px-4 py-2.5">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t.settings.theme}
+                        </span>
+                      </div>
+                      <ThemeToggle />
+                    </div>
                   </div>
                   {/* Logout */}
                   <div className="p-1">
@@ -518,28 +498,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                       <LanguageSwitcher />
                     </div>
                   </div>
-                  {/* Theme Options */}
+                  {/* Theme Toggle */}
                   <div className="p-1">
-                    {themeOptions.map((option) => (
-                      <Menu.Item key={option.value}>
-                        {({ active }) => (
-                          <button
-                            onClick={() => setTheme(option.value)}
-                            className={`${
-                              active ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
-                            } ${
-                              theme === option.value ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-700 dark:text-gray-300'
-                            } group flex items-center w-full px-4 py-2.5 text-sm font-medium rounded-lg transition-colors`}
-                          >
-                            <option.icon className="mr-3 h-5 w-5" />
-                            {option.name}
-                            {theme === option.value && (
-                              <span className="ml-auto text-indigo-600 dark:text-indigo-400">✓</span>
-                            )}
-                          </button>
-                        )}
-                      </Menu.Item>
-                    ))}
+                    <div className="px-4 py-2.5">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t.settings.theme}
+                        </span>
+                      </div>
+                      <ThemeToggle />
+                    </div>
                   </div>
                   {/* Logout */}
                   <div className="p-1">
