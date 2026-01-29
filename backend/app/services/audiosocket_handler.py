@@ -555,7 +555,7 @@ class AudioSocketSession:
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
         
-        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, response_boundary_reset, OpenAI warmup=400ms", flush=True)
+        print(f"[UNIFIED] Config: start={MIN_START_MS}ms, continuous_flow (no per-response reset)", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 8kHz from OpenAI (NO resampling!)
@@ -576,9 +576,7 @@ class AudioSocketSession:
         startup_ready = False
         # Track underrun streak for fade-in when resuming
         underrun_streak = 0
-        FADE_IN_FRAMES = 8  # 160ms fade-in after underrun recovery (was 80ms)
-        # Signal to reset startup_ready when new response starts
-        reset_startup_flag = False
+        FADE_IN_FRAMES = 8  # 160ms fade-in after underrun recovery
         last_real_emit_ts = 0.0
         
         stats = {
@@ -597,10 +595,10 @@ class AudioSocketSession:
             This matches the reference implementation which NEVER stops,
             eliminating the choppy audio from stop/wait/restart cycles.
             
-            OpenAI service handles per-response warmup (300ms).
-            We also check reset_startup_flag to reset for each new response.
+            OpenAI service handles warmup, no per-response reset needed.
+            Audio flows continuously - simpler = better.
             """
-            nonlocal pending, startup_ready, underrun_streak, reset_startup_flag, last_real_emit_ts
+            nonlocal pending, startup_ready, underrun_streak, last_real_emit_ts
             
             next_tick = time.perf_counter()
             sentinel_seen = False
@@ -608,19 +606,6 @@ class AudioSocketSession:
             print(f"[PACER] Starting async pacer loop (20ms cadence)", flush=True)
             
             while self.is_running:
-                # === CHECK FOR RESPONSE BOUNDARY RESET ===
-                # Only reset if buffer is low - don't interrupt mid-playback!
-                if reset_startup_flag:
-                    reset_startup_flag = False
-                    # Calculate current buffer in ms
-                    current_buf_ms = len(pending) // (output_rate * 2 // 1000)
-                    if current_buf_ms < 100:  # Only reset if nearly empty
-                        startup_ready = False
-                        underrun_streak = 0  # Reset fade state too
-                        print(f"[PACER] 🔄 Reset for new response (buffer was {current_buf_ms}ms)", flush=True)
-                    else:
-                        print(f"[PACER] 📍 Response boundary (buffer={current_buf_ms}ms, continuing playback)", flush=True)
-                
                 # === TIMING (like _pacer_loop) ===
                 now = time.perf_counter()
                 sleep_for = next_tick - now
@@ -789,7 +774,7 @@ class AudioSocketSession:
             4. Apply normalization (target_rms=1400, max_gain=18dB)
             5. Send 8kHz audio to Asterisk
             """
-            nonlocal attack_state, reset_startup_flag
+            nonlocal attack_state
             first_chunk = True
             attack_done = False
             resample_state = None  # For stateful resampling
@@ -800,14 +785,6 @@ class AudioSocketSession:
                 async for audio_from_ai in self.agent_service.receive_audio():
                     if not self.is_running:
                         break
-                    
-                    # Check for response boundary marker
-                    if audio_from_ai == b'__RESPONSE_END__':
-                        # Signal pacer to reset startup_ready for next response
-                        reset_startup_flag = True
-                        print(f"[RECV] 📍 Response boundary - next response will buffer", flush=True)
-                        continue
-                    
                     if not audio_from_ai or len(audio_from_ai) < 2:
                         continue
                     if len(audio_from_ai) % 2:
