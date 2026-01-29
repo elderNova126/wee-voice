@@ -419,14 +419,23 @@ VOICE QUALITY INSTRUCTIONS:
             logger.info(f"[OPENAI-IN] ENDED, {audio_sent_count} packets sent")
     
     async def receive_audio(self) -> AsyncGenerator[bytes, None]:
-        """Receive audio responses from OpenAI Realtime API"""
+        """Receive audio responses from OpenAI Realtime API
+        
+        Yields audio in batches of ~100ms to ensure smooth playback.
+        OpenAI sends small chunks frequently - batching reduces jitter.
+        """
         logger.info(f"Starting audio reception for OpenAI Realtime session")
         response_count = 0
+        audio_buffer = b''
+        
+        # Batch audio into ~100ms chunks for smoother playback
+        # 24kHz * 2 bytes * 0.1s = 4800 bytes
+        BATCH_SIZE = 4800
         
         try:
             while self._running and self.ws:
                 try:
-                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.5)
+                    msg_str = await asyncio.wait_for(self.ws.recv(), timeout=0.05)  # Fast polling
                     msg = json.loads(msg_str)
                     msg_type = msg.get("type", "")
                     
@@ -436,7 +445,12 @@ VOICE QUALITY INSTRUCTIONS:
                         audio_b64 = msg.get("delta", "")
                         if audio_b64:
                             audio_data = base64.b64decode(audio_b64)
-                            yield audio_data
+                            audio_buffer += audio_data
+                            
+                            # Yield when we have enough for smooth playback
+                            if len(audio_buffer) >= BATCH_SIZE:
+                                yield audio_buffer
+                                audio_buffer = b''
                     
                     # Handle audio transcript (what the AI said)
                     elif msg_type == "response.audio_transcript.delta":
@@ -461,8 +475,11 @@ VOICE QUALITY INSTRUCTIONS:
                             await self._save_message("user", transcript)
                             self.conversation_buffer.append({"role": "user", "text": transcript})
                     
-                    # Handle response done
+                    # Handle response done - flush any remaining buffered audio
                     elif msg_type == "response.done":
+                        if audio_buffer:
+                            yield audio_buffer
+                            audio_buffer = b''
                         logger.debug("Response turn complete")
                     
                     # Handle function calls
@@ -475,6 +492,10 @@ VOICE QUALITY INSTRUCTIONS:
                         logger.error(f"OpenAI Realtime error: {error}")
                     
                 except asyncio.TimeoutError:
+                    # Flush buffer on timeout if we have accumulated audio
+                    if audio_buffer:
+                        yield audio_buffer
+                        audio_buffer = b''
                     continue
                 except ConnectionClosed:
                     logger.info("OpenAI Realtime WebSocket closed")

@@ -528,18 +528,15 @@ class AudioSocketSession:
         PROVIDER_GRACE_MS = 2000     # Wait 2s before sending silence (AI thinking tolerance)
         EMPTY_BACKOFF_MAX = 50       # Wait 1000ms (50 * 20ms) before marking buffer dry
         
-        # Derived values
-        MIN_START_CHUNKS = max(1, MIN_START_MS // CHUNK_SIZE_MS)  # 10 chunks (200ms)
-        RESUME_BUFFER_CHUNKS = max(1, RESUME_BUFFER_MS // CHUNK_SIZE_MS)  # 5 chunks (100ms)
-        LOW_WATERMARK_CHUNKS = max(0, LOW_WATERMARK_MS // CHUNK_SIZE_MS)  # 10 chunks
-        TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02
-        
-        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms, resume_buf={RESUME_BUFFER_MS}ms, jitter={JITTER_BUFFER_MS}ms", flush=True)
+        # Derived values - now using actual milliseconds, not chunk counts
+        TICK_SECONDS = CHUNK_SIZE_MS / 1000.0  # 0.02s = 20ms per tick
         
         # AudioSocket uses 8kHz slin by default - always send 8kHz to Asterisk
         # AI output will be resampled: OpenAI 24kHz→8kHz, Gemini 24kHz→8kHz
         frame_size = INPUT_FRAME_SIZE  # 320 bytes (20ms at 8kHz)
         output_rate = INPUT_SAMPLE_RATE  # 8kHz for Asterisk
+        
+        print(f"[UNIFIED] Config: min_start={MIN_START_MS}ms, resume_buf={RESUME_BUFFER_MS}ms, empty_backoff={EMPTY_BACKOFF_MAX*20}ms", flush=True)
         
         if self.llm_model.startswith('gpt-'):
             ai_rate = OPENAI_SAMPLE_RATE  # 24kHz from OpenAI
@@ -594,9 +591,9 @@ class AudioSocketSession:
                 else:
                     next_tick = now  # Reset if behind
                 
-                # === DRAIN JITTER BUFFER (like _drain_next_frame) ===
-                # Using model-specific frame_size
-                while len(pending) < frame_size:
+                # === DRAIN ALL AVAILABLE AUDIO FROM JITTER BUFFER ===
+                # Drain everything available into pending buffer for accurate size tracking
+                while True:
                     try:
                         chunk = jitter_buffer.get_nowait()
                         if chunk is None:
@@ -607,30 +604,28 @@ class AudioSocketSession:
                         break
                 
                 buf_level = len(pending)
-                available_frames = buf_level // frame_size + jitter_buffer.qsize()
+                buf_ms = buf_level // (output_rate * 2 // 1000)  # Convert to milliseconds
                 
                 if buf_level < stats['min_buffer']:
                     stats['min_buffer'] = buf_level
                 
-                # === STARTUP GATE (like _ensure_startup_ready) ===
+                # === STARTUP GATE - Use actual buffer SIZE in milliseconds ===
                 if not startup_ready:
-                    if available_frames >= MIN_START_CHUNKS:
+                    if buf_ms >= MIN_START_MS:
                         startup_ready = True
                         stats['playback_start_time'] = time.perf_counter()
                         lat_ms = (stats['playback_start_time'] - stats['first_audio_time']) * 1000 if stats['first_audio_time'] else 0
-                        bytes_per_ms = output_rate * 2 // 1000  # 16 bytes/ms at 8kHz
-                        print(f"[PACER] ▶ START: {buf_level/bytes_per_ms:.0f}ms buffered ({output_rate}Hz), latency={lat_ms:.0f}ms", flush=True)
+                        print(f"[PACER] ▶ START: {buf_ms}ms buffered ({output_rate}Hz), latency={lat_ms:.0f}ms", flush=True)
                     else:
                         next_tick += TICK_SECONDS
                         continue  # Wait for more audio
                 
-                # === REBUFFER GATE (fix choppy start of new responses) ===
+                # === REBUFFER GATE - Use actual buffer SIZE in milliseconds ===
                 # When resuming after a pause, wait for minimum buffer before playing
                 if needs_rebuffer:
-                    if available_frames >= RESUME_BUFFER_CHUNKS:
+                    if buf_ms >= RESUME_BUFFER_MS:
                         needs_rebuffer = False
                         # Apply fade-in to the buffered audio to smooth the transition
-                        # This prevents pops/clicks when resuming
                         if len(pending) >= frame_size:
                             fade_samples = min(len(pending) // 2, 160)  # 10ms fade at 8kHz
                             try:
@@ -639,9 +634,8 @@ class AudioSocketSession:
                                     buf[i] = int(buf[i] * (i / len(buf)))
                                 pending = buf.tobytes() + pending[fade_samples * 2:]
                             except:
-                                pass  # If fade fails, continue without it
-                        bytes_per_ms = output_rate * 2 // 1000
-                        print(f"[PACER] ▶ RESUME: {buf_level/bytes_per_ms:.0f}ms rebuffered (fade-in applied)", flush=True)
+                                pass
+                        print(f"[PACER] ▶ RESUME: {buf_ms}ms rebuffered (fade-in applied)", flush=True)
                     else:
                         next_tick += TICK_SECONDS
                         continue  # Wait for rebuffer to fill
